@@ -1,0 +1,669 @@
+/**
+ * EIP-712 订单签名工具
+ *
+ * 用户在前端签署订单，发送到撮合引擎
+ * 撮合引擎配对后提交到链上验证签名并结算
+ */
+
+import { type Address, type Hex, type WalletClient, parseEther, formatEther } from "viem";
+
+// ============================================================
+// Types
+// ============================================================
+
+export enum OrderType {
+  MARKET = 0,
+  LIMIT = 1,
+}
+
+export interface OrderParams {
+  token: Address;
+  isLong: boolean;
+  size: bigint;
+  leverage: bigint;
+  price: bigint;
+  deadline: bigint;
+  nonce: bigint;
+  orderType: OrderType;
+}
+
+export interface SignedOrder extends OrderParams {
+  trader: Address;
+  signature: Hex;
+}
+
+// ============================================================
+// EIP-712 Domain & Types
+// ============================================================
+
+const getEIP712Domain = (settlementAddress: Address, chainId: number) => ({
+  name: "MemePerp",
+  version: "1",
+  chainId,
+  verifyingContract: settlementAddress,
+});
+
+const ORDER_TYPES = {
+  Order: [
+    { name: "trader", type: "address" },
+    { name: "token", type: "address" },
+    { name: "isLong", type: "bool" },
+    { name: "size", type: "uint256" },
+    { name: "leverage", type: "uint256" },
+    { name: "price", type: "uint256" },
+    { name: "deadline", type: "uint256" },
+    { name: "nonce", type: "uint256" },
+    { name: "orderType", type: "uint8" },
+  ],
+} as const;
+
+// ============================================================
+// Signing Functions
+// ============================================================
+
+/**
+ * 签署订单
+ */
+export async function signOrder(
+  walletClient: WalletClient,
+  settlementAddress: Address,
+  orderParams: OrderParams
+): Promise<SignedOrder> {
+  const account = walletClient.account;
+  if (!account) {
+    throw new Error("Wallet not connected");
+  }
+
+  const chainId = walletClient.chain?.id || 84532;
+  const domain = getEIP712Domain(settlementAddress, chainId);
+
+  const message = {
+    trader: account.address,
+    token: orderParams.token,
+    isLong: orderParams.isLong,
+    size: orderParams.size,
+    leverage: orderParams.leverage,
+    price: orderParams.price,
+    deadline: orderParams.deadline,
+    nonce: orderParams.nonce,
+    orderType: orderParams.orderType,
+  };
+
+  const signature = await walletClient.signTypedData({
+    account,
+    domain,
+    types: ORDER_TYPES,
+    primaryType: "Order",
+    message,
+  });
+
+  return {
+    ...orderParams,
+    trader: account.address,
+    signature,
+  };
+}
+
+/**
+ * 创建市价单参数
+ */
+export function createMarketOrderParams(
+  token: Address,
+  isLong: boolean,
+  sizeEth: number,
+  leverage: number,
+  nonce: bigint
+): OrderParams {
+  const LEVERAGE_PRECISION = 10000n;
+
+  return {
+    token,
+    isLong,
+    size: parseEther(sizeEth.toString()),
+    leverage: BigInt(Math.floor(leverage)) * LEVERAGE_PRECISION,
+    price: 0n, // 市价
+    deadline: BigInt(Math.floor(Date.now() / 1000) + 3600), // 1小时有效
+    nonce,
+    orderType: OrderType.MARKET,
+  };
+}
+
+/**
+ * 创建限价单参数
+ */
+export function createLimitOrderParams(
+  token: Address,
+  isLong: boolean,
+  sizeEth: number,
+  leverage: number,
+  priceEth: number,
+  nonce: bigint,
+  validityHours: number = 24
+): OrderParams {
+  const LEVERAGE_PRECISION = 10000n;
+
+  return {
+    token,
+    isLong,
+    size: parseEther(sizeEth.toString()),
+    leverage: BigInt(Math.floor(leverage)) * LEVERAGE_PRECISION,
+    price: parseEther(priceEth.toString()),
+    deadline: BigInt(Math.floor(Date.now() / 1000) + validityHours * 3600),
+    nonce,
+    orderType: OrderType.LIMIT,
+  };
+}
+
+// ============================================================
+// API Functions
+// ============================================================
+
+/**
+ * Get Matching Engine API URL
+ *
+ * Priority:
+ * 1. NEXT_PUBLIC_MATCHING_ENGINE_URL (specific to matching engine)
+ * 2. NEXT_PUBLIC_API_URL (general API, backward compatible)
+ * 3. Development fallback to localhost:8081 (matching engine default port)
+ */
+const getApiUrl = (): string => {
+  // Check for matching engine specific URL first
+  const matchingUrl = process.env.NEXT_PUBLIC_MATCHING_ENGINE_URL;
+  if (matchingUrl) {
+    return matchingUrl;
+  }
+
+  // Fallback to general API URL
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+
+  // Production: One of the URLs is required
+  if (process.env.NODE_ENV === "production" && !apiUrl) {
+    throw new Error(
+      "Neither NEXT_PUBLIC_MATCHING_ENGINE_URL nor NEXT_PUBLIC_API_URL is configured. " +
+      "Please set one of these environment variables in production."
+    );
+  }
+
+  // Development: fallback to matching engine default port
+  return apiUrl || "http://localhost:8081";
+};
+
+/**
+ * 提交签名订单到撮合引擎
+ */
+export async function submitOrder(signedOrder: SignedOrder): Promise<{
+  success: boolean;
+  orderId?: string;
+  status?: string;
+  matches?: Array<{
+    matchPrice: string;
+    matchSize: string;
+    counterparty: Address;
+  }>;
+  error?: string;
+}> {
+  try {
+    const response = await fetch(`${getApiUrl()}/api/order/submit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        trader: signedOrder.trader,
+        token: signedOrder.token,
+        isLong: signedOrder.isLong,
+        size: signedOrder.size.toString(),
+        leverage: signedOrder.leverage.toString(),
+        price: signedOrder.price.toString(),
+        deadline: signedOrder.deadline.toString(),
+        nonce: signedOrder.nonce.toString(),
+        orderType: signedOrder.orderType,
+        signature: signedOrder.signature,
+      }),
+    });
+
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to submit order:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
+
+/**
+ * 获取用户当前 nonce
+ */
+export async function getUserNonce(trader: Address): Promise<bigint> {
+  try {
+    const response = await fetch(`${getApiUrl()}/api/user/${trader}/nonce`);
+    const data = await response.json();
+    return BigInt(data.nonce || "0");
+  } catch {
+    return 0n;
+  }
+}
+
+/**
+ * 获取订单簿
+ */
+export async function getOrderBook(token: Address): Promise<{
+  longs: Array<{ price: string; size: string; count: number }>;
+  shorts: Array<{ price: string; size: string; count: number }>;
+  lastPrice: string;
+}> {
+  try {
+    const response = await fetch(`${getApiUrl()}/api/orderbook/${token}`);
+    return await response.json();
+  } catch {
+    return { longs: [], shorts: [], lastPrice: "0" };
+  }
+}
+
+/**
+ * 获取最近成交记录
+ */
+export async function getRecentTrades(token: Address, limit = 100): Promise<
+  Array<{
+    id: string;
+    price: string;
+    size: string;
+    side: "buy" | "sell";
+    timestamp: number;
+  }>
+> {
+  try {
+    const response = await fetch(`${getApiUrl()}/api/trades/${token}?limit=${limit}`);
+    const data = await response.json();
+    return data.trades || [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 订单详细信息类型 (行业标准 - 参考 OKX/Binance)
+ */
+export interface OrderDetails {
+  // === 基本标识 ===
+  id: string;
+  clientOrderId: string | null;
+  token: Address;
+
+  // === 订单参数 ===
+  isLong: boolean;
+  size: string;
+  leverage: string;
+  price: string;
+  orderType: "MARKET" | "LIMIT";
+  timeInForce: "GTC" | "IOC" | "FOK" | "GTD";
+  reduceOnly: boolean;
+
+  // === 成交信息 ===
+  status: string;
+  filledSize: string;
+  avgFillPrice: string;
+  totalFillValue: string;
+
+  // === 费用信息 ===
+  fee: string;
+  feeCurrency: string;
+
+  // === 保证金信息 ===
+  margin: string;
+  collateral: string;
+
+  // === 止盈止损 ===
+  takeProfitPrice: string | null;
+  stopLossPrice: string | null;
+
+  // === 时间戳 ===
+  createdAt: number;
+  updatedAt: number;
+  lastFillTime: number | null;
+
+  // === 来源 ===
+  source: "API" | "WEB" | "APP";
+
+  // === 最后成交明细 ===
+  lastFillPrice: string | null;
+  lastFillSize: string | null;
+  tradeId: string | null;
+}
+
+/**
+ * 获取用户订单 (行业标准完整信息)
+ */
+export async function getUserOrders(trader: Address): Promise<OrderDetails[]> {
+  try {
+    const response = await fetch(`${getApiUrl()}/api/user/${trader}/orders`);
+    return await response.json();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 取消订单
+ */
+export async function cancelOrder(
+  orderId: string,
+  trader: Address,
+  signature: Hex
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const response = await fetch(`${getApiUrl()}/api/order/${orderId}/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trader, signature }),
+    });
+    return await response.json();
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
+
+/**
+ * 获取用户仓位（从撮合引擎 API）
+ *
+ * 返回值精度说明：
+ * - size: 1e18 (代币数量)
+ * - entryPrice, markPrice, liquidationPrice: 1e12 (USD价格)
+ * - collateral, unrealizedPnL, maintenanceMargin: 1e6 (USD金额)
+ * - marginRatio, mmr, roe: 基点 (100 = 1%)
+ * - leverage: 人类可读 (如 "75")
+ */
+export async function getUserPositions(trader: Address): Promise<
+  Array<{
+    pairId: string;
+    token: Address;
+    isLong: boolean;
+    size: string;              // 1e18 精度 (代币数量)
+    entryPrice: string;        // 1e12 精度 (USD)
+    collateral: string;        // 1e6 精度 (USD)
+    leverage: string;          // 人类可读 (如 "75")
+    counterparty: Address;
+    unrealizedPnL: string;     // 1e6 精度 (USD)
+    // 新增字段
+    markPrice?: string;        // 1e12 精度 (USD)
+    liquidationPrice?: string; // 1e12 精度 (USD)
+    breakEvenPrice?: string;   // 1e12 精度 (USD)
+    margin?: string;           // 1e6 精度 (USD)
+    marginRatio?: string;      // 基点 (100 = 1%)
+    maintenanceMargin?: string;// 1e6 精度 (USD)
+    mmr?: string;              // 基点 (100 = 1%)
+    roe?: string;              // 基点 (100 = 1%)
+    realizedPnL?: string;      // 1e6 精度 (USD)
+    fundingFee?: string;       // 1e6 精度 (USD)
+    riskLevel?: string;        // "low" | "medium" | "high" | "critical"
+    isLiquidatable?: boolean;
+    adlRanking?: number;
+  }>
+> {
+  try {
+    const response = await fetch(`${getApiUrl()}/api/user/${trader}/positions`);
+    return await response.json();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 平仓请求
+ */
+export async function requestClosePair(
+  pairId: string,
+  trader: Address
+): Promise<{ success: boolean; txHash?: string; error?: string }> {
+  try {
+    const response = await fetch(`${getApiUrl()}/api/position/${pairId}/close`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trader }),
+    });
+    return await response.json();
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
+
+// ============================================================
+// Settlement Contract Functions (直接调用链上)
+// ============================================================
+
+export const SETTLEMENT_ABI = [
+  {
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "deposit",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "recipient", type: "address" },
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "depositTo",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "withdraw",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "getSupportedTokens",
+    outputs: [{ type: "address[]" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "token", type: "address" }],
+    name: "isTokenSupported",
+    outputs: [{ type: "bool" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "token", type: "address" }],
+    name: "getTokenDecimals",
+    outputs: [{ type: "uint8" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "incrementNonce",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "pairId", type: "uint256" }],
+    name: "closePair",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "pairId", type: "uint256" }],
+    name: "liquidate",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "user", type: "address" }],
+    name: "getUserBalance",
+    outputs: [
+      { name: "available", type: "uint256" },
+      { name: "locked", type: "uint256" },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "user", type: "address" }],
+    name: "nonces",
+    outputs: [{ type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "pairId", type: "uint256" }],
+    name: "getPairedPosition",
+    outputs: [
+      {
+        components: [
+          { name: "pairId", type: "uint256" },
+          { name: "longTrader", type: "address" },
+          { name: "shortTrader", type: "address" },
+          { name: "token", type: "address" },
+          { name: "size", type: "uint256" },
+          { name: "entryPrice", type: "uint256" },
+          { name: "longCollateral", type: "uint256" },
+          { name: "shortCollateral", type: "uint256" },
+          { name: "longLeverage", type: "uint256" },
+          { name: "shortLeverage", type: "uint256" },
+          { name: "openTime", type: "uint256" },
+          { name: "accFundingLong", type: "int256" },
+          { name: "accFundingShort", type: "int256" },
+          { name: "status", type: "uint8" },
+        ],
+        type: "tuple",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "user", type: "address" }],
+    name: "getUserPairIds",
+    outputs: [{ type: "uint256[]" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "pairId", type: "uint256" }],
+    name: "getUnrealizedPnL",
+    outputs: [
+      { name: "longPnL", type: "int256" },
+      { name: "shortPnL", type: "int256" },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "pairId", type: "uint256" }],
+    name: "canLiquidate",
+    outputs: [
+      { name: "liquidateLong", type: "bool" },
+      { name: "liquidateShort", type: "bool" },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+      { name: "deadline", type: "uint256" },
+      { name: "v", type: "uint8" },
+      { name: "r", type: "bytes32" },
+      { name: "s", type: "bytes32" },
+    ],
+    name: "depositWithPermit",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+] as const;
+
+// ERC20 ABI for token operations
+export const ERC20_ABI = [
+  {
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "approve",
+    outputs: [{ type: "bool" }],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "transfer",
+    outputs: [{ type: "bool" }],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" },
+    ],
+    name: "allowance",
+    outputs: [{ type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "account", type: "address" }],
+    name: "balanceOf",
+    outputs: [{ type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "decimals",
+    outputs: [{ type: "uint8" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "symbol",
+    outputs: [{ type: "string" }],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
+
+export default {
+  signOrder,
+  createMarketOrderParams,
+  createLimitOrderParams,
+  submitOrder,
+  getUserNonce,
+  getOrderBook,
+  getUserOrders,
+  cancelOrder,
+  getUserPositions,
+  requestClosePair,
+  OrderType,
+  SETTLEMENT_ABI,
+  ERC20_ABI,
+};

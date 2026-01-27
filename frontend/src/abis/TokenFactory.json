@@ -1,0 +1,223 @@
+[
+  {
+    "type": "constructor",
+    "inputs": [
+      { "name": "initialOwner", "type": "address" },
+      { "name": "feeReceiver_", "type": "address" },
+      { "name": "uniswapV2Router_", "type": "address" }
+    ]
+  },
+  {
+    "type": "function",
+    "name": "createToken",
+    "inputs": [
+      { "name": "name", "type": "string" },
+      { "name": "symbol", "type": "string" },
+      { "name": "metadataURI", "type": "string" },
+      { "name": "minTokensOut", "type": "uint256" }
+    ],
+    "outputs": [{ "name": "tokenAddress", "type": "address" }],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "buy",
+    "inputs": [
+      { "name": "tokenAddress", "type": "address" },
+      { "name": "minTokensOut", "type": "uint256" }
+    ],
+    "outputs": [],
+    "stateMutability": "payable"
+  },
+  {
+    "type": "function",
+    "name": "sell",
+    "inputs": [
+      { "name": "tokenAddress", "type": "address" },
+      { "name": "tokenAmount", "type": "uint256" },
+      { "name": "minETHOut", "type": "uint256" }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "getPoolState",
+    "inputs": [{ "name": "tokenAddress", "type": "address" }],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "components": [
+          { "name": "realETHReserve", "type": "uint256" },
+          { "name": "realTokenReserve", "type": "uint256" },
+          { "name": "soldTokens", "type": "uint256" },
+          { "name": "isGraduated", "type": "bool" },
+          { "name": "isActive", "type": "bool" },
+          { "name": "creator", "type": "address" },
+          { "name": "createdAt", "type": "uint64" },
+          { "name": "metadataURI", "type": "string" },
+          { "name": "graduationFailed", "type": "bool" },
+          { "name": "graduationAttempts", "type": "uint8" },
+          { "name": "perpEnabled", "type": "bool" }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getCurrentPrice",
+    "inputs": [{ "name": "tokenAddress", "type": "address" }],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "previewBuy",
+    "inputs": [
+      { "name": "tokenAddress", "type": "address" },
+      { "name": "ethIn", "type": "uint256" }
+    ],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "previewSell",
+    "inputs": [
+      { "name": "tokenAddress", "type": "address" },
+      { "name": "tokensIn", "type": "uint256" }
+    ],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getAllTokens",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "address[]" }],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getTokenCount",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "serviceFee",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "VIRTUAL_ETH_RESERVE",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "REAL_TOKEN_SUPPLY",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "GRADUATION_THRESHOLD",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view"
+  },
+  {
+    "type": "event",
+    "name": "TokenCreated",
+    "inputs": [
+      { "name": "tokenAddress", "type": "address", "indexed": true },
+      { "name": "creator", "type": "address", "indexed": true },
+      { "name": "name", "type": "string", "indexed": false },
+      { "name": "symbol", "type": "string", "indexed": false },
+      { "name": "uri", "type": "string", "indexed": false },
+      { "name": "totalSupply", "type": "uint256", "indexed": false }
+    ]
+  },
+  {
+    "type": "event",
+    "name": "Trade",
+    "inputs": [
+      { "name": "tokenAddress", "type": "address", "indexed": true },
+      { "name": "trader", "type": "address", "indexed": true },
+      { "name": "isBuy", "type": "bool", "indexed": false },
+      { "name": "ethAmount", "type": "uint256", "indexed": false },
+      { "name": "tokenAmount", "type": "uint256", "indexed": false },
+      { "name": "virtualEthReserves", "type": "uint256", "indexed": false },
+      { "name": "virtualTokenReserves", "type": "uint256", "indexed": false },
+      { "name": "timestamp", "type": "uint256", "indexed": false }
+    ]
+  },
+  {
+    "type": "event",
+    "name": "LiquidityMigrated",
+    "inputs": [
+      { "name": "tokenAddress", "type": "address", "indexed": true },
+      { "name": "pairAddress", "type": "address", "indexed": true },
+      { "name": "ethLiquidity", "type": "uint256", "indexed": false },
+      { "name": "tokenLiquidity", "type": "uint256", "indexed": false },
+      { "name": "timestamp", "type": "uint256", "indexed": false }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "PoolNotInitialized",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "PoolAlreadyGraduated",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "PoolNotActive",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidAmount",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InvalidAddress",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InsufficientLiquidity",
+    "inputs": [
+      { "name": "requested", "type": "uint256" },
+      { "name": "available", "type": "uint256" }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "InsufficientBalance",
+    "inputs": [
+      { "name": "requested", "type": "uint256" },
+      { "name": "available", "type": "uint256" }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "InsufficientFee",
+    "inputs": [
+      { "name": "sent", "type": "uint256" },
+      { "name": "required", "type": "uint256" }
+    ]
+  }
+]

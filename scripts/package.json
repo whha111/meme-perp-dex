@@ -1,0 +1,31 @@
+{
+  "name": "meme-perp-dex-scripts",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Trading bot scripts for MEME Perp DEX",
+  "scripts": {
+    "create-tokens": "npx tsx createTokens.ts",
+    "trade": "npx tsx tradingBot.ts",
+    "fund-wallets": "npx tsx fundWallets.ts",
+    "test:setup": "npx tsx test/00-setup.ts",
+    "test:deposit": "npx tsx test/01-deposit.ts",
+    "test:deposit-eth": "npx tsx test/01-deposit-eth.ts",
+    "test:market-open": "npx tsx test/02-market-open.ts",
+    "test:limit-open": "npx tsx test/03-limit-open.ts",
+    "test:close": "npx tsx test/04-close-position.ts",
+    "test:liquidation": "npx tsx test/05-liquidation.ts",
+    "test:funding": "npx tsx test/06-funding-rate.ts",
+    "test:withdraw": "npx tsx test/07-withdraw.ts",
+    "test:precision": "npx tsx test/08-precision.ts",
+    "test:status": "npx tsx test/09-status-check.ts",
+    "test:all": "npx tsx test/run-all-tests.ts"
+  },
+  "dependencies": {
+    "viem": "^2.0.0"
+  },
+  "devDependencies": {
+    "bun-types": "^1.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.0.0"
+  }
+}

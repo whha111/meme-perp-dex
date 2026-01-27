@@ -1,0 +1,73 @@
+server:
+  addr: ":8080"
+  mode: "debug"  # debug, release
+  read_timeout: 10s
+  write_timeout: 10s
+
+database:
+  host: "localhost"
+  port: 5432
+  user: "postgres"
+  password: "postgres"
+  dbname: "memeperp"
+  sslmode: "disable"
+  max_idle_conns: 10
+  max_open_conns: 100
+  max_lifetime: 1h
+
+redis:
+  addr: "localhost:6379"
+  password: ""
+  db: 0
+  pool_size: 10
+
+blockchain:
+  # Base Sepolia Testnet
+  rpc_url: "https://base-sepolia.g.alchemy.com/v2/Dr8sMe-1MYIF7jBYuZZj8PMOPAAeJ16d"
+  chain_id: 84532
+
+  # Contract Addresses (Base Sepolia - Updated 2025-01-21 with fee collection fix)
+  router_address: "0x98e48863d5c80092211811503AC0532cF7b80f49"
+  vault_address: "0x467a18E3Ec98587Cd88683E6F9e1792C480C09c7"
+  amm_address: "0x9ba6958811cf887536E34316Ea732fB40c3fc06c"
+  position_address: "0xeCA6E2f7466c0A1BA6dB3083a09b8B09969D77Ee"
+  liquidation_address: "0x468B589c68dBe29b2BC2b765108D63B61805e982"
+  funding_rate_address: "0x9Abe85f3bBee0f06330E8703e29B327CE551Ba10"
+  lending_pool_address: "0xA488d58915967cfE62bc5f55336972c3FBD6aF01"
+  price_feed_address: "0x2dccffb6377364CDD189e2009Af96998F9b8BEcb"
+  risk_manager_address: "0xd4EE5BF901E6812E74a20306F5732326Ced89126"
+  presale_address: "0x24b5B08971Bbd1C4C90C4980D908364283Ae51DD"
+  meme_token_address: "0xb6957a1B03DB60EaF3315293AbA44857cb339d33"
+
+  # Settlement contract for P2P trading (Relayer)
+  settlement_address: "0x48c551f36E74B8d21D26e21139623c6dd438e455"
+
+  # Relayer private key - 用于代付 Gas
+  # 地址: 0xF339fCf70939e04C8Ce79391BB47bB943122949C
+  private_key: "e842b617657055de85d504a3cd268bfd42e35edfdce2be79b1968cf861d0292a"
+
+  # Indexer settings
+  start_block: 0
+  confirm_blocks: 3
+  poll_interval: 3s
+
+jwt:
+  # Set via environment variable JWT_SECRET in production
+  secret: "${JWT_SECRET:-dev-secret-key-change-in-production}"
+  expiration: 24h
+
+rate_limit:
+  public_limit: 1200   # per minute
+  private_limit: 600   # per minute
+  order_limit: 300     # per minute
+
+security:
+  allowed_origins:
+    - "http://localhost:3000"
+    - "http://localhost:3001"
+  trusted_proxies: []
+
+log:
+  level: "debug"   # debug, info, warn, error
+  format: "json"   # json, console
+  output: "stdout" # stdout, or file path

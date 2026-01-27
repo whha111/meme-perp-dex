@@ -1,0 +1,305 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 深色主题 (默认) - 参考 TradingView/OKX 专业风格 */
+:root,
+.dark {
+  --background: #0B0B0B;
+  --foreground: #FFFFFF;
+
+  /* OKX 配色变量 - 深色模式 */
+  --okx-bg-primary: #0B0B0B;
+  --okx-bg-secondary: #121212;
+  --okx-bg-card: #181818;
+  --okx-bg-hover: #1E1E1E;
+  --okx-bg-active: #2A2A2A;
+
+  --okx-text-primary: #FFFFFF;
+  --okx-text-secondary: #A0A0A0;
+  --okx-text-tertiary: #707070;
+
+  --okx-border-primary: #2A2A2A;
+  --okx-border-secondary: #333333;
+  --okx-border-hover: #444444;
+
+  /* 涨跌颜色 - 深色模式 */
+  --okx-up: #0ECB81;
+  --okx-down: #F6465D;
+  --okx-accent: #1E80FF;
+  --okx-warning: #F0B90B;
+
+  --scrollbar-track: #121212;
+  --scrollbar-thumb: #333333;
+  --scrollbar-thumb-hover: #444444;
+
+  /* 卡片阴影 - 深色模式禁用 */
+  --card-shadow: none;
+  --card-shadow-hover: none;
+
+  /* 图表专用变量 */
+  --chart-grid: rgba(255, 255, 255, 0.06);
+  --chart-separator: #2A2A2A;
+  --chart-button-hover: #2A2A2A;
+
+  /* 输入框 */
+  --input-bg: #181818;
+  --input-border: #2A2A2A;
+  --input-border-focus: #1E80FF;
+
+  /* Tab 和导航 */
+  --tab-active-bg: #1E1E1E;
+  --tab-inactive-bg: transparent;
+  --tab-border: #2A2A2A;
+}
+
+/* Light theme - Professional trading platform style (Binance/TradingView inspired) */
+.light {
+  --background: #F8F9FA;
+  --foreground: #1A1A1A;
+
+  /* Background colors - Clean, professional layering */
+  --okx-bg-primary: #F8F9FA;
+  --okx-bg-secondary: #FFFFFF;
+  --okx-bg-card: #FFFFFF;
+  --okx-bg-hover: #F0F1F3;
+  --okx-bg-active: #E8E9EB;
+
+  /* Text colors - Enhanced contrast for readability */
+  --okx-text-primary: #1A1A1A;
+  --okx-text-secondary: #4A5568;
+  --okx-text-tertiary: #718096;
+
+  /* Border colors - Visible but subtle */
+  --okx-border-primary: #D2D6DC;
+  --okx-border-secondary: #E2E8F0;
+  --okx-border-hover: #A0AEC0;
+
+  /* Trading colors - Vibrant for light backgrounds */
+  --okx-up: #00B67A;
+  --okx-down: #E53E3E;
+  --okx-accent: #3182CE;
+  --okx-warning: #D69E2E;
+
+  /* Scrollbar - Visible on light background */
+  --scrollbar-track: #F0F1F3;
+  --scrollbar-thumb: #B0B8C4;
+  --scrollbar-thumb-hover: #8A94A6;
+
+  /* Card shadows - Subtle depth for hierarchy */
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 2px 6px rgba(0, 0, 0, 0.04);
+  --card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.12), 0 2px 4px rgba(0, 0, 0, 0.06);
+
+  /* Chart variables */
+  --chart-grid: rgba(0, 0, 0, 0.08);
+  --chart-separator: #D2D6DC;
+  --chart-button-hover: #E8E9EB;
+
+  /* Input fields */
+  --input-bg: #FFFFFF;
+  --input-border: #D2D6DC;
+  --input-border-focus: #3182CE;
+
+  /* Tabs and navigation */
+  --tab-active-bg: #FFFFFF;
+  --tab-inactive-bg: transparent;
+  --tab-border: #D2D6DC;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  /* Prevent white flash during loading */
+  background: #0B0B0B;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Ensure body has background even if CSS variables fail */
+  min-height: 100vh;
+}
+
+/* OKX 风格自定义滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* Firefox 滚动条 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  
+  /* OKX 风格按钮悬停效果 */
+  .okx-button-hover {
+    @apply transition-all duration-200;
+  }
+  
+  .okx-button-hover:hover {
+    @apply transform scale-[1.02] shadow-lg;
+  }
+  
+  /* 价格闪烁效果 */
+  .price-up {
+    color: #00D26A;
+    animation: priceFlashUp 0.3s ease-in-out;
+  }
+  
+  .price-down {
+    color: #FF3B30;
+    animation: priceFlashDown 0.3s ease-in-out;
+  }
+  
+  /* 卡片样式 */
+  .okx-card {
+    background-color: var(--okx-bg-card);
+    border: 1px solid var(--okx-border-primary);
+    border-radius: 12px;
+    box-shadow: var(--card-shadow);
+  }
+
+  /* 输入框样式 */
+  .okx-input {
+    background-color: var(--okx-bg-secondary);
+    border: 1px solid var(--okx-border-primary);
+    border-radius: 8px;
+    color: var(--okx-text-primary);
+    transition: all 0.2s;
+  }
+
+  .okx-input::placeholder {
+    color: var(--okx-text-tertiary);
+  }
+  
+  .okx-input:focus {
+    outline: none;
+    border-color: #007AFF;
+  }
+}
+
+/* 关键帧动画 */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes priceFlashUp {
+  0%, 100% {
+    background-color: transparent;
+  }
+  50% {
+    background-color: rgba(0, 210, 106, 0.2);
+  }
+}
+
+@keyframes priceFlashDown {
+  0%, 100% {
+    background-color: transparent;
+  }
+  50% {
+    background-color: rgba(255, 59, 48, 0.2);
+  }
+}
+
+@keyframes slideInFromRight {
+  0% {
+    transform: translateX(20px);
+    opacity: 0;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fadeIn {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes glow {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(163, 230, 53, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(163, 230, 53, 0.8);
+  }
+}
+
+/* 新交易高亮动画 */
+.trade-new {
+  animation: slideInFromRight 0.3s ease-out, highlightFade 2s ease-out;
+}
+
+@keyframes highlightFade {
+  0% {
+    background-color: rgba(163, 230, 53, 0.2);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+/* 数字变化动画 */
+.number-change-up {
+  animation: numberFlashUp 0.5s ease-out;
+}
+
+.number-change-down {
+  animation: numberFlashDown 0.5s ease-out;
+}
+
+@keyframes numberFlashUp {
+  0% {
+    color: #00D26A;
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes numberFlashDown {
+  0% {
+    color: #FF3B30;
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
+}

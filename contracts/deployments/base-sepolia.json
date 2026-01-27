@@ -1,0 +1,32 @@
+{
+  "network": "base-sepolia",
+  "chainId": 84532,
+  "deployedAt": "2026-01-25",
+  "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE",
+  "contracts": {
+    "MemeToken": "0x06cca29331e636c11E65DE20117225f487808E76",
+    "LPToken_Lending": "0xD3b66De997212587b1E32a5fF9840CeA87984909",
+    "LPToken_AMM": "0xEB729BC8a1d892419187E84d5a68674657C29801",
+    "Vault": "0x088ACA5fD043fFf33F4AC6E7F60A23a549C9c9f1",
+    "PriceFeed": "0x70dAC8f7338fFF15CAB9cE01e896e56a6C2FcF0A",
+    "AMM": "0xd0DB9A2c4D705c88744cac9ae9DD15ed8D3cDAA5",
+    "LendingPool": "0x4262Df19654ad0086238c29e5C489C8BE28060af",
+    "RiskManager": "0xeb0a57ad3CC59dc2D7CfaA0EF24EfC07f7f8c2AC",
+    "ContractSpec": "0x3068705D59225bEEEEA9Ea00129C3F2Db1997C4B",
+    "PositionManager": "0xA61536C0D7B603D32F9e9D33Ad4C90fAA8315bb4",
+    "FundingRate": "0x4809fcc1413Edfd3Cc55dfE7DB422f607c39A5eE",
+    "Liquidation": "0xa1727c2493271058B5Cd2CE1359E931ac87cE9F5",
+    "Router": "0x57ed7e97cF5cAAE7a3E5b3B613d3f12c647660cE",
+    "TokenFactory": "0xCfDCD9F8D39411cF855121331B09aef1C88dc056",
+    "Settlement": "0x8C8586dd57960952dFD307A8A85cC9abc8AE6216",
+    "MockUSDT": "0x8a3D23D5DD8f609DA75a2bb9E35e2385e897e601",
+    "MockUSDC": "0x7dB7ff72328ab2469331471593d780Acd14d7D70",
+    "MockUSD1": "0xD53320118B424F7eA62d2767300EAc6cfD941A69"
+  },
+  "notes": {
+    "Settlement": "V3 complete: Multi-Token (USDT/USDC/USD1) + 1:N matching + Session Key (2026-01-25)",
+    "MockUSDT": "Test USDT token (6 decimals), anyone can mint",
+    "MockUSDC": "Test USDC token (6 decimals), anyone can mint",
+    "MockUSD1": "Test USD1 token (18 decimals), anyone can mint"
+  }
+}
