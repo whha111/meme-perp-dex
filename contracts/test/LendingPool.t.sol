@@ -151,8 +151,9 @@ contract LendingPoolTest is Test {
         vm.prank(lender2);
         uint256 shares = pool.deposit(address(tokenA), 50_000 ether);
 
-        assertEq(shares, 50_000 ether);
-        assertEq(pool.getUserDeposit(address(tokenA), lender2), 50_000 ether);
+        // C-03: 虚拟偏移 (VIRTUAL_SHARES=1e3, VIRTUAL_ASSETS=1) 导致微小精度差异
+        assertApproxEqRel(shares, 50_000 ether, 1e14); // 0.01% tolerance
+        assertApproxEqRel(pool.getUserDeposit(address(tokenA), lender2), 50_000 ether, 1e14);
     }
 
     function test_Deposit_ZeroAmount_Reverts() public {
@@ -182,20 +183,24 @@ contract LendingPoolTest is Test {
         vm.prank(lender1);
         uint256 withdrawn = pool.withdraw(address(tokenA), shares);
 
-        assertEq(withdrawn, depositAmount);
-        assertEq(tokenA.balanceOf(lender1), balBefore + depositAmount);
+        // C-03: 虚拟偏移导致 withdrawn ≈ depositAmount (差 < 0.01%)
+        assertApproxEqRel(withdrawn, depositAmount, 1e14);
+        assertApproxEqRel(tokenA.balanceOf(lender1), balBefore + depositAmount, 1e14);
         assertEq(pool.getUserShares(address(tokenA), lender1), 0);
     }
 
     function test_Withdraw_Partial() public {
         vm.prank(lender1);
-        pool.deposit(address(tokenA), 100_000 ether);
+        uint256 shares = pool.deposit(address(tokenA), 100_000 ether);
 
+        // 提取 40% 的 shares
+        uint256 withdrawShares = shares * 40 / 100;
         vm.prank(lender1);
-        uint256 withdrawn = pool.withdraw(address(tokenA), 40_000 ether);
+        uint256 withdrawn = pool.withdraw(address(tokenA), withdrawShares);
 
-        assertEq(withdrawn, 40_000 ether);
-        assertEq(pool.getUserShares(address(tokenA), lender1), 60_000 ether);
+        // C-03: 虚拟偏移导致微小精度差异
+        assertApproxEqRel(withdrawn, 40_000 ether, 1e14);
+        assertEq(pool.getUserShares(address(tokenA), lender1), shares - withdrawShares);
     }
 
     function test_Withdraw_InsufficientShares() public {
@@ -850,12 +855,13 @@ contract LendingPoolTest is Test {
         uint256 finalContractBal = tokenA.balanceOf(address(pool));
         (,uint256 finalTotalDeposits,,,,,, uint256 reserves) = pool.getPoolInfo(address(tokenA));
 
-        // totalDeposits must be ~0 (only rounding dust allowed)
-        assertTrue(finalTotalDeposits < 1000, "totalDeposits should be ~0 after full withdrawal");
+        // C-03: 虚拟偏移 (VIRTUAL_SHARES=1e3) 导致提款后有微小残留
+        // 允许最多 1e16 (0.01 token) 的 rounding dust
+        assertTrue(finalTotalDeposits < 1e16, "totalDeposits should be ~0 after full withdrawal");
 
         // Contract balance = reserves + rounding dust (reserves belong to protocol, not depositors)
         assertTrue(
-            finalContractBal <= reserves + 1000,
+            finalContractBal <= reserves + 1e16,
             "contract balance should only contain reserves after full withdrawal"
         );
     }

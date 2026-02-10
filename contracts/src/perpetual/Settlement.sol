@@ -540,49 +540,90 @@ contract Settlement is Ownable, ReentrancyGuard, Pausable, EIP712 {
 
         _validateContractSpec(pair);
 
-        bytes32 longHash = getOrderHash(pair.longOrder);
-        bytes32 shortHash = getOrderHash(pair.shortOrder);
-        if (pair.matchSize > pair.longOrder.size - filledAmounts[longHash]) revert InvalidMatch();
-        if (pair.matchSize > pair.shortOrder.size - filledAmounts[shortHash]) revert InvalidMatch();
+        // 验证填充量
+        {
+            bytes32 longHash = getOrderHash(pair.longOrder);
+            bytes32 shortHash = getOrderHash(pair.shortOrder);
+            if (pair.matchSize > pair.longOrder.size - filledAmounts[longHash]) revert InvalidMatch();
+            if (pair.matchSize > pair.shortOrder.size - filledAmounts[shortHash]) revert InvalidMatch();
+        }
 
+        // 计算保证金
         uint256 longCollateral = (pair.matchSize * LEVERAGE_PRECISION) / pair.longOrder.leverage;
         uint256 shortCollateral = (pair.matchSize * LEVERAGE_PRECISION) / pair.shortOrder.leverage;
-        uint256 longFee = (pair.matchSize * feeRate) / 10000;
-        uint256 shortFee = (pair.matchSize * feeRate) / 10000;
 
-        if (balances[pair.longOrder.trader].available < longCollateral + longFee) revert InsufficientBalance();
-        if (balances[pair.shortOrder.trader].available < shortCollateral + shortFee) revert InsufficientBalance();
+        // 处理手续费和余额
+        _processFeesAndLock(pair.longOrder.trader, pair.shortOrder.trader, longCollateral, shortCollateral, pair.matchSize);
 
-        balances[pair.longOrder.trader].available -= (longCollateral + longFee);
-        balances[pair.longOrder.trader].locked += longCollateral;
-        balances[pair.shortOrder.trader].available -= (shortCollateral + shortFee);
-        balances[pair.shortOrder.trader].locked += shortCollateral;
-        if (longFee + shortFee > 0) balances[feeReceiver].available += longFee + shortFee;
+        // 创建配对仓位
+        uint256 pairId = _createPairedPosition(pair, longCollateral, shortCollateral);
 
-        // 更新总锁定保证金
+        // 更新追踪数据
+        _updateTrackingData(pair, pairId);
+
+        emit PairOpened(pairId, pair.longOrder.trader, pair.shortOrder.trader, pair.longOrder.token, pair.matchSize, pair.matchPrice);
+    }
+
+    /// @dev 处理手续费、锁定保证金
+    function _processFeesAndLock(
+        address longTrader, address shortTrader,
+        uint256 longCollateral, uint256 shortCollateral,
+        uint256 matchSize
+    ) internal {
+        uint256 perSideFee = (matchSize * feeRate) / 10000;
+
+        if (balances[longTrader].available < longCollateral + perSideFee) revert InsufficientBalance();
+        if (balances[shortTrader].available < shortCollateral + perSideFee) revert InsufficientBalance();
+
+        balances[longTrader].available -= (longCollateral + perSideFee);
+        balances[longTrader].locked += longCollateral;
+        balances[shortTrader].available -= (shortCollateral + perSideFee);
+        balances[shortTrader].locked += shortCollateral;
+        if (perSideFee > 0) balances[feeReceiver].available += perSideFee * 2;
+
         totalLockedMargin += longCollateral + shortCollateral;
+    }
 
-        uint256 pairId = nextPairId++;
-        pairedPositions[pairId] = PairedPosition({
-            pairId: pairId, longTrader: pair.longOrder.trader, shortTrader: pair.shortOrder.trader,
-            token: pair.longOrder.token, size: pair.matchSize, entryPrice: pair.matchPrice,
-            longCollateral: longCollateral, shortCollateral: shortCollateral,
-            longLeverage: pair.longOrder.leverage, shortLeverage: pair.shortOrder.leverage,
-            openTime: block.timestamp, lastFundingSettled: block.timestamp,
-            accFundingLong: 0, accFundingShort: 0, status: PositionStatus.ACTIVE
-        });
+    /// @dev 创建配对仓位
+    function _createPairedPosition(
+        MatchedPair calldata pair,
+        uint256 longCollateral,
+        uint256 shortCollateral
+    ) internal returns (uint256 pairId) {
+        pairId = nextPairId++;
+        PairedPosition storage pos = pairedPositions[pairId];
+        pos.pairId = pairId;
+        pos.longTrader = pair.longOrder.trader;
+        pos.shortTrader = pair.shortOrder.trader;
+        pos.token = pair.longOrder.token;
+        pos.size = pair.matchSize;
+        pos.entryPrice = pair.matchPrice;
+        pos.longCollateral = longCollateral;
+        pos.shortCollateral = shortCollateral;
+        pos.longLeverage = pair.longOrder.leverage;
+        pos.shortLeverage = pair.shortOrder.leverage;
+        pos.openTime = block.timestamp;
+        pos.lastFundingSettled = block.timestamp;
+        pos.status = PositionStatus.ACTIVE;
+    }
 
-        userPairIds[pair.longOrder.trader].push(pairId);
-        userPairIds[pair.shortOrder.trader].push(pairId);
-        userPositionSizes[pair.longOrder.trader][pair.longOrder.token] += pair.matchSize;
-        userPositionSizes[pair.shortOrder.trader][pair.shortOrder.token] += pair.matchSize;
+    /// @dev 更新追踪数据 (pairIds, positionSizes, filledAmounts, nonces)
+    function _updateTrackingData(MatchedPair calldata pair, uint256 pairId) internal {
+        address longTrader = pair.longOrder.trader;
+        address shortTrader = pair.shortOrder.trader;
+
+        userPairIds[longTrader].push(pairId);
+        userPairIds[shortTrader].push(pairId);
+        userPositionSizes[longTrader][pair.longOrder.token] += pair.matchSize;
+        userPositionSizes[shortTrader][pair.shortOrder.token] += pair.matchSize;
+
+        bytes32 longHash = getOrderHash(pair.longOrder);
+        bytes32 shortHash = getOrderHash(pair.shortOrder);
         filledAmounts[longHash] += pair.matchSize;
         filledAmounts[shortHash] += pair.matchSize;
 
-        if (sequentialNonceMode[pair.longOrder.trader] && filledAmounts[longHash] >= pair.longOrder.size) nonces[pair.longOrder.trader]++;
-        if (sequentialNonceMode[pair.shortOrder.trader] && filledAmounts[shortHash] >= pair.shortOrder.size) nonces[pair.shortOrder.trader]++;
-
-        emit PairOpened(pairId, pair.longOrder.trader, pair.shortOrder.trader, pair.longOrder.token, pair.matchSize, pair.matchPrice);
+        if (sequentialNonceMode[longTrader] && filledAmounts[longHash] >= pair.longOrder.size) nonces[longTrader]++;
+        if (sequentialNonceMode[shortTrader] && filledAmounts[shortHash] >= pair.shortOrder.size) nonces[shortTrader]++;
     }
 
     // ============================================================
@@ -804,7 +845,30 @@ contract Settlement is Ownable, ReentrancyGuard, Pausable, EIP712 {
     // ============================================================
 
     function getOrderHash(Order calldata order) public view returns (bytes32) {
-        return _hashTypedDataV4(keccak256(abi.encode(ORDER_TYPEHASH, order.trader, order.token, order.isLong, order.size, order.leverage, order.price, order.deadline, order.nonce, order.orderType)));
+        return _hashTypedDataV4(_orderStructHash(order));
+    }
+
+    /// @dev EIP-712 struct hash — 分两段 abi.encode 拼接后 keccak256
+    /// 等效于 keccak256(abi.encode(TYPEHASH, trader, token, isLong, size, leverage, price, deadline, nonce, orderType))
+    /// 因为 abi.encode 把每个值 pad 到 32 bytes，两段拼接等价于一段。
+    function _orderStructHash(Order calldata order) internal pure returns (bytes32) {
+        // 第一段: TYPEHASH + 前 5 个字段 (6 个 slot)
+        bytes memory a = abi.encode(
+            ORDER_TYPEHASH,
+            order.trader,
+            order.token,
+            order.isLong,
+            order.size
+        );
+        // 第二段: 后 5 个字段 (5 个 slot)
+        bytes memory b = abi.encode(
+            order.leverage,
+            order.price,
+            order.deadline,
+            order.nonce,
+            order.orderType
+        );
+        return keccak256(bytes.concat(a, b));
     }
 
     function verifyOrder(Order calldata order, bytes calldata signature) public view returns (bool) {
