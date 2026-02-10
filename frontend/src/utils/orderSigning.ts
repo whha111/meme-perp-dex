@@ -587,6 +587,7 @@ export const SETTLEMENT_ABI = [
           { name: "longLeverage", type: "uint256" },
           { name: "shortLeverage", type: "uint256" },
           { name: "openTime", type: "uint256" },
+          { name: "lastFundingSettled", type: "uint256" },
           { name: "accFundingLong", type: "int256" },
           { name: "accFundingShort", type: "int256" },
           { name: "status", type: "uint8" },

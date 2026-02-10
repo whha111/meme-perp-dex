@@ -819,35 +819,34 @@ contract PerpVaultTest is Test {
     }
 
     function test_cooldown_newDepositResetsTimer() public {
-        // LP deposits at T=0
+        // Use absolute timestamps to avoid optimizer issues
+        // T=1000: first deposit
+        vm.warp(1000);
         vm.prank(lp1);
         vault.deposit{value: 5 ether}();
 
-        // Wait 20 hours
-        vm.warp(block.timestamp + 20 hours);
-
-        // LP deposits again at T=20h — resets lastDepositAt
+        // T=73000: second deposit (20h later), resets lastDepositAt
+        vm.warp(73000);
         vm.prank(lp1);
         vault.deposit{value: 5 ether}();
+        assertEq(vault.lastDepositAt(lp1), 73000, "lastDepositAt updated");
 
         uint256 lp1Shares = vault.shares(lp1);
 
-        // Request withdrawal
+        // Request withdrawal at T=73000
         vm.prank(lp1);
         vault.requestWithdrawal(lp1Shares);
 
-        // Advance 20 hours from second deposit (total T=40h) — still within cooldown of 2nd deposit
-        vm.warp(block.timestamp + 20 hours);
-
+        // T=145000: 20h after second deposit (72000s < 86400s cooldown) — should revert
+        vm.warp(145000);
         vm.prank(lp1);
         vm.expectRevert(PerpVault.CooldownNotMet.selector);
         vault.executeWithdrawal();
 
-        // Advance past 24h from second deposit
-        vm.warp(block.timestamp + 5 hours);
-
+        // T=160000: 24.16h after second deposit (87000s > 86400s cooldown) — should succeed
+        vm.warp(160000);
         vm.prank(lp1);
-        vault.executeWithdrawal(); // Now it works
+        vault.executeWithdrawal();
         assertEq(vault.shares(lp1), 0);
     }
 
