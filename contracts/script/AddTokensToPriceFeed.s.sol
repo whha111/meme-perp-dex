@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Script.sol";
-import "../src/core/PriceFeed.sol";
+import "../src/common/PriceFeed.sol";
 
 interface ITokenFactory {
     function getAllTokens() external view returns (address[] memory);

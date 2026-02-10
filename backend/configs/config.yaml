@@ -26,21 +26,21 @@ blockchain:
   rpc_url: "https://base-sepolia.g.alchemy.com/v2/Dr8sMe-1MYIF7jBYuZZj8PMOPAAeJ16d"
   chain_id: 84532
 
-  # Contract Addresses (Base Sepolia - Updated 2025-01-21 with fee collection fix)
-  router_address: "0x98e48863d5c80092211811503AC0532cF7b80f49"
-  vault_address: "0x467a18E3Ec98587Cd88683E6F9e1792C480C09c7"
-  amm_address: "0x9ba6958811cf887536E34316Ea732fB40c3fc06c"
-  position_address: "0xeCA6E2f7466c0A1BA6dB3083a09b8B09969D77Ee"
-  liquidation_address: "0x468B589c68dBe29b2BC2b765108D63B61805e982"
-  funding_rate_address: "0x9Abe85f3bBee0f06330E8703e29B327CE551Ba10"
-  lending_pool_address: "0xA488d58915967cfE62bc5f55336972c3FBD6aF01"
-  price_feed_address: "0x2dccffb6377364CDD189e2009Af96998F9b8BEcb"
-  risk_manager_address: "0xd4EE5BF901E6812E74a20306F5732326Ced89126"
-  presale_address: "0x24b5B08971Bbd1C4C90C4980D908364283Ae51DD"
-  meme_token_address: "0xb6957a1B03DB60EaF3315293AbA44857cb339d33"
+  # Contract Addresses (Base Sepolia - Redeployed 2026-02-04)
+  router_address: "0x185B351132DA84d7d397e1270A9322F4ADf2d665"
+  vault_address: "0x780E415Ffd8104Ee2EECD7418A9227Bb92ebE294"
+  amm_address: "0xfCaf1a4E6840D60C9551C05F9940AE5de9c07976"
+  position_address: "0xbff432BfBc3505712BB727D3F61E869769DB5724"
+  liquidation_address: "0x80c720F87cd061B5952d1d84Ce900aa91CBB167B"
+  funding_rate_address: "0x82D72703a089fE245763f365876d5445EDc8BA9e"
+  lending_pool_address: "0x7Ddb15B5E680D8a74FE44958d18387Bb3999C633"
+  price_feed_address: "0xa97a1E55cFfF5C1e45Ac2c1D882717cDD4F44e01"
+  risk_manager_address: "0x28D70e5911fB6F196a15e0Da256BdAf8eB8199a8"
+  presale_address: "0x0000000000000000000000000000000000000000"
+  meme_token_address: "0x01eA557E2B17f65604568791Edda8dE1Ae702BE8"
 
-  # Settlement contract for P2P trading (Relayer)
-  settlement_address: "0x48c551f36E74B8d21D26e21139623c6dd438e455"
+  # Settlement contract for P2P trading (2026-02-04 部署)
+  settlement_address: "0x027131BbC5EF6427826F64D12BACAAb447Ee1B13"
 
   # Relayer private key - 用于代付 Gas
   # 地址: 0xF339fCf70939e04C8Ce79391BB47bB943122949C

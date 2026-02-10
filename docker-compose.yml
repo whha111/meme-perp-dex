@@ -39,8 +39,8 @@ services:
   # Matching Engine (TypeScript Service)
   matching-engine:
     build:
-      context: ./backend/src/matching
-      dockerfile: Dockerfile
+      context: ./backend/src
+      dockerfile: matching/Dockerfile
     container_name: memeperp-matching-engine
     restart: unless-stopped
     ports:
@@ -50,7 +50,13 @@ services:
       - RPC_URL=${MEMEPERP_BLOCKCHAIN_RPC_URL:-https://base-sepolia-rpc.publicnode.com}
       - MATCHER_PRIVATE_KEY=${MEMEPERP_BLOCKCHAIN_PRIVATE_KEY:?MEMEPERP_BLOCKCHAIN_PRIVATE_KEY is required}
       - SETTLEMENT_ADDRESS=${MEMEPERP_BLOCKCHAIN_POSITION_ADDRESS:?MEMEPERP_BLOCKCHAIN_POSITION_ADDRESS is required}
+      - TOKEN_FACTORY_ADDRESS=${MEMEPERP_TOKEN_FACTORY_ADDRESS:-0x583d35e9d407Ea03dE5A2139e792841353CB67b1}
+      - PRICE_FEED_ADDRESS=${MEMEPERP_PRICE_FEED_ADDRESS:-0xa97a1E55cFfF5C1e45Ac2c1D882717cDD4F44e01}
       - BATCH_INTERVAL_MS=${MEMEPERP_BATCH_INTERVAL_MS:-30000}
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8081/health"]
       interval: 30s
@@ -134,7 +140,7 @@ services:
       - MEMEPERP_BLOCKCHAIN_VAULT_ADDRESS=${MEMEPERP_BLOCKCHAIN_VAULT_ADDRESS:-}
       - MEMEPERP_BLOCKCHAIN_POSITION_ADDRESS=${MEMEPERP_BLOCKCHAIN_POSITION_ADDRESS:?MEMEPERP_BLOCKCHAIN_POSITION_ADDRESS is required}
       - MEMEPERP_BLOCKCHAIN_PRICE_FEED_ADDRESS=${MEMEPERP_BLOCKCHAIN_PRICE_FEED_ADDRESS:-}
-      - MEMEPERP_SERVER_MODE=${MEMEPERP_SERVER_MODE:-release}
+      - MEMEPERP_SERVER_MODE=debug
     depends_on:
       postgres:
         condition: service_healthy

@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslations } from "next-intl";
 import { TokenCard } from "./TokenCard";
 import { Navbar } from "@/components/layout/Navbar";
-import { GRADUATION_THRESHOLD } from "@/lib/protocol-constants";
+import { SOLD_TOKENS_TARGET } from "@/lib/protocol-constants";
 import {
   InstrumentAssetData,
   getWebSocketClient,
@@ -18,8 +18,9 @@ import {
 import { formatTimeAgo } from "@/utils/formatters";
 import { FilterPanel, FilterState, defaultFilterState } from "./FilterPanel";
 import { FAQPanel } from "./FAQPanel";
-import { useOnChainTokenList, OnChainToken } from "@/hooks/useTokenList";
-import { useETHPrice } from "@/hooks/useETHPrice";
+import { useOnChainTokenList, OnChainToken } from "@/hooks/common/useTokenList";
+import { useETHPrice } from "@/hooks/common/useETHPrice";
+import { trackRender } from "@/lib/debug-render";
 
 // [FIX F-H-01] 非阻塞连接检查 - 立即返回连接状态，不等待
 function checkConnection(): boolean {
@@ -54,10 +55,10 @@ function Column({ title, assets, noTokensText, ethPrice }: { title: string; asse
           const instId = asset.instId || 'unknown';
           const ticker = asset.symbol || instId.toUpperCase();
 
-          // 计算内盘进度 (已售出/毕业阈值)
-          // 使用 GRADUATION_THRESHOLD 作为可售代币上限（达到此值即毕业）
+          // 计算内盘进度 (已售出/目标销售量)
+          // 毕业需要卖出 793M 代币 (1B总量 - 207M剩余阈值)
           const soldBigInt = BigInt(asset.soldSupply || "0");
-          const progressPercent = Number((soldBigInt * 10000n) / GRADUATION_THRESHOLD) / 100;
+          const progressPercent = Number((soldBigInt * 10000n) / SOLD_TOKENS_TARGET) / 100;
 
           // 市值计算: FDV 是 wei 单位，需要转换为 USD
           // FDV = 价格 * 总供应量 (10亿)，单位是 wei
@@ -129,7 +130,7 @@ function parseValueString(value: string): number {
 // 计算资产的数值用于筛选
 function getAssetMetrics(asset: InstrumentAssetData, ethPrice: number) {
   const soldBigInt = BigInt(asset.soldSupply || "0");
-  const progressPercent = Number((soldBigInt * 10000n) / GRADUATION_THRESHOLD) / 100;
+  const progressPercent = Number((soldBigInt * 10000n) / SOLD_TOKENS_TARGET) / 100;
 
   const fdvWei = parseFloat(asset.fdv || "0");
   const fdvEth = fdvWei / 1e18;
@@ -203,6 +204,9 @@ function hasActiveFilters(filters: FilterState): boolean {
 }
 
 export function MarketOverview() {
+  // 调试：追踪渲染次数 (仅 console 警告，不 throw)
+  trackRender("MarketOverview");
+
   const [wsConnected, setWsConnected] = useState(false);
   const [minLoadingDone, setMinLoadingDone] = useState(false); // 最小加载时间标记
   const [filterPanelOpen, setFilterPanelOpen] = useState(false);
@@ -251,7 +255,8 @@ export function MarketOverview() {
     return () => {
       unsubscribeTrade();
     };
-  }, [queryClient]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // queryClient 是稳定的，不需要作为依赖
 
   // [FIX F-H-01] 非阻塞数据获取 - 立即触发连接，不等待
   // 使用 useEffect 在组件挂载时触发连接
@@ -332,6 +337,12 @@ export function MarketOverview() {
       return uri;
     }
 
+    // 有效的 IPFS CID hash
+    if ((uri.startsWith('Qm') && uri.length === 46) || uri.startsWith('bafy')) {
+      return `https://gateway.pinata.cloud/ipfs/${uri}`;
+    }
+
+    // 未知格式（如 "test-pepe-metadata"），不尝试请求
     return undefined;
   };
 

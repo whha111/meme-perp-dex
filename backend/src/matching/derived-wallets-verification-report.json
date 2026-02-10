@@ -1,0 +1,815 @@
+{
+  "timestamp": "2026-01-31T23:18:57.308Z",
+  "totalWallets": 100,
+  "expectedBalance": 10000,
+  "summary": {
+    "ok": 100,
+    "zero": 0,
+    "insufficient": 0,
+    "errors": 0
+  },
+  "totalBalance": 1000000,
+  "averageBalance": 10000,
+  "results": [
+    {
+      "index": 0,
+      "address": "0x89D99FbcA2684d03124ecB80fe6c8a253048C976",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 1,
+      "address": "0xAAf937E60f2C13a6c61132196E73cfCd24820F81",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 2,
+      "address": "0xf18B4F2718615412adb4FB5AF0EaC0D76fD3FA8f",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 3,
+      "address": "0x226E6B1Daccf1b3F254AD3c1C73FaD91158039db",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 4,
+      "address": "0x38b4cAF0eF108A0727D494ef11cc2f899F722C7C",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 5,
+      "address": "0x3Fad91b78347cc970Dfaa9741143Ea7E926D9379",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 6,
+      "address": "0xe7daF1BEB950237C7ef06D236AC17364bF8b7B42",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 7,
+      "address": "0x1175Ef28Da1C51bba3e37BFCe977B1C384045af1",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 8,
+      "address": "0x724e3Bb5769b10b3c28a56D0c87f6a142d3050d7",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 9,
+      "address": "0xA38375e352a785974481dAF287f4a0F2b922Cd93",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 10,
+      "address": "0x1299e9C7D6841C170bc89C41a88ef1d500C40b43",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 11,
+      "address": "0x0bb918d79Bb5c852AdB069157786E88A9d2C6fCb",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 12,
+      "address": "0x3c95Af5ce8adc57d886F726AAdA2c6B353317fA9",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 13,
+      "address": "0x843aF88ED5B419E54047D4B3f1f230D7dc42a03C",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 14,
+      "address": "0xBC0B8fCb976fe048a602EF333B05ECA55c542883",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 15,
+      "address": "0x19089eaab09d727Dfa8ea513F11cD76CCA519E38",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 16,
+      "address": "0xDc942fee427A1688Dcf1a7b3F3Be09bbe8fe0E34",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 17,
+      "address": "0x62E3254E93CefF10984c2B01FE42278b97c4D3B9",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 18,
+      "address": "0x144335Dc3A8665Cdb489688968Cc164857237b22",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 19,
+      "address": "0x6fA18075D3b2c693c7Fc8855B5C5f8ED3D09c922",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 20,
+      "address": "0xE897Ab87830B5D558Cad97177d9d8e023F877968",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 21,
+      "address": "0x370748F60B3439Ec3B08698b4c054Ff50ec6D079",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 22,
+      "address": "0x03b3fb256981977203411557d10516Cd266073C2",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 23,
+      "address": "0xD3Bec88B09D172FB3cCEf86c9dfB13f8Dd26d8eD",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 24,
+      "address": "0xA7066019aB31DC8b3cDD2fA2d340b6389f73387B",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 25,
+      "address": "0x4A7092eF724CAC1C50749c92A8A5A811Aa288E77",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 26,
+      "address": "0x7F0872641829caB934a8D45a41AabB4ED73f6Ac6",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 27,
+      "address": "0xaa7C49358CE0bf7440BA4FE69A1b622c30Bde766",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 28,
+      "address": "0x0fF6dF2A8a9AF5d8DdA2fC21DBd53120ff3b78EC",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 29,
+      "address": "0x6Dc1E7E5fdf333B6BD80db9db4dBE51100fC0d73",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 30,
+      "address": "0xB0A4954332258b5D0bfE986044a28F808Be25f8b",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 31,
+      "address": "0xf2683fd4C1Bd5A1D06d940732092A250eC50a02c",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 32,
+      "address": "0xb2BCc51D352277965FC31762Ab1f667e43D417d6",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 33,
+      "address": "0xfa150AF0043Ee853C50c280e58306673c3170294",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 34,
+      "address": "0xeD95b51A1e98D915b5cBED8B82119ccfbc0164cd",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 35,
+      "address": "0x404E0038068EAc574705Fbc1CD70EecCeF4D7aD8",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 36,
+      "address": "0x2c1d0a439CAB9e09c10DC31834e61E573ab63173",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 37,
+      "address": "0x9f7be7812D565cBd92A55cc15f72F2694c68caF5",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 38,
+      "address": "0x2Cb9144935C9a7882dAa4fcd96bd24DB9992A3DB",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 39,
+      "address": "0xFfE4DfcECAee13395bDc2b66D28241C694f81A89",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 40,
+      "address": "0xA6C42737DA15A26B72D91Bd2e13Ee6590E9d962a",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 41,
+      "address": "0x74488082E48a61119F28f2fe9d5C4a46dA79693F",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 42,
+      "address": "0xA93B1bcd6a3C3688e7355F440F4Fa291347A1c2B",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 43,
+      "address": "0x6181A6D588ED0B12FE147386e7381aA8f9389641",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 44,
+      "address": "0xc06Ab28B7Db5FA0df7670201c7D719D4dB781039",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 45,
+      "address": "0x7a4D568dB92293b1b2a41d94a4942F2672Fe021D",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 46,
+      "address": "0xb0D775E9DDCA80e2E6c2eBf4CA61E5c950C09e67",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 47,
+      "address": "0x2147b9A220458aBbAa9c8BcD121616185a208bAc",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 48,
+      "address": "0x29188E0160Fd796DEce7d9CC68b71965eD35617d",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 49,
+      "address": "0xA4efE493E3ED74AA0ba5Fe9A44713560B1cc964E",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 50,
+      "address": "0xB68c04c7Dd82a2D3b82d69d154DAc4Fe3bE2D922",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 51,
+      "address": "0x420BB079ced39baA9B7C724B44610c2FD002Bb93",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 52,
+      "address": "0x8cb6b0539c6930A49A009ca07aD7B0ced581f801",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 53,
+      "address": "0xFE16eB3086CaE3E5Ad706ba63EdFF378eb6037b7",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 54,
+      "address": "0xf1F6a2e0aDfcb8ccd07985305E6b15F62521B4C1",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 55,
+      "address": "0x7F8545c46a127aEB54F0F9ae17153df789D71d0c",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 56,
+      "address": "0x54f15D1537f27d2A58671E57FCD4e4b16e78895C",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 57,
+      "address": "0x272aEacb374Fb0eECC94d92AaA4Dc8003f3Dc09B",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 58,
+      "address": "0x031C74a2cBC0f97112b4Db512145E64AaF8dAEF3",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 59,
+      "address": "0x5a45A2Cf678A7418e7135Af8cC554b68CB1A45D2",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 60,
+      "address": "0xD42b7F9CfEcd8b2126f2291543BFb8C4C1805Bb8",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 61,
+      "address": "0xd3FCf6FDCfda28da90fe93f54469567A8608c1f8",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 62,
+      "address": "0xEB9A97C4098628E9bf064Bf300E3E7F402DC273F",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 63,
+      "address": "0xFB4E340F36084C27FB470C049B1bbCB0917f3baB",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 64,
+      "address": "0x94cb61A08bF5F4A4aE2576ef516f88C54EDffC4f",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 65,
+      "address": "0x45EaB4277a14b37A0041625553A395151E6E0058",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 66,
+      "address": "0x8AA6A9f7a5d06d5673AB26B1EBAF0eE4888079D0",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 67,
+      "address": "0x3Acca48a66Dc58A09509190677E4691E9d484FC7",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 68,
+      "address": "0xcf73AF228f129A31667296016C19a530b322251C",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 69,
+      "address": "0x0D13Bf2Dee476658F547B4e73BaE266E183fE03d",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 70,
+      "address": "0xa1D6b8bD1b3e4FD1Ed3bC4654FcB97F5Bc31a889",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 71,
+      "address": "0x6250F1116243B66C5aEDcdB7F65a5032a621f8b8",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 72,
+      "address": "0xb3898A368EDee3a2F3EAF1f88672ECfB12F31CC5",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 73,
+      "address": "0x09c84b15913317101f952F801C8a33cae40E2521",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 74,
+      "address": "0xCc40C17025430B820568a88BB75c873789a41F65",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 75,
+      "address": "0xf3642fc7D4dA36cCF22f9B35BCD6ac9A9122D57e",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 76,
+      "address": "0xd2b0597D9F1e9Ca8bB0016aC50b735A9aD46017C",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 77,
+      "address": "0xF5e7bC799f254094988B51a55c1F01eFf4a03ca8",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 78,
+      "address": "0x2E1F6568d7E86478C1da7646C128540e6dd5C30E",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 79,
+      "address": "0x46F7b9966030A8A97925E1B17C2685A5c96DD30A",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 80,
+      "address": "0x39a34E5b6D2Dd4ffb6713F20DD8f4D2e028106Fc",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 81,
+      "address": "0xdA5A00835098aD9A2B83B73C9BBEC8c89737edd5",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 82,
+      "address": "0xd9bA374C85B0F1eBFB8aFD14259F5C718CDb44AE",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 83,
+      "address": "0xe59c542D5Cc79E7c2C147313CE4532eb4205033A",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 84,
+      "address": "0x408dfb45A51167638629a5d598FF70243eBBC4fF",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 85,
+      "address": "0xae72d37B678367Dfd66488aD337057034b3C512C",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 86,
+      "address": "0x6B31aE63CbD2273Eb17cF735855Da6131bC2F379",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 87,
+      "address": "0x651ecBf703c2850F84bAbb69868852223Cac979C",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 88,
+      "address": "0xC16d6CC79286aBB484C352e6B9828300D8Dfe661",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 89,
+      "address": "0x6F5F2D90dC2ce264dfA694Ae9B661607E88E41a7",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 90,
+      "address": "0x4ebe6e492E479e63fb0B553e31eEA9b7C17397bf",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 91,
+      "address": "0x74E02983E8E98b355a194A845dd8dd9A1EB699E9",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 92,
+      "address": "0x2d6c283851fFF5E92f3cEb570FDa4eCcdC9D5B80",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 93,
+      "address": "0x10acC0137C5f4c0A016A2Cd7983fb8fff8B5406b",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 94,
+      "address": "0xeE09542f57944804b1F5cAa4FB16fCC3e41E5007",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 95,
+      "address": "0xcE604F2103804FB24F4d856D63CC67EFfec828B0",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 96,
+      "address": "0x4e7dC6d4651e44aEeA9Fb0c81ca973c6e268b95e",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 97,
+      "address": "0x73907792a936DE36CB9AeaF27cacfA74f9cadB19",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 98,
+      "address": "0x6bD93c87f2b48D1B39203FF865a0414A6F20279F",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    },
+    {
+      "index": 99,
+      "address": "0xB5A236CD493A0ED180081974E7A405FFb725494c",
+      "available": 10000,
+      "reserved": 0,
+      "total": 10000,
+      "status": "OK"
+    }
+  ]
+}

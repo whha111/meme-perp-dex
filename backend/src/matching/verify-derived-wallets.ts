@@ -11,7 +11,7 @@ import path from "path";
 
 // Configuration
 const RPC_URL = process.env.BASE_SEPOLIA_RPC || "https://sepolia.base.org";
-const SETTLEMENT_ADDRESS = (process.env.SETTLEMENT_ADDRESS || "0x6804fB89076783b4Bb30091b7514Ddb2d502c037") as Address;
+const SETTLEMENT_ADDRESS = (process.env.SETTLEMENT_ADDRESS || "0x027131BbC5EF6427826F64D12BACAAb447Ee1B13") as Address;
 const EXPECTED_BALANCE = 10_000_000_000n; // 10,000 USDT (6 decimals)
 const DERIVED_WALLETS_FILE = "./trading-wallets.json";
 

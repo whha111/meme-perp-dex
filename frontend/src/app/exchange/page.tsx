@@ -3,8 +3,8 @@
 import React, { useState, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Navbar } from "@/components/layout/Navbar";
-import { TradingTerminal } from "@/components/trading/TradingTerminal";
-import { useOnChainTokenList } from "@/hooks/useTokenList";
+import { TradingTerminal } from "@/components/common/TradingTerminal";
+import { useOnChainTokenList } from "@/hooks/common/useTokenList";
 import { useTranslations } from "next-intl";
 
 function ExchangeContent() {

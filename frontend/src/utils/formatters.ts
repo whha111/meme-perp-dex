@@ -7,17 +7,30 @@
  * @param timestamp Unix 时间戳（秒或毫秒）或 bigint
  * @returns 格式化的时间字符串，如 "3分钟前"、"2小时前"
  */
-export function formatTimeAgo(timestamp: bigint | number): string {
-  const seconds = Math.floor(Date.now() / 1000 - Number(timestamp));
-  
+export function formatTimeAgo(timestamp: bigint | number | undefined | null): string {
+  if (timestamp === undefined || timestamp === null || timestamp === 0) {
+    return "刚刚";
+  }
+
+  // 自动检测: 如果时间戳大于 1e11，认为是毫秒；否则是秒
+  // 1e11 = 3001年1月1日 (如果是秒) 或 1973年 (如果是毫秒)
+  let timestampMs = Number(timestamp);
+  if (timestampMs < 1e11) {
+    timestampMs = timestampMs * 1000; // 秒转毫秒
+  }
+
+  const seconds = Math.floor((Date.now() - timestampMs) / 1000);
+
+  // 防止负数（未来时间或时钟偏差）
+  if (seconds < 0) return "刚刚";
   if (seconds < 60) return `${seconds}秒前`;
-  
+
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}分钟前`;
-  
+
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}小时前`;
-  
+
   const days = Math.floor(hours / 24);
   return `${days}天前`;
 }
@@ -92,4 +105,53 @@ export function formatNumberShort(value: number): string {
     return (value / 1_000).toFixed(2) + 'K';
   }
   return value.toFixed(2);
+}
+
+/**
+ * 格式化 Token 价格 (ETH 本位: Token/ETH 比率)
+ * 极小数使用下标格式: 0.00000001016 → "0.0₈1016"
+ * @param price 价格数值
+ * @returns 格式化的价格字符串
+ */
+export function formatTokenPrice(price: number): string {
+  if (price === 0 || isNaN(price)) return "0";
+  if (price >= 1000) return price.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (price >= 1) return price.toFixed(4);
+  if (price >= 0.01) return price.toFixed(6);
+  if (price >= 0.0001) return price.toFixed(8);
+
+  // 极小数使用下标格式: 0.0₈1016
+  const priceStr = price.toFixed(18);
+  const match = priceStr.match(/^0\.(0*)([1-9]\d*)/);
+  if (match) {
+    const zeroCount = match[1].length;
+    const significantDigits = match[2].slice(0, 4);
+    const subscripts = ["₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉"];
+    const subscriptNum = zeroCount.toString().split("").map((d) => subscripts[parseInt(d)]).join("");
+    return `0.0${subscriptNum}${significantDigits}`;
+  }
+  return price.toFixed(10);
+}
+
+/**
+ * 格式化 ETH 金额
+ * @param amount ETH 金额
+ * @returns 格式化的字符串，如 "Ξ0.0234" 或 "Ξ1.2345"
+ */
+export function formatEthAmount(amount: number): string {
+  if (amount === 0 || isNaN(amount)) return "Ξ0";
+  if (amount >= 1) return `Ξ${amount.toFixed(4)}`;
+  if (amount >= 0.0001) return `Ξ${amount.toFixed(6)}`;
+
+  // 极小数使用下标格式
+  const amountStr = amount.toFixed(18);
+  const match = amountStr.match(/^0\.(0*)([1-9]\d*)/);
+  if (match) {
+    const zeroCount = match[1].length;
+    const significantDigits = match[2].slice(0, 4);
+    const subscripts = ["₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉"];
+    const subscriptNum = zeroCount.toString().split("").map((d) => subscripts[parseInt(d)]).join("");
+    return `Ξ0.0${subscriptNum}${significantDigits}`;
+  }
+  return `Ξ${amount.toFixed(8)}`;
 }

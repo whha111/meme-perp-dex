@@ -15,17 +15,16 @@ export const ENV_CONFIG = {
   
   // 合约地址（通过 contracts.ts 管理）
   
-  // API 配置
-  API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || "https://api.domainfi.io",
+  // API 配置 - 使用 config/api.ts 中的 MATCHING_ENGINE_URL
+  // 此处仅作为备用配置
+  API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8081",
 } as const;
 
 // ==================== 价格配置 ====================
+// ETH 价格请使用 useETHPrice hook 获取实时数据：
+// import { useETHPrice } from "@/hooks/common/useETHPrice";
+// const { price } = useETHPrice();
 export const PRICE_CONFIG = {
-  // @deprecated - 请使用 useETHPrice hook 获取实时 ETH 价格
-  // import { useETHPrice } from "@/hooks/useETHPrice";
-  // const { price } = useETHPrice();
-  ETH_PRICE_USD: parseFloat(process.env.NEXT_PUBLIC_ETH_PRICE_USD || "3300"),
-
   // 价格显示精度
   USD_DECIMALS: 2,
   ETH_DECIMALS: 6,
@@ -53,8 +52,8 @@ export const TIMEOUT_CONFIG = {
 
 export const THRESHOLD_CONFIG = {
   // 毕业阈值 - 仅用于显示目的（ETH 近似值）
-  // ⚠️ 计算请使用 @namespace/protocol 的 GRADUATION_THRESHOLD (727M tokens)
-  GRADUATION_THRESHOLD_ETH_DISPLAY: "~22.55", // 约 22.55 ETH（仅供参考）
+  // ⚠️ 计算请使用 @namespace/protocol 的 GRADUATION_THRESHOLD (207M tokens remaining)
+  GRADUATION_THRESHOLD_ETH_DISPLAY: "~30", // 约 30 ETH（毕业费 1 ETH + 29 ETH 流动性）
   
   // 交易阈值
   BUY_PER_TRANSACTION_ETH: "0.1", // 每笔交易购买量（ETH）

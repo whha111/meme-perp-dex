@@ -84,7 +84,7 @@ export function verifyTXTRecord(txtValue: string, expectedWallet: string): boole
  * WebSocket 端点配置
  */
 export const WEBSOCKET_ENDPOINTS = {
-  DEVELOPMENT: process.env.NEXT_PUBLIC_WEBSOCKET_URL || "ws://localhost:8080/ws",
+  DEVELOPMENT: process.env.NEXT_PUBLIC_WEBSOCKET_URL || "ws://localhost:8081/ws",
   PRODUCTION: "wss://api.domainfi.com/ws",
 } as const;
 

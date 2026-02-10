@@ -2,12 +2,12 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import "../src/core/Vault.sol";
-import "../src/core/PositionManager.sol";
-import "../src/core/RiskManager.sol";
-import "../src/core/Liquidation.sol";
-import "../src/core/PriceFeed.sol";
-import "../src/core/FundingRate.sol";
+import "../src/common/Vault.sol";
+import "../src/perpetual/PositionManager.sol";
+import "../src/perpetual/RiskManager.sol";
+import "../src/perpetual/Liquidation.sol";
+import "../src/common/PriceFeed.sol";
+import "../src/perpetual/FundingRate.sol";
 
 /**
  * @title RiskControlTest
@@ -85,11 +85,10 @@ contract RiskControlTest is Test {
         riskManager.setInsuranceFund(address(liquidation));
 
         // Set initial price (use owner's initializePrice function)
-        priceFeed.initializePrice(INITIAL_PRICE);
+        priceFeed.addSupportedToken(address(1), INITIAL_PRICE);
 
         // 设置测试合约为 AMM 并禁用价格保护（允许测试极端价格场景）
-        priceFeed.setAMM(address(this));
-        priceFeed.setDeviationProtection(false);
+        priceFeed.setTokenFactory(address(this));
 
         // Deposit insurance fund (important for risk control tests!)
         vm.deal(owner, 1000 ether);
@@ -296,7 +295,7 @@ contract RiskControlTest is Test {
         positionManager.openLong(10 ether, 10 * LEVERAGE_PRECISION);
 
         // Price increases 10%
-        priceFeed.initializePrice(INITIAL_PRICE * 110 / 100);
+        priceFeed.updateTokenPriceFromFactory(address(1), INITIAL_PRICE * 110 / 100);
 
         uint256 balanceBefore = vault.getBalance(user1);
         vm.prank(user1);
@@ -317,7 +316,7 @@ contract RiskControlTest is Test {
         positionManager.openLong(10 ether, 10 * LEVERAGE_PRECISION);
 
         // Price decreases 5% (not enough to liquidate)
-        priceFeed.initializePrice(INITIAL_PRICE * 95 / 100);
+        priceFeed.updateTokenPriceFromFactory(address(1), INITIAL_PRICE * 95 / 100);
 
         uint256 balanceBefore = vault.getBalance(user1);
         vm.prank(user1);
@@ -394,7 +393,7 @@ contract RiskControlTest is Test {
         positionManager.openLong(10 ether, 50 * LEVERAGE_PRECISION); // High leverage
 
         // Price drops significantly
-        priceFeed.initializePrice(INITIAL_PRICE * 90 / 100);
+        priceFeed.updateTokenPriceFromFactory(address(1), INITIAL_PRICE * 90 / 100);
 
         assertTrue(positionManager.canLiquidate(user1));
     }
@@ -404,7 +403,7 @@ contract RiskControlTest is Test {
         positionManager.openLong(10 ether, 50 * LEVERAGE_PRECISION);
 
         // Price drops
-        priceFeed.initializePrice(INITIAL_PRICE * 90 / 100);
+        priceFeed.updateTokenPriceFromFactory(address(1), INITIAL_PRICE * 90 / 100);
 
         assertTrue(positionManager.canLiquidate(user1));
 
@@ -534,11 +533,10 @@ contract RiskControlBoundaryTest is Test {
         riskManager.setVault(address(vault));
         riskManager.setInsuranceFund(address(liquidation));
 
-        priceFeed.initializePrice(INITIAL_PRICE);
+        priceFeed.addSupportedToken(address(1), INITIAL_PRICE);
 
         // 设置测试合约为 AMM 并禁用价格保护（允许测试极端价格场景）
-        priceFeed.setAMM(address(this));
-        priceFeed.setDeviationProtection(false);
+        priceFeed.setTokenFactory(address(this));
 
         // Deposit large insurance fund for boundary tests
         vm.deal(address(this), 10000 ether);
@@ -708,12 +706,12 @@ contract RiskControlBoundaryTest is Test {
 
         // Note: Mark price = 70% spot + 30% TWAP, so price changes are dampened
         // Small price drop - still safe
-        priceFeed.initializePrice(INITIAL_PRICE * 95 / 100);
+        priceFeed.updateTokenPriceFromFactory(address(1), INITIAL_PRICE * 95 / 100);
         assertFalse(positionManager.canLiquidate(user1));
 
         // Large price drop - causes liquidation
         // Drop to 50% to ensure mark price drops enough to trigger liquidation
-        priceFeed.initializePrice(INITIAL_PRICE * 50 / 100);
+        priceFeed.updateTokenPriceFromFactory(address(1), INITIAL_PRICE * 50 / 100);
         assertTrue(positionManager.canLiquidate(user1));
     }
 
@@ -821,11 +819,10 @@ contract RiskControlFuzzTest is Test {
         riskManager.setVault(address(vault));
         riskManager.setInsuranceFund(address(liquidation));
 
-        priceFeed.initializePrice(INITIAL_PRICE);
+        priceFeed.addSupportedToken(address(1), INITIAL_PRICE);
 
         // 设置测试合约为 AMM 并禁用价格保护（允许测试极端价格场景）
-        priceFeed.setAMM(address(this));
-        priceFeed.setDeviationProtection(false);
+        priceFeed.setTokenFactory(address(this));
 
         // Large insurance fund for fuzz tests
         vm.deal(address(this), type(uint128).max);
@@ -942,7 +939,7 @@ contract RiskControlFuzzTest is Test {
         positionManager.openLong(10 ether, 10 * LEVERAGE_PRECISION);
 
         uint256 newPrice = INITIAL_PRICE * priceChange / 100;
-        priceFeed.initializePrice(newPrice);
+        priceFeed.updateTokenPriceFromFactory(address(1), newPrice);
 
         int256 pnl = positionManager.getUnrealizedPnL(user);
 

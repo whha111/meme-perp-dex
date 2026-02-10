@@ -11,6 +11,7 @@ import { WebSocketStatusIndicator } from "@/components/debug/WebSocketStatusIndi
 import { NavigationProgress } from "@/components/shared/NavigationProgress";
 import { I18nProvider, useLocale } from "@/i18n";
 import { useAppStore } from "@/lib/stores/appStore";
+import { WalletBalanceProvider } from "@/contexts/WalletBalanceContext";
 // Note: RainbowKit CSS is imported in layout.tsx (server component) to avoid 404 errors
 
 // =====================================================
@@ -295,8 +296,8 @@ function LoadingSkeleton() {
 // WebSocket Auto-Connect Component
 // =====================================================
 function WebSocketAutoConnect({ children }: { children: ReactNode }) {
-  // 自动连接 WebSocket，不阻塞渲染
-  useAutoConnectWebSocket(true);
+  // TEMPORARILY DISABLED to debug infinite loop
+  // useAutoConnectWebSocket(true);
   return <>{children}</>;
 }
 
@@ -416,12 +417,14 @@ export function Providers({ children }: { children: React.ReactNode }) {
                 modalSize="compact"
               >
                 <ToastProvider>
-                  <WebSocketAutoConnect>
-                    <NavigationProgress />
-                    {children}
-                    {/* WebSocket 状态指示器 (仅开发环境) */}
-                    <WebSocketStatusIndicator />
-                  </WebSocketAutoConnect>
+                  <WalletBalanceProvider>
+                    <WebSocketAutoConnect>
+                      <NavigationProgress />
+                      {children}
+                      {/* WebSocket 状态指示器 (仅开发环境) */}
+                      <WebSocketStatusIndicator />
+                    </WebSocketAutoConnect>
+                  </WalletBalanceProvider>
                 </ToastProvider>
               </RainbowKitProvider>
             </QueryClientProvider>

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
-import "../src/core/Vault.sol";
+import "../src/common/Vault.sol";
 
 /**
  * @title VaultPendingProfit Test

@@ -1,125 +1,254 @@
 # MEME Perp DEX
 
-去中心化 MEME 币永续合约交易平台
+> Decentralized Perpetual Futures & Spot Trading Platform for Meme Tokens
 
-## 项目结构
+[![Solidity](https://img.shields.io/badge/Solidity-0.8.20-blue)](https://soliditylang.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-14-black)](https://nextjs.org/)
+[![Base](https://img.shields.io/badge/Chain-Base%20Sepolia-0052FF)](https://base.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+
+---
+
+## Overview
+
+MEME Perp DEX is a full-stack decentralized exchange that combines:
+
+- **Meme Token Launchpad** — Create and trade meme tokens via bonding curve (TokenFactory)
+- **Perpetual Futures (V2)** — Up to 100x leverage with P2P order matching and EIP-712 signed orders
+- **Multi-Token Lending** — Deposit tokens to earn yield, powering the perpetual system
+- **Spot AMM Trading** — Automated market making with real-time price feeds
+
+### Architecture: V2 Settlement (P2P Model)
+
+```
+User places order → Signs EIP-712 typed data (gasless)
+                          ↓
+              Off-chain Matching Engine pairs long/short
+                          ↓
+              Batch submission to on-chain Settlement contract
+                          ↓
+              Signature verification + collateral escrow
+                          ↓
+              PnL transfers directly between counterparties
+              (Insurance fund only used for bankruptcy)
+```
+
+> Inspired by dYdX v3's signature-derived trading wallet pattern and GMX's PnL calculation model.
+
+---
+
+## Project Structure
 
 ```
 meme-perp-dex/
-├── frontend/          # React + TypeScript 前端
-├── backend/           # Go + Gin 后端
-├── contracts/         # Solidity + Foundry 智能合约
-├── docs/              # 项目文档
-│   ├── PRD.md                    # 产品需求文档
-│   ├── API_SPECIFICATION.md      # API 规范
-│   ├── DEVELOPMENT_STANDARDS.md  # 开发规范
-│   └── SYSTEM_ARCHITECTURE.md    # 系统架构
-├── docker-compose.yml # Docker 编排
-└── Makefile          # 构建脚本
+├── contracts/                 # Solidity smart contracts (Foundry)
+│   ├── src/
+│   │   ├── common/            # Shared: PriceFeed, Vault, ContractRegistry
+│   │   ├── perpetual/         # V2: Settlement, PerpVault, Liquidation
+│   │   └── spot/              # TokenFactory, LendingPool
+│   ├── test/                  # Foundry tests
+│   └── script/                # Deployment scripts
+│
+├── frontend/                  # Next.js 14 frontend
+│   ├── src/
+│   │   ├── app/               # Pages: trade, lend, earnings
+│   │   ├── components/        # UI: common, spot, perpetual, lending
+│   │   ├── hooks/             # React hooks: common, spot, perpetual, lending
+│   │   ├── lib/               # Contracts config, stores, utilities
+│   │   └── config/            # API endpoints
+│   └── messages/              # i18n: en, zh, ja, ko
+│
+├── backend/
+│   ├── src/matching/          # TypeScript matching engine (Bun)
+│   ├── src/spot/              # Spot trading backend
+│   └── internal/keeper/       # Go keeper: liquidation, funding
+│
+├── docs/                      # 23+ documentation files
+├── DEVELOPMENT_RULES.md       # Development standards & audit fixes
+├── PERPVAULT_AUDIT_REPORT.md  # Security audit report
+└── CLAUDE.md                  # AI assistant instructions
 ```
 
-## 技术栈
+---
 
-### 前端
-- React 18 + TypeScript
-- Vite 构建
-- Zustand 状态管理
-- TanStack Query 数据请求
-- Wagmi + Viem Web3 连接
-- Tailwind CSS 样式
-- Lightweight Charts K线图
+## Tech Stack
 
-### 后端
-- Go 1.22+
-- Gin Web 框架
-- GORM ORM
-- PostgreSQL + TimescaleDB
-- Redis 缓存
-- WebSocket 实时推送
+| Layer | Technology |
+|-------|-----------|
+| **Smart Contracts** | Solidity 0.8.20, Foundry, OpenZeppelin |
+| **Frontend** | Next.js 14, TypeScript, Wagmi v2, Viem, TailwindCSS |
+| **State Management** | TanStack Query, Zustand |
+| **Matching Engine** | TypeScript + Bun runtime, WebSocket |
+| **Backend Services** | Go 1.22+, Gin, GORM |
+| **Database** | PostgreSQL + TimescaleDB, Redis |
+| **Chain** | Base / Base Sepolia |
+| **Charts** | TradingView Lightweight Charts |
+| **i18n** | next-intl (EN, ZH, JA, KO) |
 
-### 智能合约
-- Solidity 0.8.20
-- Foundry 开发框架
-- OpenZeppelin 安全库
+---
 
-## 快速开始
+## Smart Contracts
 
-### 环境要求
-- Node.js 18+
-- pnpm 8+
-- Go 1.22+
-- Foundry
-- Docker & Docker Compose
-- PostgreSQL 16+
-- Redis 7+
+### Core Contracts (V2 - Active)
 
-### 安装依赖
+| Contract | Description |
+|----------|-------------|
+| `Settlement.sol` | P2P perpetual settlement with EIP-712 signature verification |
+| `PerpVault.sol` | Perpetual collateral vault (WETH-based) |
+| `TokenFactory.sol` | Meme token launchpad with bonding curve |
+| `LendingPool.sol` | Multi-token lending pool with interest accrual |
+| `PriceFeed.sol` | Oracle price feed for all supported tokens |
+| `Vault.sol` | Shared asset vault |
+
+### Key Design Decisions
+
+- **PnL Calculation**: GMX standard — `delta = size * |currentPrice - avgPrice| / avgPrice`
+- **Liquidation Price**: Bybit standard — `liqPrice = entryPrice * (1 - 1/leverage + MMR)`
+- **Funding Rate**: 8-hour settlement intervals with configurable base rate
+- **Share Inflation Protection**: Virtual offset pattern (OpenZeppelin ERC4626) in LendingPool
+- **Slippage Protection**: Mandatory `minAmountOut` on all swap/trade functions
+
+---
+
+## Features
+
+### Meme Token Launchpad
+- One-click token creation with metadata URI
+- Bonding curve pricing (buy/sell along curve)
+- Automatic graduation to DEX when threshold reached
+
+### Perpetual Futures (V2)
+- Up to 100x leverage
+- EIP-712 signed orders (gasless order placement)
+- Off-chain matching engine with on-chain settlement
+- Signature-derived trading wallets (dYdX v3 pattern)
+- Funding rate settlement every 8 hours
+- Auto-Deleveraging (ADL) when insurance fund depleted
+- Real-time WebSocket price/orderbook/trade feeds
+
+### Lending
+- Multi-token lending pools
+- Supply tokens to earn interest
+- Dynamic interest rate model (utilization-based)
+- Claim accrued interest anytime
+
+### Spot Trading
+- AMM-based token swaps
+- Real-time price charts
+- Slippage protection with minimum output amounts
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+- Node.js 18+ & pnpm
+- Foundry (`curl -L https://foundry.paradigm.xyz | bash`)
+- Go 1.22+ (for keeper services)
+- Bun runtime (for matching engine)
+
+### Install
 
 ```bash
-# 前端
-make install-frontend
+# Clone
+git clone https://github.com/whha111/meme-perp-dex.git
+cd meme-perp-dex
 
-# 后端
-cd backend && go mod download
+# Contracts
+cd contracts && forge install && forge build
 
-# 合约
-cd contracts && forge install
+# Frontend
+cd frontend && pnpm install
+
+# Matching Engine
+cd backend/src/matching && bun install
 ```
 
-### 开发模式
+### Development
 
 ```bash
-# 启动前端开发服务器
-make dev-frontend
+# Start frontend dev server
+cd frontend && pnpm dev
 
-# 启动后端 API 服务
-make dev-backend
+# Start matching engine
+cd backend/src/matching && bun run server.ts
 
-# 编译合约
-make build-contracts
+# Run contract tests
+cd contracts && forge test -vvv
 ```
 
-### Docker 启动
+### Deploy Contracts
 
 ```bash
-# 构建并启动所有服务
-make docker-up
+cd contracts
 
-# 停止服务
-make docker-down
+# Deploy TokenFactory
+forge script script/DeployTokenFactory.s.sol --rpc-url $RPC_URL --broadcast
+
+# Deploy Settlement (V2)
+forge script script/DeploySettlement.s.sol --rpc-url $RPC_URL --broadcast
+
+# Deploy LendingPool
+forge script script/DeployLendingPool.s.sol --rpc-url $RPC_URL --broadcast
 ```
 
-## 功能模块
+---
 
-### 内盘认购 (Presale)
-- 50 BNB 认购 10 亿 MEME
-- 可退款机制
-- 满额后自动开启交易
+## Security
 
-### 现货交易 (Spot)
-- AMM 自动做市
-- BNB <-> MEME 兑换
-- 实时价格更新
+### Completed Audit Fixes (V2)
 
-### 永续合约 (Perpetual)
-- 最高 100x 杠杆
-- 全仓/逐仓模式
-- 止盈止损
-- 4 小时资金费率结算
-- 自动清算
+| ID | Severity | Issue | Status |
+|----|----------|-------|--------|
+| C-01 | Critical | Settlement funding fee double-charging | Fixed |
+| C-03 | Critical | LendingPool share inflation attack | Fixed |
+| C-04 | Critical | parseFloat precision loss (>9007 ETH) | Fixed |
+| C-05 | Critical | Zero slippage protection on swaps | Fixed |
+| C-06 | Critical | Private key exposed in React state | Fixed |
+| H-08 | High | closePair missing signature verification | Fixed |
+| H-10 | High | HTTP plaintext signature transmission | Fixed |
+| H-11 | High | Floating-point slippage calculation | Fixed |
+| H-09 | High | Redundant WebSocket connections | Mitigated |
 
-### LP 流动性池
-- MEME 存入赚取利息
-- 为空头提供借贷
-- 100% 本金保障
+See [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) for full details and [PERPVAULT_AUDIT_REPORT.md](PERPVAULT_AUDIT_REPORT.md) for the complete audit report.
 
-## 文档
+---
 
-- [产品需求文档](docs/PRD.md)
-- [API 规范](docs/API_SPECIFICATION.md)
-- [开发规范](docs/DEVELOPMENT_STANDARDS.md)
-- [系统架构](docs/SYSTEM_ARCHITECTURE.md)
+## Documentation
 
-## 许可证
+| Document | Description |
+|----------|-------------|
+| [DEVELOPMENT_RULES.md](DEVELOPMENT_RULES.md) | Development standards, formulas, and audit fix log |
+| [PERPVAULT_AUDIT_REPORT.md](PERPVAULT_AUDIT_REPORT.md) | Production security audit report |
+| [docs/SYSTEM_ARCHITECTURE.md](docs/SYSTEM_ARCHITECTURE.md) | System architecture overview |
+| [docs/SETTLEMENT_DESIGN.md](docs/SETTLEMENT_DESIGN.md) | V2 Settlement P2P design |
+| [docs/CONTRACTS.md](docs/CONTRACTS.md) | Smart contract interfaces |
+| [docs/API_SPECIFICATION_V2.md](docs/API_SPECIFICATION_V2.md) | V2 API specification |
+| [docs/PRD.md](docs/PRD.md) | Product requirements document |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Development roadmap |
+| [docs/PERP_MECHANISM.md](docs/PERP_MECHANISM.md) | Perpetual mechanism deep dive |
 
-MIT License
+---
+
+## Environment Variables
+
+```bash
+# Frontend (.env.local)
+NEXT_PUBLIC_MATCHING_ENGINE_WS_URL=wss://your-ws-endpoint
+NEXT_PUBLIC_MATCHING_ENGINE_URL=https://your-api-endpoint
+NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=your-wc-project-id
+
+# Contracts (.env)
+PRIVATE_KEY=your-deployer-private-key
+RPC_URL=https://your-rpc-url
+ETHERSCAN_API_KEY=your-etherscan-key
+```
+
+> **Warning**: Never commit `.env` files. See `.gitignore` for excluded patterns.
+
+---
+
+## License
+
+MIT License - See [LICENSE](LICENSE) for details.

@@ -1,11 +1,11 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { useAccount, useBalance } from "wagmi";
-import { formatEther } from "viem";
+import { formatUnits } from "viem";
 import { Navbar } from "@/components/layout/Navbar";
-import { usePerpetual } from "@/hooks/usePerpetual";
-import { TradeHistoryTable } from "@/components/trading/TradeHistoryTable";
+import { usePerpetualV2 } from "@/hooks/perpetual/usePerpetualV2";
+import { TradeHistoryTable } from "@/components/common/TradeHistoryTable";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 
 export default function AccountPage() {
@@ -15,13 +15,22 @@ export default function AccountPage() {
 
   const { data: walletBalance } = useBalance({ address });
   const {
-    position,
+    positions,
     hasPosition,
-    unrealizedPnL,
-    vaultBalance,
-    availableBalance,
-    lockedMargin,
-  } = usePerpetual();
+    balance,
+  } = usePerpetualV2();
+
+  // Calculate balances from V2 hook (ETH, 18 decimals)
+  const availableBalance = balance?.available || 0n;
+  const lockedMargin = balance?.locked || 0n;
+  const vaultBalance = availableBalance + lockedMargin;
+
+  // Calculate total unrealized PnL from all positions
+  const unrealizedPnL = useMemo(() => {
+    return positions.reduce((sum, pos) => {
+      return sum + BigInt(pos.unrealizedPnL || "0");
+    }, 0n);
+  }, [positions]);
 
   useEffect(() => {
     setMounted(true);
@@ -37,9 +46,17 @@ export default function AccountPage() {
     );
   }
 
-  const formatBalance = (balance: bigint | null | undefined) => {
+  // Format ETH balance (18 decimals) for Settlement contract
+  const formatBalance = (balance: bigint | string | null | undefined) => {
     if (!balance) return "0.0000";
-    return parseFloat(formatEther(balance)).toFixed(4);
+    const value = typeof balance === "string" ? BigInt(balance) : balance;
+    return parseFloat(formatUnits(value, 18)).toFixed(4);
+  };
+
+  // Format ETH balance (18 decimals) for wallet
+  const formatEthBalance = (balance: bigint | null | undefined) => {
+    if (!balance) return "0.0000";
+    return parseFloat(formatUnits(balance, 18)).toFixed(4);
   };
 
   const totalPnL = unrealizedPnL || 0n;
@@ -68,31 +85,31 @@ export default function AccountPage() {
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="bg-okx-bg-card border border-okx-border-primary rounded-xl p-4">
                 <p className="text-okx-text-tertiary text-sm mb-1">钱包余额</p>
-                <p className="text-xl font-bold">{formatBalance(walletBalance?.value)} ETH</p>
+                <p className="text-xl font-bold">{formatEthBalance(walletBalance?.value)} ETH</p>
               </div>
               <div className="bg-okx-bg-card border border-okx-border-primary rounded-xl p-4">
                 <p className="text-okx-text-tertiary text-sm mb-1">合约账户</p>
-                <p className="text-xl font-bold">{formatBalance(vaultBalance)} ETH</p>
+                <p className="text-xl font-bold">Ξ{formatBalance(vaultBalance)}</p>
               </div>
               <div className="bg-okx-bg-card border border-okx-border-primary rounded-xl p-4">
                 <p className="text-okx-text-tertiary text-sm mb-1">可用余额</p>
-                <p className="text-xl font-bold text-okx-up">{formatBalance(availableBalance)} ETH</p>
+                <p className="text-xl font-bold text-okx-up">Ξ{formatBalance(availableBalance)}</p>
               </div>
               <div className="bg-okx-bg-card border border-okx-border-primary rounded-xl p-4">
                 <p className="text-okx-text-tertiary text-sm mb-1">已锁定保证金</p>
-                <p className="text-xl font-bold">{formatBalance(lockedMargin)} ETH</p>
+                <p className="text-xl font-bold">Ξ{formatBalance(lockedMargin)}</p>
               </div>
             </div>
 
             {/* 当前持仓 */}
             <div className="bg-okx-bg-card border border-okx-border-primary rounded-xl p-4">
-              <h2 className="font-bold mb-4">当前持仓</h2>
-              {hasPosition && position ? (
+              <h2 className="font-bold mb-4">当前持仓 ({positions.length})</h2>
+              {hasPosition && positions.length > 0 ? (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="text-okx-text-tertiary border-b border-okx-border-primary">
-                        <th className="text-left py-2">合约</th>
+                        <th className="text-left py-2">交易对</th>
                         <th className="text-left py-2">方向</th>
                         <th className="text-right py-2">仓位大小</th>
                         <th className="text-right py-2">保证金</th>
@@ -102,17 +119,29 @@ export default function AccountPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      <tr>
-                        <td className="py-3">MEME/ETH 永续</td>
-                        <td className={`py-3 ${position.isLong ? "text-okx-up" : "text-okx-down"}`}>
-                          {position.isLong ? "多" : "空"}
-                        </td>
-                        <td className="text-right py-3">{formatBalance(position.size)} ETH</td>
-                        <td className="text-right py-3">{formatBalance(position.collateral)} ETH</td>
-                        <td className="text-right py-3">{Number(position.leverage) / 10000}x</td>
-                        <td className="text-right py-3">{formatBalance(position.entryPrice)}</td>
+                      {positions.map((pos) => {
+                        const positionPnL = BigInt(pos.unrealizedPnL || "0");
+                        return (
+                          <tr key={pos.pairId}>
+                            <td className="py-3">{pos.token.slice(0, 8)}... 永续</td>
+                            <td className={`py-3 ${pos.isLong ? "text-okx-up" : "text-okx-down"}`}>
+                              {pos.isLong ? "多" : "空"}
+                            </td>
+                            <td className="text-right py-3">{formatBalance(pos.size)}</td>
+                            <td className="text-right py-3">Ξ{formatBalance(pos.collateral)}</td>
+                            <td className="text-right py-3">{parseFloat(pos.leverage)}x</td>
+                            <td className="text-right py-3">{formatBalance(pos.entryPrice)} ETH</td>
+                            <td className={`text-right py-3 ${positionPnL >= 0n ? "text-okx-up" : "text-okx-down"}`}>
+                              {positionPnL >= 0n ? "+" : ""}Ξ{formatBalance(positionPnL)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      {/* Total row */}
+                      <tr className="border-t border-okx-border-primary font-bold">
+                        <td colSpan={6} className="text-right py-3">总盈亏:</td>
                         <td className={`text-right py-3 ${totalPnL >= 0n ? "text-okx-up" : "text-okx-down"}`}>
-                          {totalPnL >= 0n ? "+" : ""}{formatBalance(totalPnL)} ETH
+                          {totalPnL >= 0n ? "+" : ""}Ξ{formatBalance(totalPnL)}
                         </td>
                       </tr>
                     </tbody>

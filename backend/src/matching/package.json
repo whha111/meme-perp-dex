@@ -1,13 +1,15 @@
 {
   "name": "memeperp-matching-engine",
-  "version": "1.0.0",
-  "description": "MemePerp DEX Matching Engine - V2 Peer-to-Peer Trading",
-  "main": "server.ts",
+  "version": "2.0.0",
+  "description": "MemePerp DEX Matching Engine - V2 Modular Architecture",
+  "main": "server.new.ts",
   "type": "module",
   "scripts": {
-    "start": "bun run server.ts",
-    "dev": "bun run server.ts",
-    "matching": "bun run server.ts",
+    "start": "bun run server.new.ts",
+    "start:old": "bun run server.ts",
+    "dev": "bun run server.new.ts",
+    "dev:old": "bun run server.ts",
+    "matching": "bun run server.new.ts",
     "test": "bun run test-runner.ts",
     "test:e2e": "bun run e2e-test.ts",
     "test:stress": "bun run stress-test.ts"
@@ -15,11 +17,15 @@
   "dependencies": {
     "@types/ws": "^8.18.1",
     "dotenv": "^17.2.3",
+    "ethers": "^6.13.0",
+    "ioredis": "^5.4.1",
+    "uuid": "^10.0.0",
     "viem": "^2.13.0",
     "ws": "^8.19.0"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/uuid": "^10.0.0",
     "tsx": "^4.21.0",
     "typescript": "^5.4.0"
   },

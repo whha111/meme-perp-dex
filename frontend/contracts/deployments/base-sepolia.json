@@ -1,0 +1,33 @@
+{
+  "network": "base-sepolia",
+  "chainId": 84532,
+  "deployedAt": "2026-02-04",
+  "contracts": {
+    "TokenFactory": {
+      "address": "0x8de2Ce2a0f974b4CB00EC5B56BD89382690b5523",
+      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE",
+      "constructorArgs": {
+        "initialOwner": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE",
+        "feeReceiver": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE",
+        "uniswapV2Router": "0x8cFe327CEc66d1C090Dd72bd0FF11d690C33a2Eb"
+      }
+    },
+    "Settlement": {
+      "address": "0x027131BbC5EF6427826F64D12BACAAb447Ee1B13",
+      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+    },
+    "PriceFeed": {
+      "address": "0xa97a1E55cFfF5C1e45Ac2c1D882717cDD4F44e01",
+      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+    },
+    "PositionManager": {
+      "address": "0xbff432BfBc3505712BB727D3F61E869769DB5724",
+      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+    },
+    "Vault": {
+      "address": "0x780E415Ffd8104Ee2EECD7418A9227Bb92ebE294",
+      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+    }
+  },
+  "explorer": "https://sepolia.basescan.org/address/0x8de2Ce2a0f974b4CB00EC5B56BD89382690b5523"
+}

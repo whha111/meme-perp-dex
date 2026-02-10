@@ -3,19 +3,19 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Script.sol";
 
-import "../src/core/MemeToken.sol";
-import "../src/core/LPToken.sol";
-import "../src/core/Vault.sol";
-import "../src/core/PriceFeed.sol";
-import "../src/core/AMM.sol";
-import "../src/core/LendingPool.sol";
-import "../src/core/RiskManager.sol";
-import "../src/core/PositionManager.sol";
-import "../src/core/FundingRate.sol";
-import "../src/core/Liquidation.sol";
-import "../src/core/Router.sol";
-import "../src/core/ContractSpec.sol";
-import "../src/core/TokenFactory.sol";
+import "../src/spot/MemeToken.sol";
+import "../src/spot/LPToken.sol";
+import "../src/common/Vault.sol";
+import "../src/common/PriceFeed.sol";
+import "../src/spot/AMM.sol";
+import "../src/spot/LendingPool.sol";
+import "../src/perpetual/RiskManager.sol";
+import "../src/perpetual/PositionManager.sol";
+import "../src/perpetual/FundingRate.sol";
+import "../src/perpetual/Liquidation.sol";
+import "../src/spot/Router.sol";
+import "../src/perpetual/ContractSpec.sol";
+import "../src/spot/TokenFactory.sol";
 
 /**
  * @title Deploy
@@ -70,7 +70,9 @@ contract Deploy is Script {
         amm = new AMM(address(memeToken), address(ammLpToken));
         console.log("AMM deployed at:", address(amm));
 
-        lendingPool = new LendingPool(address(memeToken), address(lpToken));
+        // NOTE: LendingPool now uses multi-token architecture (owner, tokenFactory)
+        // TokenFactory is deployed later, so we use deployer as placeholder and update after
+        lendingPool = new LendingPool(deployer, deployer);
         console.log("LendingPool deployed at:", address(lendingPool));
 
         riskManager = new RiskManager();
@@ -117,9 +119,13 @@ contract Deploy is Script {
         console.log("\n--- Configuring Contracts ---");
 
         // LP Token 铸造权限
-        lpToken.setMinter(address(lendingPool), true);
         ammLpToken.setMinter(address(amm), true);
         console.log("LP Token minters set");
+
+        // LendingPool <-> TokenFactory bidirectional config
+        lendingPool.setTokenFactory(address(tokenFactory));
+        tokenFactory.setLendingPool(address(lendingPool));
+        console.log("LendingPool <-> TokenFactory configured");
 
         // Vault 授权
         vault.setAuthorizedContract(address(positionManager), true);
@@ -128,9 +134,10 @@ contract Deploy is Script {
         vault.setLendingPool(address(lendingPool));
         console.log("Vault authorized contracts set");
 
-        // PriceFeed 配置
-        priceFeed.setAMM(address(amm));
-        console.log("PriceFeed AMM set");
+        // PriceFeed <-> TokenFactory 双向配置
+        priceFeed.setTokenFactory(address(tokenFactory));
+        tokenFactory.setPriceFeed(address(priceFeed));
+        console.log("PriceFeed <-> TokenFactory configured");
 
         // AMM 配置
         amm.setPriceFeed(address(priceFeed));
@@ -148,7 +155,8 @@ contract Deploy is Script {
         // PositionManager 配置
         positionManager.setFundingRate(address(fundingRate));
         positionManager.setAuthorizedContract(address(liquidation), true);
-        console.log("PositionManager configured");
+        positionManager.setTokenFactory(address(tokenFactory));
+        console.log("PositionManager configured (with TokenFactory)");
 
         // Router 配置
         router.setVault(address(vault));

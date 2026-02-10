@@ -126,6 +126,21 @@ export interface OrderBookLevel {
 // Order Book
 // ============================================================
 
+// 价格变化回调类型 (事件驱动强平用)
+export type PriceChangeCallback = (token: Address, oldPrice: bigint, newPrice: bigint) => void;
+
+// 全局价格变化回调 (由 server.ts 注册)
+let globalPriceChangeCallback: PriceChangeCallback | null = null;
+
+/**
+ * 注册全局价格变化回调 (事件驱动强平)
+ * 当任何 token 价格变化时，立即触发回调检查强平
+ */
+export function registerPriceChangeCallback(callback: PriceChangeCallback): void {
+  globalPriceChangeCallback = callback;
+  console.log("[Engine] Price change callback registered for event-driven liquidation");
+}
+
 export class OrderBook {
   private token: Address;
   private longOrders: Map<string, Order> = new Map(); // orderId => Order
@@ -136,8 +151,32 @@ export class OrderBook {
     this.token = token;
   }
 
-  setCurrentPrice(price: bigint): void {
+  /**
+   * 设置当前价格 (触发事件驱动强平检查)
+   * @param price 新价格 (1e12 精度)
+   * @param skipCallback 是否跳过回调 (内部用，避免循环)
+   */
+  setCurrentPrice(price: bigint, skipCallback: boolean = false): void {
+    const oldPrice = this.currentPrice;
     this.currentPrice = price;
+
+    // 如果价格有实质变化且有注册回调，立即触发强平检查
+    // 避免 oldPrice=0 的初始化情况触发不必要的检查
+    if (!skipCallback && globalPriceChangeCallback && oldPrice > 0n && price !== oldPrice) {
+      // 计算价格变化幅度 (basis points)
+      const priceDelta = oldPrice > 0n
+        ? Number((price > oldPrice ? price - oldPrice : oldPrice - price) * 10000n / oldPrice)
+        : 0;
+
+      // 价格变化超过 0.1% (10bp) 时触发强平检查
+      // 这避免了微小波动导致的频繁检查
+      if (priceDelta >= 10) {
+        // 异步触发，不阻塞价格更新
+        setImmediate(() => {
+          globalPriceChangeCallback!(this.token, oldPrice, price);
+        });
+      }
+    }
   }
 
   getCurrentPrice(): bigint {
@@ -391,27 +430,18 @@ export class MatchingEngine {
    * 旧方法兼容
    */
   configurePriceFeed(rpcUrl: string, priceFeedAddress: Address): void {
-    this.configurePriceSource(rpcUrl, "0xCfDCD9F8D39411cF855121331B09aef1C88dc056" as Address, priceFeedAddress);
+    this.configurePriceSource(rpcUrl, "0x8de2Ce2a0f974b4CB00EC5B56BD89382690b5523" as Address, priceFeedAddress);
   }
 
-  // ETH/USD 价格（用于转换 TokenFactory 的 ETH 价格到 USDT）
-  // 使用更准确的实时价格，可通过 setEthUsdPrice 更新
-  private ethUsdPrice: bigint = 3300n * 10n ** 6n; // 默认 $3300，精度 1e6
-
-  /**
-   * 设置 ETH/USD 价格（用于价格转换）
-   */
-  setEthUsdPrice(price: bigint): void {
-    this.ethUsdPrice = price;
-  }
+  // ETH 本位系统: 不再需要 ETH/USD 价格转换
+  // TokenFactory 返回的 Token/ETH 价格直接使用
 
   /**
    * 从 TokenFactory 获取真实现货价格（Bonding Curve 价格）
-   * TokenFactory 返回 ETH 单位 (1e18)，需要转换为 USDT 单位 (1e12)
+   * ETH 本位系统: 价格直接使用 Token/ETH (1e18)，无需 USD 转换
    *
-   * 转换公式: spotPriceUSD = spotPriceETH * ethUsdPrice / 1e6
-   * 其中 spotPriceETH 精度是 1e18，ethUsdPrice 精度是 1e6
-   * 目标精度是 1e12
+   * TokenFactory.getCurrentPrice() 返回 ETH per Token (1e18 精度)
+   * 这个价格直接用于永续合约的标记价格
    */
   async fetchSpotPrice(token: Address): Promise<bigint> {
     const normalizedToken = token.toLowerCase() as Address;
@@ -421,7 +451,7 @@ export class MatchingEngine {
       return this.spotPrices.get(normalizedToken) || 0n;
     }
 
-    // 从 TokenFactory 获取真实现货价格
+    // 从 TokenFactory 获取真实现货价格 (Token/ETH)
     if (this.tokenFactoryAddress) {
       try {
         const spotPriceETH = await this.priceClient.readContract({
@@ -432,31 +462,25 @@ export class MatchingEngine {
         }) as bigint;
 
         if (spotPriceETH > 0n) {
-          // 转换 ETH 价格 (1e18) 到 USDT 价格 (1e12)
-          // spotPriceUSD = spotPriceETH * ethUsdPrice / 1e6 / 1e6
-          // = spotPriceETH * ethUsdPrice / 1e12
-          const spotPriceUSD = (spotPriceETH * this.ethUsdPrice) / (10n ** 12n);
-
+          // ETH 本位: 直接使用 Token/ETH 价格 (1e18 精度)
           const oldPrice = this.spotPrices.get(normalizedToken) || 0n;
-          this.spotPrices.set(normalizedToken, spotPriceUSD);
+          this.spotPrices.set(normalizedToken, spotPriceETH);
 
           // 合约价格持续跟踪现货价格 (Oracle 模式)
-          // 这确保了永续合约的标记价格始终锚定现货价格
           const orderBook = this.getOrderBook(normalizedToken);
           const currentContractPrice = orderBook.getCurrentPrice();
 
-          if (spotPriceUSD > 0n) {
+          if (spotPriceETH > 0n) {
             // 始终更新合约价格以跟踪现货
-            orderBook.setCurrentPrice(spotPriceUSD);
+            orderBook.setCurrentPrice(spotPriceETH);
 
             // 更新 K 线数据 (即使没有永续交易，也要跟踪现货价格)
-            this.updateKlineFromSpotPrice(normalizedToken, spotPriceUSD);
+            this.updateKlineFromSpotPrice(normalizedToken, spotPriceETH);
 
             // 只在价格变化超过 0.1% 时打印日志
-            if (currentContractPrice === 0n || Math.abs(Number(spotPriceUSD - currentContractPrice)) > Number(currentContractPrice) / 1000) {
+            if (currentContractPrice === 0n || Math.abs(Number(spotPriceETH - currentContractPrice)) > Number(currentContractPrice) / 1000) {
               const priceETH = Number(spotPriceETH) / 1e18;
-              const priceUSD = Number(spotPriceUSD) / 1e12;
-              console.log(`[Spot] ${token.slice(0, 10)}: ${priceETH.toFixed(12)} ETH = $${priceUSD.toFixed(10)}`);
+              console.log(`[Spot] ${token.slice(0, 10)}: ${priceETH.toExponential(6)} ETH/Token`);
             }
           }
         }
@@ -470,24 +494,23 @@ export class MatchingEngine {
       }
     }
 
-    // 回退到 PriceFeed
+    // 回退到 PriceFeed (也返回 ETH 价格)
     if (this.priceFeedAddress) {
       try {
-        const spotPrice = await this.priceClient.readContract({
+        const spotPriceETH = await this.priceClient.readContract({
           address: this.priceFeedAddress,
           abi: PRICE_FEED_ABI,
           functionName: "getTokenSpotPrice",
           args: [token],
         }) as bigint;
 
-        if (spotPrice > 0n) {
-          // PriceFeed 也是 ETH 单位，需要转换
-          const spotPriceUSD = (spotPrice * this.ethUsdPrice) / (10n ** 12n);
-          this.spotPrices.set(normalizedToken, spotPriceUSD);
+        if (spotPriceETH > 0n) {
+          // ETH 本位: 直接使用 ETH 价格
+          this.spotPrices.set(normalizedToken, spotPriceETH);
 
           // 合约价格持续跟踪现货价格
           const orderBook = this.getOrderBook(normalizedToken);
-          orderBook.setCurrentPrice(spotPriceUSD);
+          orderBook.setCurrentPrice(spotPriceETH);
         }
         return this.spotPrices.get(normalizedToken) || 0n;
       } catch (e: any) {
@@ -535,9 +558,24 @@ export class MatchingEngine {
 
   /**
    * 生成订单ID
+   * 格式: {用户后2位}{YYYYMMDD}{HHmmss}{3位序号}
+   * 例: 2E20250205040435001
+   *     ├─ 2E = trader 地址最后2个字符 (识别用户)
+   *     ├─ 20250205 = 日期
+   *     ├─ 040435 = 时分秒
+   *     └─ 001 = 毫秒内序号 (防重复)
    */
-  private generateOrderId(): string {
-    return `order_${Date.now()}_${++this.orderIdCounter}`;
+  private generateOrderId(trader?: string): string {
+    const now = new Date();
+    const prefix = trader ? trader.slice(-2).toUpperCase() : "XX";
+    const date = now.getFullYear().toString()
+      + (now.getMonth() + 1).toString().padStart(2, "0")
+      + now.getDate().toString().padStart(2, "0");
+    const time = now.getHours().toString().padStart(2, "0")
+      + now.getMinutes().toString().padStart(2, "0")
+      + now.getSeconds().toString().padStart(2, "0");
+    const seq = (++this.orderIdCounter % 1000).toString().padStart(3, "0");
+    return `${prefix}${date}${time}${seq}`;
   }
 
   /**
@@ -591,89 +629,71 @@ export class MatchingEngine {
     const orderBook = this.getOrderBook(token);
     const currentPrice = orderBook.getCurrentPrice();
 
-    // 计算保证金 (USD, 1e6 精度)
+    // ============================================================
+    // 保证金计算 (ETH 本位, 1e18 精度)
+    // ============================================================
     //
     // 行业标准公式: margin = notionalValue / leverage
     // 其中: notionalValue = size * price (名义价值)
     //
-    // 精度说明:
-    // - size: Meme 代币数量 (1e18 精度)
-    // - price: 代币价格 (1e18 精度，前端用 parseEther)
+    // 精度说明 (ETH 本位):
+    // - size: Token 数量 (1e18 精度)
+    // - price: ETH/Token (1e18 精度)
     // - leverage: 杠杆倍数 (1e4 精度), 如 10x = 100000n
-    // - margin: 保证金 (1e6 精度, USD)
+    // - margin: 保证金 (1e18 精度, ETH)
     //
     // 计算步骤:
-    // notionalValue = size * price = 代币数量 * 价格
-    // margin = notionalValue / leverage
-    //
-    // 精度调整:
-    // (1e18 * 1e18) / 1e4 = 1e32, 需要除以 1e26 得到 1e6 精度
+    // notionalETH = size * price / 1e18 = ETH 名义价值 (1e18 精度)
+    // margin = notionalETH * 10000 / leverage (1e18 精度)
     //
     // 示例:
-    // - 用户开 $45 仓位，10x 杠杆，保证金 = $4.5
-    // - margin = 4500000 (1e6 精度)
-    //
-    // ============================================================
-    // GMX 风格的保证金计算 (参考 gmx-io/gmx-contracts)
-    // ============================================================
-    //
-    // GMX 精度常量:
-    // - PRICE_PRECISION = 1e30
-    // - BASIS_POINTS_DIVISOR = 10000
-    // - size 和 collateral 都是 USD 值
-    //
-    // GMX 公式:
-    // leverage = size * BASIS_POINTS_DIVISOR / collateral
-    // 所以: margin (collateral) = size * BASIS_POINTS_DIVISOR / leverage
+    // - 用户开 0.1 ETH 仓位，10x 杠杆，保证金 = 0.01 ETH
+    // - margin = 10000000000000000 (1e16 = 0.01 ETH)
     //
     // ============================================================
 
     const BASIS_POINTS_DIVISOR = 10000n;  // GMX 标准
 
-    // Step 1: 确定价格
-    // - 市价单: price=0, 使用 currentPrice (1e12 精度)
-    // - 限价单: price>0, 前端发送 1e18 精度，需要转换为 1e12
+    // Step 1: 确定价格 (ETH 本位)
+    // - 市价单: price=0, 使用 currentPrice (1e18 精度)
+    // - 限价单: price>0, 前端发送 1e18 精度
     const isMarketOrder = price === 0n;
-    const priceUSD = isMarketOrder
-      ? currentPrice                    // 已经是 1e12 精度
-      : price / (10n ** 6n);            // 1e18 -> 1e12 精度
+    const priceETH = isMarketOrder ? currentPrice : price;  // 都是 1e18 精度
 
-    // Step 2: 计算仓位的 USD 价值 (GMX 的 size 概念)
-    // size_usd = token_amount * price_per_token
+    // Step 2: 计算仓位的 ETH 价值 (名义价值)
+    // notionalETH = size (tokens) * priceETH (ETH/token)
     //
-    // 我们的精度:
-    // - size (token_amount): 1e18 精度
-    // - priceUSD: 1e12 精度 (每个代币的 USD 价格)
-    // - 结果: 1e18 * 1e12 = 1e30 精度
-    //
-    // 转换为 1e6 精度 (USDC 标准):
-    // size_usd_1e6 = size * priceUSD / 1e24
-    const sizeUSD = size * priceUSD / (10n ** 24n);  // 结果是 1e6 精度的 USD 值
+    // 精度: 1e18 * 1e18 = 1e36, 需要除以 1e18 得到 1e18 精度
+    const notionalETH = (size * priceETH) / (10n ** 18n);  // 结果是 1e18 精度的 ETH 值
 
     // Step 3: 计算保证金 (GMX 公式)
-    // margin = size_usd * BASIS_POINTS_DIVISOR / leverage
+    // margin = notionalETH * BASIS_POINTS_DIVISOR / leverage
     //
-    // leverage 已经是 1e4 精度 (10x = 100000)
-    // 所以: margin = sizeUSD * 10000 / leverage
+    // leverage 是 1e4 精度 (10x = 100000)
+    // 所以: margin = notionalETH * 10000 / leverage
     const margin = leverage > 0n
-      ? sizeUSD * BASIS_POINTS_DIVISOR / leverage
+      ? (notionalETH * BASIS_POINTS_DIVISOR) / leverage
       : 0n;
 
-    // DEBUG: 追踪保证金计算 (GMX 风格)
-    console.log(`[Margin GMX] ==================`);
-    console.log(`[Margin GMX] size (tokens): ${size} (${Number(size) / 1e18} tokens)`);
-    console.log(`[Margin GMX] priceUSD (1e12): ${priceUSD} ($${Number(priceUSD) / 1e12})`);
-    console.log(`[Margin GMX] sizeUSD (1e6): ${sizeUSD} ($${Number(sizeUSD) / 1e6})`);
-    console.log(`[Margin GMX] leverage: ${leverage} (${Number(leverage) / 10000}x)`);
-    console.log(`[Margin GMX] margin (1e6): ${margin} ($${Number(margin) / 1e6})`);
-    console.log(`[Margin GMX] ==================`);
+    // DEBUG: 追踪保证金计算 (ETH 本位)
+    console.log(`[Margin ETH] ==================`);
+    console.log(`[Margin ETH] size (tokens): ${size} (${Number(size) / 1e18} tokens)`);
+    console.log(`[Margin ETH] priceETH (1e18): ${priceETH} (${Number(priceETH) / 1e18} ETH/token)`);
+    console.log(`[Margin ETH] notionalETH (1e18): ${notionalETH} (${Number(notionalETH) / 1e18} ETH)`);
+    console.log(`[Margin ETH] leverage: ${leverage} (${Number(leverage) / 10000}x)`);
+    console.log(`[Margin ETH] margin (1e18): ${margin} (${Number(margin) / 1e18} ETH)`);
+    console.log(`[Margin ETH] ==================`);
+
+    // 统一小写 — getUserOrders/getPendingOrdersLocked 全部用 lowercase 查询
+    const normalizedTrader = trader.toLowerCase() as Address;
+    const normalizedToken = token.toLowerCase() as Address;
 
     const order: Order = {
       // === 基本标识 ===
-      id: this.generateOrderId(),
+      id: this.generateOrderId(trader),
       clientOrderId: options?.clientOrderId,
-      trader,
-      token,
+      trader: normalizedTrader,
+      token: normalizedToken,
 
       // === 订单参数 ===
       isLong,
@@ -693,7 +713,7 @@ export class MatchingEngine {
 
       // === 费用信息 ===
       fee: 0n,
-      feeCurrency: "USDT",
+      feeCurrency: "ETH",  // ETH 本位系统
 
       // === 保证金信息 ===
       margin,
@@ -795,10 +815,15 @@ export class MatchingEngine {
 
     // 如果订单未完全成交且是 GTC/GTD 类型，加入订单簿
     // 注意：部分成交的订单 (PARTIALLY_FILLED) 也需要加入订单簿等待后续撮合
+    // 市价单也加入订单簿，让用户在"当前委托"中看到，用户可以自己决定是否撤销
     if (order.filledSize < order.size &&
         (order.status === OrderStatus.PENDING || order.status === OrderStatus.PARTIALLY_FILLED) &&
         (order.timeInForce === TimeInForce.GTC || order.timeInForce === TimeInForce.GTD)) {
       this.getOrderBook(token).addOrder(order);
+
+      if (isMarketOrder) {
+        console.log(`[Engine] Market order ${order.id} added to orderbook, waiting for counterparty (${order.filledSize}/${order.size})`);
+      }
     }
 
     return { order, matches };
@@ -807,12 +832,15 @@ export class MatchingEngine {
   /**
    * 更新订单成交信息 (行业标准)
    * 计算加权平均价格、累计成交金额、手续费等
+   *
+   * @param isMaker true = 挂单方 (Maker, 0.02%), false = 吃单方 (Taker, 0.05%)
    */
   private updateOrderFillInfo(
     order: Order,
     fillPrice: bigint,
     fillSize: bigint,
-    tradeId: string
+    tradeId: string,
+    isMaker: boolean = false
   ): void {
     const now = Date.now();
 
@@ -835,9 +863,11 @@ export class MatchingEngine {
       order.avgFillPrice = (order.totalFillValue * (10n ** 18n)) / newFilledSize;
     }
 
-    // 计算手续费 (0.05% taker fee - 行业标准)
-    const FEE_RATE = 5n; // 0.05% = 5 / 10000
-    const fillFee = currentFillValue * FEE_RATE / 10000n;
+    // 手续费: Maker 0.02%, Taker 0.05% (行业标准: 鼓励挂单提供流动性)
+    const TAKER_FEE_RATE = 5n; // 0.05% = 5 / 10000
+    const MAKER_FEE_RATE = 2n; // 0.02% = 2 / 10000
+    const feeRate = isMaker ? MAKER_FEE_RATE : TAKER_FEE_RATE;
+    const fillFee = currentFillValue * feeRate / 10000n;
     order.fee = order.fee + fillFee;
 
     // 更新最后成交信息
@@ -914,6 +944,11 @@ export class MatchingEngine {
       for (const shortOrder of shorts) {
         if (remainingSize <= 0n) break;
 
+        // 自我成交防护：同一 trader 的订单不能互相撮合
+        if (shortOrder.trader.toLowerCase() === incomingOrder.trader.toLowerCase()) {
+          continue;
+        }
+
         // 检查价格是否匹配
         const longPrice = incomingOrder.price === 0n ? currentPrice : incomingOrder.price;
         const shortPrice = shortOrder.price === 0n ? currentPrice : shortOrder.price;
@@ -952,8 +987,9 @@ export class MatchingEngine {
         remainingSize -= matchSize;
 
         // 更新订单详细成交信息 (行业标准)
-        this.updateOrderFillInfo(incomingOrder, matchPrice, matchSize, tradeId);
-        this.updateOrderFillInfo(shortOrder, matchPrice, matchSize, tradeId);
+        // incomingOrder = Taker (吃单), shortOrder = Maker (挂单)
+        this.updateOrderFillInfo(incomingOrder, matchPrice, matchSize, tradeId, false);
+        this.updateOrderFillInfo(shortOrder, matchPrice, matchSize, tradeId, true);
 
         // 更新订单状态
         if (shortOrder.filledSize >= shortOrder.size) {
@@ -973,6 +1009,11 @@ export class MatchingEngine {
 
       for (const longOrder of longs) {
         if (remainingSize <= 0n) break;
+
+        // 自我成交防护：同一 trader 的订单不能互相撮合
+        if (longOrder.trader.toLowerCase() === incomingOrder.trader.toLowerCase()) {
+          continue;
+        }
 
         const longPrice = longOrder.price === 0n ? currentPrice : longOrder.price;
         const shortPrice = incomingOrder.price === 0n ? currentPrice : incomingOrder.price;
@@ -1007,8 +1048,9 @@ export class MatchingEngine {
         remainingSize -= matchSize;
 
         // 更新订单详细成交信息 (行业标准)
-        this.updateOrderFillInfo(incomingOrder, matchPrice, matchSize, tradeId);
-        this.updateOrderFillInfo(longOrder, matchPrice, matchSize, tradeId);
+        // incomingOrder = Taker (吃单), longOrder = Maker (挂单)
+        this.updateOrderFillInfo(incomingOrder, matchPrice, matchSize, tradeId, false);
+        this.updateOrderFillInfo(longOrder, matchPrice, matchSize, tradeId, true);
 
         if (longOrder.filledSize >= longOrder.size) {
           longOrder.status = OrderStatus.FILLED;
@@ -1049,6 +1091,97 @@ export class MatchingEngine {
   }
 
   /**
+   * 移除已结算的配对 (用于即时结算后清理，避免批量循环重复提交)
+   */
+  removePendingMatches(matchesToRemove: Match[]): void {
+    const removeIds = new Set(
+      matchesToRemove.map(m => `${m.longOrder.id}_${m.shortOrder.id}`)
+    );
+    this.pendingMatches = this.pendingMatches.filter(
+      m => !removeIds.has(`${m.longOrder.id}_${m.shortOrder.id}`)
+    );
+  }
+
+  /**
+   * 回滚匹配 — 链上结算失败时撤销引擎内部状态变更
+   *
+   * 原理:
+   *   OrderBook 的 longOrders/shortOrders Map 持有 Order 对象引用。
+   *   tryMatch 只修改引用对象的 filledSize/status，不会从 Map 中删除。
+   *   getSortedLongs/Shorts 过滤 filledSize >= size 的订单。
+   *   因此只需还原 filledSize/status，对手方订单自动恢复可匹配。
+   *   入场订单需要从 book + allOrders 中移除。
+   */
+  rollbackMatches(incomingOrder: Order, matches: Match[]): void {
+    if (matches.length === 0) return;
+
+    const token = incomingOrder.token.toLowerCase() as Address;
+    const orderBook = this.getOrderBook(token);
+
+    for (const match of matches) {
+      // 识别对手方订单
+      const isIncomingLong = incomingOrder.id === match.longOrder.id;
+      const counterOrder = isIncomingLong ? match.shortOrder : match.longOrder;
+
+      // 还原对手方 filledSize
+      counterOrder.filledSize -= match.matchSize;
+      if (counterOrder.filledSize < 0n) counterOrder.filledSize = 0n;
+
+      // 还原对手方成交信息 (avgFillPrice, totalFillValue, fee)
+      this.reverseOrderFillInfo(counterOrder, match.matchPrice, match.matchSize);
+
+      // 还原对手方状态
+      if (counterOrder.filledSize <= 0n) {
+        counterOrder.status = OrderStatus.PENDING;
+      } else {
+        counterOrder.status = OrderStatus.PARTIALLY_FILLED;
+      }
+    }
+
+    // 入场订单: 标记取消，从 book 和 allOrders 移除
+    incomingOrder.status = OrderStatus.CANCELLED;
+    incomingOrder.filledSize = 0n;
+    incomingOrder.totalFillValue = 0n;
+    incomingOrder.avgFillPrice = 0n;
+    incomingOrder.fee = 0n;
+    orderBook.cancelOrder(incomingOrder.id); // 从 book Map 中删除
+    this.allOrders.delete(incomingOrder.id);
+
+    // 从待结算队列移除
+    this.removePendingMatches(matches);
+
+    console.log(
+      `[Engine] Rolled back ${matches.length} matches for order ${incomingOrder.id} ` +
+      `(${matches.reduce((s, m) => s + Number(m.matchSize), 0)} total size)`
+    );
+  }
+
+  /**
+   * 撤销单次成交对订单成交信息的影响
+   */
+  private reverseOrderFillInfo(order: Order, fillPrice: bigint, fillSize: bigint): void {
+    const FEE_RATE = 5n; // 0.05%
+    const fillValue = (fillSize * fillPrice) / (10n ** 18n);
+
+    order.totalFillValue -= fillValue;
+    if (order.totalFillValue < 0n) order.totalFillValue = 0n;
+
+    order.fee -= (fillValue * FEE_RATE) / 10000n;
+    if (order.fee < 0n) order.fee = 0n;
+
+    // 重新计算加权平均价格
+    if (order.filledSize > 0n && order.totalFillValue > 0n) {
+      order.avgFillPrice = (order.totalFillValue * (10n ** 18n)) / order.filledSize;
+    } else {
+      order.avgFillPrice = 0n;
+      order.totalFillValue = 0n;
+      order.fee = 0n;
+    }
+
+    order.updatedAt = Date.now();
+  }
+
+  /**
    * 记录成交
    */
   private recordTrade(match: Match): void {
@@ -1081,8 +1214,14 @@ export class MatchingEngine {
     const currentOI = this.openInterest.get(normalizedToken) || 0n;
     this.openInterest.set(normalizedToken, currentOI + match.matchSize);
 
-    // Update current price in order book
-    this.getOrderBook(normalizedToken).setCurrentPrice(match.matchPrice);
+    // ⚠️ Meme 永续合约架构: 合约成交不影响 Mark Price
+    // Mark Price 只来源于现货 AMM (syncSpotPrices)
+    // 原因: Meme 代币流动性浅，如果合约成交能改价格，
+    //       大户可以用小资金操控价格触发恶意强平
+    //
+    // 价格来源: syncSpotPrices() → AMM.getSpotPrice() → OrderBook.setCurrentPrice()
+    //
+    // 已删除: this.getOrderBook(normalizedToken).setCurrentPrice(match.matchPrice);
   }
 
   /**
@@ -1105,7 +1244,8 @@ export class MatchingEngine {
    * 获取用户订单
    */
   getUserOrders(trader: Address): Order[] {
-    return Array.from(this.allOrders.values()).filter((o) => o.trader === trader);
+    const normalized = trader.toLowerCase();
+    return Array.from(this.allOrders.values()).filter((o) => o.trader === normalized);
   }
 
   /**
@@ -1113,7 +1253,7 @@ export class MatchingEngine {
    */
   cancelOrder(orderId: string, trader: Address): boolean {
     const order = this.allOrders.get(orderId);
-    if (!order || order.trader !== trader) return false;
+    if (!order || order.trader !== trader.toLowerCase()) return false;
     if (order.status !== OrderStatus.PENDING && order.status !== OrderStatus.PARTIALLY_FILLED) {
       return false;
     }
@@ -1405,14 +1545,15 @@ export class MatchingEngine {
 }
 
 // ============================================================
-// Settlement Submitter
+// Spot Price Updater (原 SettlementSubmitter，Mode 2 精简版)
 // ============================================================
+// Mode 2: 仅保留现货价格更新功能
+// 永续交易的 submitBatch/closePair 已移除
 
 export class SettlementSubmitter {
   private client: ReturnType<typeof createPublicClient>;
   private walletClient: ReturnType<typeof createWalletClient>;
   private settlementAddress: Address;
-  private isSubmitting = false;
 
   constructor(rpcUrl: string, matcherPrivateKey: Hex, settlementAddress: Address) {
     this.client = createPublicClient({
@@ -1431,173 +1572,32 @@ export class SettlementSubmitter {
   }
 
   /**
-   * 更新链上价格
+   * 更新链上价格 (PriceFeed 合约，现货交易用)
    */
   async updatePrice(token: Address, price: bigint): Promise<Hex | null> {
     try {
       const hash = await this.walletClient.writeContract({
         address: this.settlementAddress,
-        abi: SETTLEMENT_ABI,
+        abi: PRICE_UPDATE_ABI,
         functionName: "updatePrice",
         args: [token, price],
       });
       return hash;
     } catch (e) {
-      console.error("[Submitter] Failed to update price:", e);
+      console.error("[PriceUpdater] Failed to update price:", e);
       return null;
-    }
-  }
-
-  /**
-   * 更新资金费率
-   */
-  async updateFundingRate(token: Address, rate: bigint): Promise<Hex | null> {
-    try {
-      const hash = await this.walletClient.writeContract({
-        address: this.settlementAddress,
-        abi: SETTLEMENT_ABI,
-        functionName: "updateFundingRate",
-        args: [token, rate],
-      });
-      return hash;
-    } catch (e) {
-      console.error("[Submitter] Failed to update funding rate:", e);
-      return null;
-    }
-  }
-
-  /**
-   * 批量提交配对到链上
-   */
-  async submitBatch(matches: Match[]): Promise<Hex | null> {
-    if (this.isSubmitting) {
-      console.log("[Submitter] Already submitting, skipping...");
-      return null;
-    }
-
-    if (matches.length === 0) {
-      return null;
-    }
-
-    this.isSubmitting = true;
-
-    try {
-      const contractMatches = matches.map((m) => ({
-        longOrder: {
-          trader: m.longOrder.trader,
-          token: m.longOrder.token,
-          isLong: m.longOrder.isLong,
-          size: m.longOrder.size,
-          leverage: m.longOrder.leverage,
-          price: m.longOrder.price,
-          deadline: m.longOrder.deadline,
-          nonce: m.longOrder.nonce,
-          orderType: m.longOrder.orderType,
-        },
-        longSignature: m.longOrder.signature,
-        shortOrder: {
-          trader: m.shortOrder.trader,
-          token: m.shortOrder.token,
-          isLong: m.shortOrder.isLong,
-          size: m.shortOrder.size,
-          leverage: m.shortOrder.leverage,
-          price: m.shortOrder.price,
-          deadline: m.shortOrder.deadline,
-          nonce: m.shortOrder.nonce,
-          orderType: m.shortOrder.orderType,
-        },
-        shortSignature: m.shortOrder.signature,
-        matchPrice: m.matchPrice,
-        matchSize: m.matchSize,
-      }));
-
-      console.log(`[Submitter] Submitting ${matches.length} matches to chain...`);
-
-      const hash = await this.walletClient.writeContract({
-        address: this.settlementAddress,
-        abi: SETTLEMENT_ABI,
-        functionName: "settleBatch",
-        args: [contractMatches],
-      });
-
-      console.log(`[Submitter] Tx submitted: ${hash}`);
-
-      const receipt = await this.client.waitForTransactionReceipt({ hash });
-      console.log(`[Submitter] Tx confirmed in block ${receipt.blockNumber}`);
-
-      return hash;
-    } catch (e) {
-      console.error("[Submitter] Failed to submit batch:", e);
-      return null;
-    } finally {
-      this.isSubmitting = false;
     }
   }
 }
 
 // ============================================================
-// ABI
+// ABI (精简版 - 价格更新写入)
 // ============================================================
 
-const SETTLEMENT_ABI = [
+const PRICE_UPDATE_ABI = [
   {
     inputs: [{ name: "token", type: "address" }, { name: "price", type: "uint256" }],
     name: "updatePrice",
-    outputs: [],
-    stateMutability: "nonpayable",
-    type: "function",
-  },
-  {
-    inputs: [{ name: "token", type: "address" }, { name: "rate", type: "int256" }],
-    name: "updateFundingRate",
-    outputs: [],
-    stateMutability: "nonpayable",
-    type: "function",
-  },
-  {
-    inputs: [
-      {
-        components: [
-          {
-            components: [
-              { name: "trader", type: "address" },
-              { name: "token", type: "address" },
-              { name: "isLong", type: "bool" },
-              { name: "size", type: "uint256" },
-              { name: "leverage", type: "uint256" },
-              { name: "price", type: "uint256" },
-              { name: "deadline", type: "uint256" },
-              { name: "nonce", type: "uint256" },
-              { name: "orderType", type: "uint8" },
-            ],
-            name: "longOrder",
-            type: "tuple",
-          },
-          { name: "longSignature", type: "bytes" },
-          {
-            components: [
-              { name: "trader", type: "address" },
-              { name: "token", type: "address" },
-              { name: "isLong", type: "bool" },
-              { name: "size", type: "uint256" },
-              { name: "leverage", type: "uint256" },
-              { name: "price", type: "uint256" },
-              { name: "deadline", type: "uint256" },
-              { name: "nonce", type: "uint256" },
-              { name: "orderType", type: "uint8" },
-            ],
-            name: "shortOrder",
-            type: "tuple",
-          },
-          { name: "shortSignature", type: "bytes" },
-          { name: "matchPrice", type: "uint256" },
-          { name: "matchSize", type: "uint256" },
-        ],
-        name: "pairs",
-        type: "tuple[]",
-      },
-    ],
-    name: "settleBatch",
     outputs: [],
     stateMutability: "nonpayable",
     type: "function",
@@ -1614,4 +1614,5 @@ export default {
   SettlementSubmitter,
   OrderType,
   OrderStatus,
+  registerPriceChangeCallback,
 };

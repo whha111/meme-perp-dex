@@ -7,7 +7,7 @@ import dynamic from "next/dynamic";
 
 // 动态导入 TradingTerminal，禁用 SSR
 const TradingTerminal = dynamic(
-  () => import("@/components/trading/TradingTerminal").then((mod) => mod.TradingTerminal),
+  () => import("@/components/common/TradingTerminal").then((mod) => mod.TradingTerminal),
   {
     ssr: false,
     loading: () => (

@@ -1,0 +1,113 @@
+"use client";
+
+import React from "react";
+import { useTradeHistory, type SpotTradeRecord } from "@/hooks/common/useTradeHistory";
+
+interface TradeHistoryTableProps {
+  token?: string;              // 代币地址
+  maxRows?: number;
+  className?: string;
+}
+
+export function TradeHistoryTable({ token, maxRows = 10, className = "" }: TradeHistoryTableProps) {
+  const { trades, isConnected, error } = useTradeHistory({ token, limit: maxRows });
+
+  const formatTime = (timestamp: number) => {
+    const date = new Date(timestamp);
+    return date.toLocaleString("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
+  const formatNumber = (value: string, decimals: number = 4) => {
+    const num = parseFloat(value);
+    if (isNaN(num)) return "0";
+    if (num < 0.0001) return num.toExponential(2);
+    return num.toFixed(decimals);
+  };
+
+  const shortenTxHash = (hash: string) => {
+    if (!hash || hash.length <= 13) return hash || "-";
+    return `${hash.slice(0, 6)}...${hash.slice(-4)}`;
+  };
+
+  return (
+    <div className={`bg-okx-bg-card border border-okx-border-primary rounded-xl p-4 ${className}`}>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-bold">交易历史</h3>
+        {/* WebSocket 连接状态指示器 */}
+        <div className="flex items-center gap-2 text-xs">
+          <span
+            className={`w-2 h-2 rounded-full ${
+              isConnected ? "bg-okx-up animate-pulse" : "bg-okx-down"
+            }`}
+          />
+          <span className="text-okx-text-tertiary">
+            {isConnected ? "实时" : "离线"}
+          </span>
+        </div>
+      </div>
+
+      {trades.length === 0 ? (
+        <div className="text-center py-8 text-okx-text-tertiary">
+          {isConnected ? "等待新交易..." : "连接中..."}
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-okx-text-tertiary border-b border-okx-border-primary">
+                <th className="text-left py-2">时间</th>
+                <th className="text-left py-2">交易对</th>
+                <th className="text-left py-2">方向</th>
+                <th className="text-right py-2">数量</th>
+                <th className="text-right py-2">价格</th>
+                <th className="text-right py-2">总额</th>
+                <th className="text-right py-2">交易哈希</th>
+              </tr>
+            </thead>
+            <tbody>
+              {trades.map((trade) => (
+                <tr key={trade.id} className="border-b border-okx-border-secondary hover:bg-okx-bg-hover">
+                  <td className="py-3 text-okx-text-secondary">{formatTime(trade.timestamp)}</td>
+                  <td className="py-3 font-mono text-xs">{trade.token.slice(0, 8)}...</td>
+                  <td className={`py-3 font-medium ${trade.side === "buy" ? "text-okx-up" : "text-okx-down"}`}>
+                    {trade.side === "buy" ? "买入" : "卖出"}
+                  </td>
+                  <td className="py-3 text-right">{formatNumber(trade.size, 2)}</td>
+                  <td className="py-3 text-right">{formatNumber(trade.price, 6)}</td>
+                  <td className="py-3 text-right">{formatNumber(trade.value)} ETH</td>
+                  <td className="py-3 text-right">
+                    {trade.txHash ? (
+                      <a
+                        href={`https://sepolia.basescan.org/tx/${trade.txHash}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-okx-accent hover:underline font-mono"
+                      >
+                        {shortenTxHash(trade.txHash)}
+                      </a>
+                    ) : (
+                      <span className="text-okx-text-tertiary">-</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {error && (
+        <p className="text-xs text-okx-down mt-2 text-center">
+          WebSocket 连接失败: {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export default TradeHistoryTable;

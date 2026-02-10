@@ -1,0 +1,303 @@
+/**
+ * Snapshot Module for Mode 2 (Off-chain Execution + On-chain Attestation)
+ *
+ * Purpose:
+ * - Collect user equities from backend state
+ * - Generate Merkle tree snapshots
+ * - Submit state roots to chain periodically
+ *
+ * Architecture:
+ * 1. collectUserEquities(): Read all user balances + positions → compute equity
+ * 2. createSnapshot(): Build Merkle tree → store locally
+ * 3. submitRootToChain(): Call SettlementV2.updateStateRoot(root, timestamp)
+ * 4. Scheduled job runs every hour (configurable)
+ */
+
+import { type Address, type Hex } from "viem";
+import { merkleTreeManager, type UserEquity, type SnapshotState, type MerkleProof } from "./merkle";
+
+// Import from server.ts (will be provided via injection)
+type BalanceGetter = (trader: Address) => {
+  totalBalance: bigint;
+  availableBalance: bigint;
+  usedMargin?: bigint;
+  unrealizedPnL?: bigint;
+};
+
+type PositionGetter = (trader: Address) => Array<{
+  token: Address;
+  size: string;
+  unrealizedPnL: string;
+  collateral: string;
+}>;
+
+type AllTradersGetter = () => Address[];
+
+/**
+ * Snapshot configuration
+ */
+export interface SnapshotConfig {
+  intervalMs: number;       // Snapshot interval (default: 1 hour)
+  minEquity: bigint;        // Minimum equity to include (filter dust accounts)
+  submitToChain: boolean;   // Whether to submit root to chain
+  pruneAfterHours: number;  // Prune snapshots older than this
+}
+
+const DEFAULT_CONFIG: SnapshotConfig = {
+  intervalMs: 60 * 60 * 1000, // 1 hour
+  minEquity: 100n,            // $0.0001 minimum (1e6 precision)
+  submitToChain: true,
+  pruneAfterHours: 24,
+};
+
+/**
+ * Snapshot job state
+ */
+interface SnapshotJobState {
+  isRunning: boolean;
+  lastSnapshotTime: number;
+  lastSnapshotId: number | null;
+  lastRootSubmitted: Hex | null;
+  totalSnapshots: number;
+  intervalId: NodeJS.Timer | null;
+}
+
+const jobState: SnapshotJobState = {
+  isRunning: false,
+  lastSnapshotTime: 0,
+  lastSnapshotId: null,
+  lastRootSubmitted: null,
+  totalSnapshots: 0,
+  intervalId: null,
+};
+
+/**
+ * Dependencies injected from server.ts
+ */
+let getBalanceFunc: BalanceGetter | null = null;
+let getPositionsFunc: PositionGetter | null = null;
+let getAllTradersFunc: AllTradersGetter | null = null;
+let submitRootFunc: ((root: Hex, timestamp: number) => Promise<Hex | null>) | null = null;
+
+/**
+ * Initialize snapshot module with dependencies
+ */
+export function initializeSnapshotModule(deps: {
+  getBalance: BalanceGetter;
+  getPositions: PositionGetter;
+  getAllTraders: AllTradersGetter;
+  submitRoot?: (root: Hex, timestamp: number) => Promise<Hex | null>;
+}): void {
+  getBalanceFunc = deps.getBalance;
+  getPositionsFunc = deps.getPositions;
+  getAllTradersFunc = deps.getAllTraders;
+  submitRootFunc = deps.submitRoot ?? null;
+  console.log("[Snapshot] Module initialized");
+}
+
+/**
+ * Calculate user equity from balance + positions
+ * Equity = Total Balance + Unrealized PnL
+ */
+function calculateUserEquity(trader: Address): bigint {
+  if (!getBalanceFunc || !getPositionsFunc) {
+    throw new Error("Snapshot module not initialized");
+  }
+
+  const balance = getBalanceFunc(trader);
+  const positions = getPositionsFunc(trader);
+
+  // Total balance from Settlement + wallet
+  let equity = balance.totalBalance;
+
+  // Add unrealized PnL from all positions
+  for (const pos of positions) {
+    const upnl = BigInt(pos.unrealizedPnL || "0");
+    equity += upnl;
+  }
+
+  return equity;
+}
+
+/**
+ * Collect all user equities
+ */
+export function collectUserEquities(minEquity: bigint = DEFAULT_CONFIG.minEquity): UserEquity[] {
+  if (!getAllTradersFunc) {
+    throw new Error("Snapshot module not initialized");
+  }
+
+  const traders = getAllTradersFunc();
+  const equities: UserEquity[] = [];
+
+  for (const trader of traders) {
+    try {
+      const equity = calculateUserEquity(trader);
+
+      // Filter out dust accounts
+      if (equity >= minEquity) {
+        equities.push({
+          user: trader,
+          equity,
+        });
+      }
+    } catch (e) {
+      console.warn(`[Snapshot] Failed to calculate equity for ${trader.slice(0, 10)}:`, e);
+    }
+  }
+
+  console.log(`[Snapshot] Collected ${equities.length} user equities (from ${traders.length} traders)`);
+  return equities;
+}
+
+/**
+ * Create a new snapshot
+ */
+export function createSnapshot(config: Partial<SnapshotConfig> = {}): SnapshotState {
+  const mergedConfig = { ...DEFAULT_CONFIG, ...config };
+  const equities = collectUserEquities(mergedConfig.minEquity);
+
+  const snapshot = merkleTreeManager.createSnapshot(equities);
+
+  jobState.lastSnapshotTime = snapshot.timestamp;
+  jobState.lastSnapshotId = snapshot.snapshotId;
+  jobState.totalSnapshots++;
+
+  return snapshot;
+}
+
+/**
+ * Submit state root to chain
+ */
+export async function submitRootToChain(root: Hex, timestamp: number): Promise<Hex | null> {
+  if (!submitRootFunc) {
+    console.log("[Snapshot] Chain submission not configured, skipping");
+    return null;
+  }
+
+  try {
+    const txHash = await submitRootFunc(root, timestamp);
+    if (txHash) {
+      jobState.lastRootSubmitted = root;
+      console.log(`[Snapshot] Root submitted to chain: ${txHash}`);
+    }
+    return txHash;
+  } catch (e) {
+    console.error("[Snapshot] Failed to submit root to chain:", e);
+    return null;
+  }
+}
+
+/**
+ * Run a single snapshot cycle
+ */
+export async function runSnapshotCycle(config: Partial<SnapshotConfig> = {}): Promise<SnapshotState | null> {
+  const mergedConfig = { ...DEFAULT_CONFIG, ...config };
+
+  if (jobState.isRunning) {
+    console.warn("[Snapshot] Snapshot cycle already running, skipping");
+    return null;
+  }
+
+  jobState.isRunning = true;
+
+  try {
+    // 1. Create snapshot
+    const snapshot = createSnapshot(mergedConfig);
+
+    // 2. Submit to chain if configured
+    if (mergedConfig.submitToChain) {
+      await submitRootToChain(snapshot.root, snapshot.timestamp);
+    }
+
+    // 3. Prune old snapshots
+    const keepSnapshots = Math.ceil(mergedConfig.pruneAfterHours);
+    merkleTreeManager.pruneSnapshots(keepSnapshots);
+
+    return snapshot;
+  } finally {
+    jobState.isRunning = false;
+  }
+}
+
+/**
+ * Start the snapshot job
+ */
+export function startSnapshotJob(config: Partial<SnapshotConfig> = {}): void {
+  const mergedConfig = { ...DEFAULT_CONFIG, ...config };
+
+  if (jobState.intervalId) {
+    console.warn("[Snapshot] Job already running");
+    return;
+  }
+
+  // Run immediately
+  runSnapshotCycle(mergedConfig).catch(e => {
+    console.error("[Snapshot] Initial snapshot failed:", e);
+  });
+
+  // Schedule periodic runs
+  jobState.intervalId = setInterval(() => {
+    runSnapshotCycle(mergedConfig).catch(e => {
+      console.error("[Snapshot] Scheduled snapshot failed:", e);
+    });
+  }, mergedConfig.intervalMs);
+
+  console.log(`[Snapshot] Job started with ${mergedConfig.intervalMs}ms interval`);
+}
+
+/**
+ * Stop the snapshot job
+ */
+export function stopSnapshotJob(): void {
+  if (jobState.intervalId) {
+    clearInterval(jobState.intervalId);
+    jobState.intervalId = null;
+    console.log("[Snapshot] Job stopped");
+  }
+}
+
+/**
+ * Get job status
+ */
+export function getSnapshotJobStatus(): {
+  isRunning: boolean;
+  lastSnapshotTime: number;
+  lastSnapshotId: number | null;
+  lastRootSubmitted: Hex | null;
+  totalSnapshots: number;
+  currentRoot: Hex | null;
+} {
+  return {
+    ...jobState,
+    currentRoot: merkleTreeManager.getCurrentRoot(),
+  };
+}
+
+/**
+ * Get proof for a user
+ */
+export function getUserProof(user: Address): MerkleProof | null {
+  return merkleTreeManager.getProof(user);
+}
+
+/**
+ * Get proof from a specific snapshot
+ */
+export function getUserProofFromSnapshot(user: Address, snapshotId: number): MerkleProof | null {
+  return merkleTreeManager.getProofFromSnapshot(user, snapshotId);
+}
+
+/**
+ * Verify a proof
+ */
+export function verifyProof(proof: MerkleProof): boolean {
+  return merkleTreeManager.verifyUserProof(proof);
+}
+
+/**
+ * Manual trigger for testing
+ */
+export async function triggerSnapshot(): Promise<SnapshotState | null> {
+  return runSnapshotCycle({ submitToChain: false });
+}

@@ -37,6 +37,15 @@ npm-debug.log*
 # Test coverage
 coverage/
 
+# Sensitive data
+trading-wallets.json
+*.secret
+credentials/
+
 # Misc
 *.pem
 .vercel
+
+# Debug/test scripts (one-off)
+check-all-bal.ts
+contracts/debug-*.ts

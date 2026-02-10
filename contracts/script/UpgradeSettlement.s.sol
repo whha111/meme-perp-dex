@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Script.sol";
-import "../src/core/Settlement.sol";
+import "../src/perpetual/Settlement.sol";
 
 /**
  * @title UpgradeSettlement
@@ -14,11 +14,11 @@ contract UpgradeSettlement is Script {
         address deployer = vm.addr(deployerPrivateKey);
 
         // 使用现有代币地址
-        address usdtAddress = vm.envOr("USDT_ADDRESS", address(0x83214D0a99EB664c3559D1619Ef9B5f78A655C4e));
-        address usdcAddress = vm.envOr("USDC_ADDRESS", address(0x6Fa3DB92806d0e2A77a8AD02afD0991E1430ca2E));
-        address usd1Address = vm.envOr("USD1_ADDRESS", address(0x9463433C57F2395eD327cD464571Ba90Ce4B94AA));
+        address usdtAddress = vm.envOr("USDT_ADDRESS", address(0xAa2a6b49C37E0241f9b5385dc4637eDF51026519));
+        address usdcAddress = vm.envOr("USDC_ADDRESS", address(0xb9dD696A78637A1A5237A4e69b95c3f6D8DDC4cD));
+        address usd1Address = vm.envOr("USD1_ADDRESS", address(0xE5Cc3d23f446A000B903624f6a439DEe617dD6F3));
         address wethAddress = vm.envOr("WETH_ADDRESS", address(0x4200000000000000000000000000000000000006));
-        address registryAddress = vm.envOr("CONTRACT_REGISTRY_ADDRESS", address(0xDE7232028bf8822E4ED7132ADcC5dE96F29DcbFd));
+        address registryAddress = vm.envOr("CONTRACT_REGISTRY_ADDRESS", address(0x51014b1135820949b4d903f6E144ceA825E6Ac2F));
 
         address matcherAddress = vm.envOr("MATCHER_ADDRESS", deployer);
 

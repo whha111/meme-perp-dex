@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Script.sol";
-import "../src/core/TokenFactory.sol";
+import "../src/spot/TokenFactory.sol";
 
 /**
  * @title DeployTokenFactory

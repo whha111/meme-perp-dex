@@ -4,7 +4,7 @@ import React, { useState, useMemo } from "react";
 import { TokenCard } from "./TokenCard";
 import { SearchIcon, SortIcon } from "./Icons";
 import { useTranslations } from "next-intl";
-import { useETHPrice } from "@/hooks/useETHPrice";
+import { useETHPrice } from "@/hooks/common/useETHPrice";
 
 type SortOption = "marketCap" | "time" | "progress" | "volume24h";
 type SortOrder = "asc" | "desc";

@@ -4,17 +4,80 @@ import React, { useState, useEffect, Suspense, useMemo } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Navbar } from "@/components/layout/Navbar";
-import { PerpetualTradingTerminal } from "@/components/trading/PerpetualTradingTerminal";
-import { useOnChainTokenList, OnChainToken } from "@/hooks/useTokenList";
+import { PerpetualTradingTerminal } from "@/components/perpetual/PerpetualTradingTerminal";
+import { useOnChainTokenList, OnChainToken } from "@/hooks/common/useTokenList";
 import { getWebSocketServices } from "@/lib/websocket";
 import { useTranslations } from "next-intl";
 import { formatTimeAgo } from "@/utils/formatters";
+import { useETHPrice } from "@/hooks/common/useETHPrice";
+import { trackRender } from "@/lib/debug-render";
+import { MATCHING_ENGINE_URL } from "@/config/api";
 
 // 榜单分类类型
 type RankingCategory = "hot" | "new" | "gainers" | "losers" | "marketCap" | "volume";
 
-// ETH 价格常量（TODO: 从 hook 获取实时价格）
-const ETH_PRICE_USD = 2000;
+// IPFS URL 转 HTTP 网关 URL
+function ipfsToHttp(uri: string): string {
+  if (!uri) return "";
+  if (uri.startsWith("ipfs://")) {
+    return uri.replace("ipfs://", "https://gateway.pinata.cloud/ipfs/");
+  }
+  if (uri.startsWith("https://") || uri.startsWith("http://")) {
+    return uri;
+  }
+  // 有效的 IPFS hash (CIDv0: Qm..., CIDv1: bafy...)
+  if (uri.startsWith("Qm") && uri.length === 46) {
+    return `https://gateway.pinata.cloud/ipfs/${uri}`;
+  }
+  if (uri.startsWith("bafy")) {
+    return `https://gateway.pinata.cloud/ipfs/${uri}`;
+  }
+  // 未知格式，不尝试作为 URL 使用
+  return "";
+}
+
+// 解析 metadataURI 获取 logo URL
+// metadataURI 格式可能是：
+// 1. ipfs://<hash> - 直接是图片的 IPFS 链接
+// 2. data:application/json;base64,... - base64 编码的 JSON，包含 image 字段
+// 3. https://... - 直接的 HTTP URL
+function parseMetadataURI(uri: string): string | undefined {
+  if (!uri) return undefined;
+
+  // 如果是 data URI (base64 JSON)，解析出 image 字段
+  if (uri.startsWith('data:application/json;base64,')) {
+    try {
+      const base64Data = uri.replace('data:application/json;base64,', '');
+      const jsonStr = atob(base64Data);
+      const metadata = JSON.parse(jsonStr);
+      // 优先使用 image 字段，其次是 logo
+      const imageUrl = metadata.image || metadata.logo;
+      if (imageUrl) {
+        return ipfsToHttp(imageUrl);
+      }
+    } catch (e) {
+      console.warn('Failed to parse metadataURI:', e);
+    }
+    return undefined;
+  }
+
+  // 如果是 IPFS 链接，直接转换（可能是图片本身）
+  if (uri.startsWith('ipfs://')) {
+    return ipfsToHttp(uri);
+  }
+
+  // 如果是直接的 HTTP URL，返回它
+  if (uri.startsWith('http')) {
+    return uri;
+  }
+
+  // IPFS hash
+  if (uri.startsWith('Qm') || uri.startsWith('bafy')) {
+    return ipfsToHttp(uri);
+  }
+
+  return undefined;
+}
 
 // 格式化数值显示
 function formatValue(value: number, prefix: string = "$"): string {
@@ -39,11 +102,18 @@ const RANKING_CATEGORIES: { key: RankingCategory; labelKey: string }[] = [
 ];
 
 function PerpContent() {
+  // 调试：追踪渲染次数 (仅 console 警告，不 throw)
+  trackRender("PerpContent");
+
   const searchParams = useSearchParams();
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
   const t = useTranslations();
   const tPerp = useTranslations("perp");
+
+  // 获取实时 ETH 价格
+  const { price: ethPrice } = useETHPrice();
+  const ETH_PRICE_USD = ethPrice || 2000;
 
   // 从链上获取代币列表
   const { tokens: onChainTokens, isLoading: isLoadingOnChain } = useOnChainTokenList();
@@ -76,6 +146,7 @@ function PerpContent() {
             soldSupply: t.sold_supply || "0",
             metadataURI: t.image_url || t.metadata_uri || "",
             perpEnabled: false, // 后端tokens默认不支持合约交易（需要链上确认）
+            lendingEnabled: false,
             realETHReserve: "0",
             isOnChain: false, // 标记为非链上token
           }));
@@ -117,13 +188,62 @@ function PerpContent() {
     setMounted(true);
   }, []);
 
-  // 为每个代币生成模拟的交易数据 - hooks 必须在所有条件返回之前
+  // ✅ 使用 WebSocket 市场数据 (实时推送)
+  // TODO: 实现 WebSocket 订阅所有代币的市场数据
+  // 暂时保留 REST API 用于初始加载，但减少请求频率
+  const { data: tokenStats } = useQuery({
+    queryKey: ["tokenStats24h", tokens.map(t => t.address).join(",")],
+    queryFn: async () => {
+      const statsMap: Record<string, { priceChange24h: number; volume24h: number }> = {};
+
+      // 并行获取所有代币的 K线数据 (仅用于初始加载)
+      await Promise.all(
+        tokens.slice(0, 20).map(async (token) => {
+          try {
+            // 获取 1h K线数据，取最近24根用于计算24h涨跌幅
+            const res = await fetch(`${MATCHING_ENGINE_URL}/api/kline/${token.address}?interval=1h&limit=24`);
+            if (res.ok) {
+              const json = await res.json();
+              const allKlines = json.klines || [];
+
+              // API 可能返回超过24根（从第一笔交易至今），只取最近24根
+              const klines = allKlines.length > 24 ? allKlines.slice(-24) : allKlines;
+
+              if (klines.length >= 2) {
+                const oldPrice = Number(klines[0].open);
+                const newPrice = Number(klines[klines.length - 1].close);
+
+                if (oldPrice > 0) {
+                  const priceChange = ((newPrice - oldPrice) / oldPrice) * 100;
+                  const volume24h = klines.reduce((sum: number, k: any) => sum + Number(k.volume || 0), 0);
+                  statsMap[token.address.toLowerCase()] = { priceChange24h: priceChange, volume24h };
+                }
+              }
+            }
+          } catch (e) {
+            // Ignore errors for individual tokens
+          }
+        })
+      );
+
+      return statsMap;
+    },
+    staleTime: 300000, // ✅ 5分钟内不重新获取 (原来1分钟)
+    enabled: tokens.length > 0,
+  });
+
+  // 为每个代币计算交易统计数据
   const tokensWithStats = useMemo(() => {
     return tokens.map((token) => {
       const marketCapFloat = parseFloat(token.marketCap) || 0;
       const marketCapUsd = marketCapFloat * ETH_PRICE_USD;
-      const priceChange24h = (Math.random() - 0.5) * 40;
-      const volume24h = Math.random() * 100000;
+
+      // 使用真实的 24h 数据，如果没有则显示 0
+      const stats = tokenStats?.[token.address.toLowerCase()];
+      const priceChange24h = stats?.priceChange24h ?? 0;
+      const volume24h = stats?.volume24h ?? 0;
+
+      // 热度分数：市值权重 + 交易量权重 + 毕业加成
       const hotScore = marketCapUsd * 0.5 + volume24h * 0.3 + (token.isGraduated ? 1000 : 0);
 
       return {
@@ -134,7 +254,7 @@ function PerpContent() {
         hotScore,
       };
     });
-  }, [tokens]);
+  }, [tokens, tokenStats, ETH_PRICE_USD]);
 
   // 根据分类获取排序后的代币
   const getTokensByCategory = (category: RankingCategory) => {
@@ -235,11 +355,15 @@ function PerpContent() {
                       </span>
 
                       {/* 图标 */}
-                      <div className="w-6 h-6 rounded overflow-hidden flex-shrink-0 relative">
+                      <div className="w-6 h-6 rounded overflow-hidden flex-shrink-0 relative bg-okx-bg-secondary">
                         <img
-                          src={`https://api.dicebear.com/7.x/identicon/svg?seed=${token.address}`}
+                          src={parseMetadataURI(token.metadataURI) || `https://api.dicebear.com/7.x/identicon/svg?seed=${token.address}`}
                           alt={token.symbol}
-                          className="w-full h-full"
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            // 如果加载失败，回退到 dicebear
+                            (e.target as HTMLImageElement).src = `https://api.dicebear.com/7.x/identicon/svg?seed=${token.address}`;
+                          }}
                         />
                         {/* 状态指示：绿色=可交易，黄色=链上但未启用，灰色=不在链上 */}
                         <div

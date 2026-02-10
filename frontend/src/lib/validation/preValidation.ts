@@ -141,11 +141,11 @@ const VALIDATION_MESSAGES: Record<string, MessagePair> = {
     },
   },
   [ValidationIds.PRICE_IMPACT_VERY_HIGH]: {
-    zh: "价格影响过大，可能造成较大损失",
-    en: "Very high price impact, may cause significant loss",
+    zh: "价格影响较大（正常现象）",
+    en: "High price impact (normal for bonding curve)",
     suggestion: {
-      zh: "强烈建议减少交易金额",
-      en: "Strongly recommend reducing the amount",
+      zh: "可分批交易以降低影响",
+      en: "Consider splitting into smaller trades",
     },
   },
   [ValidationIds.SLIPPAGE_WARNING]: {
@@ -374,23 +374,23 @@ export function validateAmount(
 
 /**
  * 校验价格影响
+ *
+ * 注意：完全移除价格影响限制
+ * Bonding Curve 大额交易的高价格影响是正常的 AMM 机制
+ * 不阻止任何交易，只显示信息提示
  */
 export function validatePriceImpact(
   priceImpact: number | undefined,
-  warningThreshold: number = 5,  // 5%
-  errorThreshold: number = 15    // 15%
+  warningThreshold: number = 20,  // 20% 显示提示（仅信息，不阻止）
+  errorThreshold: number = 100    // 100% 永不触发错误
 ): ValidationResult[] {
   const results: ValidationResult[] = [];
 
   if (priceImpact === undefined) return results;
 
-  if (priceImpact >= errorThreshold) {
-    results.push(createValidation(ValidationIds.PRICE_IMPACT_VERY_HIGH, "error", {
-      zh: `价格影响 ${priceImpact.toFixed(2)}%，可能造成较大损失`,
-      en: `Price impact ${priceImpact.toFixed(2)}%, may cause significant loss`,
-    }));
-  } else if (priceImpact >= warningThreshold) {
-    results.push(createValidation(ValidationIds.PRICE_IMPACT_HIGH, "warning", {
+  // 只显示信息提示，不阻止交易
+  if (priceImpact >= warningThreshold) {
+    results.push(createValidation(ValidationIds.PRICE_IMPACT_HIGH, "info", {
       zh: `价格影响 ${priceImpact.toFixed(2)}%`,
       en: `Price impact ${priceImpact.toFixed(2)}%`,
     }));

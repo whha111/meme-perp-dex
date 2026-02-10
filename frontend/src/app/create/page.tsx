@@ -8,7 +8,7 @@ import { Navbar } from "@/components/layout/Navbar";
 import { useTranslations } from "next-intl";
 import { useToast } from "@/components/shared/Toast";
 import { ImageUpload } from "@/components/shared/ImageUpload";
-import { useCreateMemeToken } from "@/hooks/useCreateMemeToken";
+import { useCreateMemeToken } from "@/hooks/spot/useCreateMemeToken";
 import { NETWORK_CONFIG } from "@/lib/contracts";
 import { createTokenMetadata } from "@/lib/api/tokenMetadata";
 

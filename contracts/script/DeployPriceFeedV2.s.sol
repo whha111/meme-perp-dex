@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Script.sol";
-import "../src/core/PriceFeed.sol";
+import "../src/common/PriceFeed.sol";
 
 interface ITokenFactory {
     function setPriceFeed(address newPriceFeed) external;
@@ -47,16 +47,13 @@ contract DeployPriceFeedV2 is Script {
         PriceFeed priceFeed = new PriceFeed();
         console.log("PriceFeed deployed at:", address(priceFeed));
 
-        // 2. Initialize legacy price (required for getMarkPrice)
-        console.log("\n--- Initializing PriceFeed ---");
-        priceFeed.initializePrice(1e18); // 1 ETH initial price
-        console.log("Initialized legacy price: 1 ETH");
+        // 2. 简化版 PriceFeed 不需要初始化价格和设置AMM
+        console.log("\n--- Configuring PriceFeed ---");
+        // priceFeed.initializePrice() - 已移除
+        // priceFeed.setAMM() - 已移除，价格只从TokenFactory获取
+        console.log("PriceFeed simplified: no AMM, no legacy price initialization");
 
-        // 3. Set AMM
-        priceFeed.setAMM(AMM);
-        console.log("Set AMM:", AMM);
-
-        // 4. Set TokenFactory
+        // 3. Set TokenFactory
         priceFeed.setTokenFactory(TOKEN_FACTORY);
         console.log("Set TokenFactory:", TOKEN_FACTORY);
 

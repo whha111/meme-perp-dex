@@ -1,9 +1,11 @@
 /**
  * 交易状态管理 Store
  * 管理交易相关的全局状态
+ * 使用 localStorage 持久化交易历史和报价
  */
 
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 
 // 交易报价
 export interface TradeQuote {
@@ -87,107 +89,135 @@ const DEFAULT_FORM_STATE: TradeFormState = {
   deadline: 20, // 20分钟
 };
 
-// 创建交易 Store
-export const useTradeStore = create<TradeState>((set, get) => ({
-  // 初始状态
-  form: DEFAULT_FORM_STATE,
-  currentQuote: null,
-  quoteHistory: [],
-  tradeHistory: [],
-  pendingTrades: new Set(),
-  
-  // 表单更新
-  updateForm: (updates) =>
-    set((state) => ({
-      form: { ...state.form, ...updates },
-    })),
-  
-  resetForm: () =>
-    set({ form: DEFAULT_FORM_STATE }),
-  
-  // 报价管理
-  setCurrentQuote: (quote) =>
-    set({ currentQuote: quote }),
-  
-  addToQuoteHistory: (quote) =>
-    set((state) => ({
-      quoteHistory: [quote, ...state.quoteHistory].slice(0, 100), // 最多100条
-    })),
-  
-  clearQuoteHistory: () =>
-    set({ quoteHistory: [] }),
-  
-  // 交易历史管理
-  addTradeToHistory: (trade) =>
-    set((state) => ({
-      tradeHistory: [
-        {
-          ...trade,
-          id: `${trade.txHash}-${Date.now()}`,
-          timestamp: Date.now(),
-        },
-        ...state.tradeHistory,
-      ].slice(0, 200), // 最多200条
-    })),
-  
-  updateTradeStatus: (txHash, status) =>
-    set((state) => ({
-      tradeHistory: state.tradeHistory.map((trade) =>
-        trade.txHash === txHash ? { ...trade, status } : trade
-      ),
-    })),
-  
-  clearTradeHistory: () =>
-    set({ tradeHistory: [] }),
-  
-  // 进行中交易管理
-  addPendingTrade: (txHash) =>
-    set((state) => {
-      const newPendingTrades = new Set(state.pendingTrades);
-      newPendingTrades.add(txHash);
-      return { pendingTrades: newPendingTrades };
-    }),
-  
-  removePendingTrade: (txHash) =>
-    set((state) => {
-      const newPendingTrades = new Set(state.pendingTrades);
-      newPendingTrades.delete(txHash);
-      return { pendingTrades: newPendingTrades };
-    }),
-  
-  clearPendingTrades: () =>
-    set({ pendingTrades: new Set() }),
-  
-  // 工具方法
-  getLastQuoteForInstrument: (instId) => {
-    const state = get();
-    const normalized = instId.toUpperCase();
-    return (
-      state.quoteHistory.find((quote) => {
-        const quoteId = quote.instId || quote.domain || '';
-        return quoteId.toUpperCase() === normalized;
-      }) || null
-    );
-  },
+// 创建交易 Store (使用 persist 中间件持久化到 localStorage)
+export const useTradeStore = create<TradeState>()(
+  persist(
+    (set, get) => ({
+      // 初始状态
+      form: DEFAULT_FORM_STATE,
+      currentQuote: null,
+      quoteHistory: [],
+      tradeHistory: [],
+      pendingTrades: new Set(),
 
-  getTradeHistoryForInstrument: (instId) => {
-    const state = get();
-    const normalized = instId.toUpperCase();
-    return state.tradeHistory.filter(
-      (trade) => trade.instId.toUpperCase() === normalized
-    );
-  },
+      // 表单更新
+      updateForm: (updates) =>
+        set((state) => ({
+          form: { ...state.form, ...updates },
+        })),
 
-  getPendingTradesForInstrument: (instId) => {
-    const state = get();
-    const normalized = instId.toUpperCase();
-    const instrumentTrades = state.tradeHistory.filter(
-      (trade) =>
-        trade.instId.toUpperCase() === normalized && trade.status === 'pending'
-    );
-    return instrumentTrades.map((trade) => trade.txHash);
-  },
-}));
+      resetForm: () =>
+        set({ form: DEFAULT_FORM_STATE }),
+
+      // 报价管理
+      setCurrentQuote: (quote) =>
+        set({ currentQuote: quote }),
+
+      addToQuoteHistory: (quote) =>
+        set((state) => ({
+          quoteHistory: [quote, ...state.quoteHistory].slice(0, 100), // 最多100条
+        })),
+
+      clearQuoteHistory: () =>
+        set({ quoteHistory: [] }),
+
+      // 交易历史管理
+      addTradeToHistory: (trade) =>
+        set((state) => ({
+          tradeHistory: [
+            {
+              ...trade,
+              id: `${trade.txHash}-${Date.now()}`,
+              timestamp: Date.now(),
+            },
+            ...state.tradeHistory,
+          ].slice(0, 200), // 最多200条
+        })),
+
+      updateTradeStatus: (txHash, status) =>
+        set((state) => ({
+          tradeHistory: state.tradeHistory.map((trade) =>
+            trade.txHash === txHash ? { ...trade, status } : trade
+          ),
+        })),
+
+      clearTradeHistory: () =>
+        set({ tradeHistory: [] }),
+
+      // 进行中交易管理
+      addPendingTrade: (txHash) =>
+        set((state) => {
+          const newPendingTrades = new Set(state.pendingTrades);
+          newPendingTrades.add(txHash);
+          return { pendingTrades: newPendingTrades };
+        }),
+
+      removePendingTrade: (txHash) =>
+        set((state) => {
+          const newPendingTrades = new Set(state.pendingTrades);
+          newPendingTrades.delete(txHash);
+          return { pendingTrades: newPendingTrades };
+        }),
+
+      clearPendingTrades: () =>
+        set({ pendingTrades: new Set() }),
+
+      // 工具方法
+      getLastQuoteForInstrument: (instId) => {
+        const state = get();
+        const normalized = instId.toUpperCase();
+        return (
+          state.quoteHistory.find((quote) => {
+            const quoteId = quote.instId || quote.domain || '';
+            return quoteId.toUpperCase() === normalized;
+          }) || null
+        );
+      },
+
+      getTradeHistoryForInstrument: (instId) => {
+        const state = get();
+        const normalized = instId.toUpperCase();
+        return state.tradeHistory.filter(
+          (trade) => trade.instId.toUpperCase() === normalized
+        );
+      },
+
+      getPendingTradesForInstrument: (instId) => {
+        const state = get();
+        const normalized = instId.toUpperCase();
+        const instrumentTrades = state.tradeHistory.filter(
+          (trade) =>
+            trade.instId.toUpperCase() === normalized && trade.status === 'pending'
+        );
+        return instrumentTrades.map((trade) => trade.txHash);
+      },
+    }),
+    {
+      name: 'memeperp-trade-store', // localStorage 中的 key
+      storage: createJSONStorage(() => localStorage),
+      // 只持久化必要的字段，排除临时状态
+      partialize: (state) => ({
+        tradeHistory: state.tradeHistory,
+        quoteHistory: state.quoteHistory.slice(0, 50), // 只保留最近50条报价
+      }),
+      // Set 序列化不支持，需要排除 pendingTrades
+      onRehydrateStorage: () => (state) => {
+        // 恢复数据后重置 pendingTrades 为空 Set（交易不会跨会话保持 pending）
+        if (state) {
+          state.pendingTrades = new Set();
+          // 清理超过24小时的旧数据
+          const cutoffTime = Date.now() - 24 * 60 * 60 * 1000;
+          state.tradeHistory = state.tradeHistory.filter(
+            (trade) => trade.timestamp > cutoffTime
+          );
+          state.quoteHistory = state.quoteHistory.filter(
+            (quote) => quote.timestamp > cutoffTime
+          );
+        }
+      },
+    }
+  )
+);
 
 // 选择器 Hook
 export const useTradeForm = () => useTradeStore((state) => state.form);

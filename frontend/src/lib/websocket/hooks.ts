@@ -1,10 +1,13 @@
 /**
- * WebSocket React Hooks
+ * WebSocket React Hooks (未对接版本)
+ *
+ * 接口保留，返回未连接状态
+ * TODO: 对接真实 WebSocket
  */
 
-import { useEffect, useState, useCallback, useRef } from 'react';
-import { WebSocketClient, getWebSocketClient } from './client';
-import { ConnectionStatus, MessageType, WebSocketMessage } from './types';
+import { useEffect, useState, useCallback, useRef } from "react";
+import { WebSocketClient, getWebSocketClient } from "./client";
+import { ConnectionStatus, MessageType, WebSocketMessage } from "./types";
 
 /**
  * 使用 WebSocket 连接状态
@@ -24,7 +27,7 @@ export function useWebSocketStatus(client?: WebSocketClient): ConnectionStatus {
 /**
  * 使用 WebSocket 消息订阅
  */
-export function useWebSocketMessage<T = any>(
+export function useWebSocketMessage<T = unknown>(
   type: MessageType,
   handler: (message: WebSocketMessage<T>) => void,
   client?: WebSocketClient
@@ -32,7 +35,6 @@ export function useWebSocketMessage<T = any>(
   const wsClient = client || getWebSocketClient();
   const handlerRef = useRef(handler);
 
-  // 更新 handler 引用
   useEffect(() => {
     handlerRef.current = handler;
   }, [handler]);
@@ -55,24 +57,24 @@ export function useWebSocketRequest() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
-  const request = useCallback(async <T = any>(
-    type: MessageType,
-    data?: any
-  ): Promise<T> => {
-    setIsLoading(true);
-    setError(null);
+  const request = useCallback(
+    async <T = unknown>(type: MessageType, data?: unknown): Promise<T> => {
+      setIsLoading(true);
+      setError(null);
 
-    try {
-      const result = await wsClient.request<T>(type, data);
-      return result;
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      setError(error);
-      throw error;
-    } finally {
-      setIsLoading(false);
-    }
-  }, [wsClient]);
+      try {
+        const result = await wsClient.request<T>(type, data);
+        return result;
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        setError(error);
+        throw error;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [wsClient]
+  );
 
   return {
     request,
@@ -113,7 +115,8 @@ export function useWebSocketConnection() {
     connect,
     disconnect,
     status,
-    isConnected: status === ConnectionStatus.CONNECTED,
+    // 未对接 - 始终返回 false
+    isConnected: false,
     isConnecting,
     connectionError,
   };
@@ -124,61 +127,72 @@ export function useWebSocketConnection() {
  */
 export function useWebSocketSubscription() {
   const wsClient = getWebSocketClient();
-  const [subscribedTopics, setSubscribedTopics] = useState<Set<string>>(new Set());
+  const [subscribedTopics, setSubscribedTopics] = useState<Set<string>>(
+    new Set()
+  );
   const [isSubscribing, setIsSubscribing] = useState(false);
-  const [subscriptionError, setSubscriptionError] = useState<Error | null>(null);
+  const [subscriptionError, setSubscriptionError] = useState<Error | null>(
+    null
+  );
 
-  const subscribe = useCallback(async (topics: string | string[]): Promise<void> => {
-    const topicArray = Array.isArray(topics) ? topics : [topics];
-    
-    setIsSubscribing(true);
-    setSubscriptionError(null);
+  const subscribe = useCallback(
+    async (topics: string | string[]): Promise<void> => {
+      const topicArray = Array.isArray(topics) ? topics : [topics];
 
-    try {
-      await wsClient.subscribe(topicArray);
-      
-      // 更新已订阅的主题
-      setSubscribedTopics(prev => {
-        const newSet = new Set(prev);
-        topicArray.forEach(topic => newSet.add(topic));
-        return newSet;
-      });
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      setSubscriptionError(error);
-      throw error;
-    } finally {
-      setIsSubscribing(false);
-    }
-  }, [wsClient]);
+      setIsSubscribing(true);
+      setSubscriptionError(null);
 
-  const unsubscribe = useCallback(async (topics: string | string[]): Promise<void> => {
-    const topicArray = Array.isArray(topics) ? topics : [topics];
-    
-    setIsSubscribing(true);
-    setSubscriptionError(null);
+      try {
+        await wsClient.subscribe(topicArray);
 
-    try {
-      await wsClient.unsubscribe(topicArray);
-      
-      // 更新已订阅的主题
-      setSubscribedTopics(prev => {
-        const newSet = new Set(prev);
-        topicArray.forEach(topic => newSet.delete(topic));
-        return newSet;
-      });
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      setSubscriptionError(error);
-      throw error;
-    } finally {
-      setIsSubscribing(false);
-    }
-  }, [wsClient]);
+        setSubscribedTopics((prev) => {
+          const newSet = new Set(prev);
+          topicArray.forEach((topic) => newSet.add(topic));
+          return newSet;
+        });
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        setSubscriptionError(error);
+        throw error;
+      } finally {
+        setIsSubscribing(false);
+      }
+    },
+    [wsClient]
+  );
 
-  const isSubscribed = useCallback((topic: string): boolean => {
-    return subscribedTopics.has(topic);
-  }, [subscribedTopics]);
+  const unsubscribe = useCallback(
+    async (topics: string | string[]): Promise<void> => {
+      const topicArray = Array.isArray(topics) ? topics : [topics];
+
+      setIsSubscribing(true);
+      setSubscriptionError(null);
+
+      try {
+        await wsClient.unsubscribe(topicArray);
+
+        setSubscribedTopics((prev) => {
+          const newSet = new Set(prev);
+          topicArray.forEach((topic) => newSet.delete(topic));
+          return newSet;
+        });
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        setSubscriptionError(error);
+        throw error;
+      } finally {
+        setIsSubscribing(false);
+      }
+    },
+    [wsClient]
+  );
+
+  const isSubscribed = useCallback(
+    (topic: string): boolean => {
+      return subscribedTopics.has(topic);
+    },
+    [subscribedTopics]
+  );
 
   return {
     subscribe,
@@ -191,40 +205,25 @@ export function useWebSocketSubscription() {
 }
 
 /**
- * 自动连接 WebSocket 的 Hook
- * 在组件挂载时自动连接，卸载时自动断开
+ * 自动连接 WebSocket 的 Hook (未对接)
  */
-export function useAutoConnectWebSocket(autoConnect = true) {
-  const { connect, disconnect, status, isConnected, isConnecting, connectionError } = useWebSocketConnection();
+export function useAutoConnectWebSocket(_autoConnect = true) {
+  const {
+    connect,
+    disconnect,
+    status,
+    isConnected,
+    isConnecting,
+    connectionError,
+  } = useWebSocketConnection();
 
-  // 使用 ref 存储最新的状态，避免在 useEffect 中依赖它们导致无限循环
-  const statusRef = useRef(status);
-  const isConnectedRef = useRef(isConnected);
-
-  useEffect(() => {
-    statusRef.current = status;
-    isConnectedRef.current = isConnected;
-  }, [status, isConnected]);
-
-  // 只在组件挂载时连接，卸载时断开
-  useEffect(() => {
-    if (autoConnect && statusRef.current === ConnectionStatus.DISCONNECTED) {
-      connect().catch(() => {
-        // 错误已经在 connectionError 中
-      });
-    }
-
-    return () => {
-      // 注意：这里不主动断开，因为其他组件可能还在使用 WebSocket
-      // 如果需要断开，可以显式调用 disconnect()
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoConnect]); // 只依赖 autoConnect，不依赖 status 和 isConnected
+  // 未对接 - 不自动连接
 
   return {
     connect,
     disconnect,
     status,
+    // 未对接 - 始终返回 false
     isConnected,
     isConnecting,
     connectionError,

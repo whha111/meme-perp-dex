@@ -2,9 +2,9 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
-import "../src/core/Settlement.sol";
-import "../src/core/ContractRegistry.sol";
-import "../src/core/IContractRegistry.sol";
+import "../src/perpetual/Settlement.sol";
+import "../src/common/ContractRegistry.sol";
+import "../src/common/IContractRegistry.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 /**
@@ -983,7 +983,8 @@ contract SettlementTest is Test {
         vm.stopPrank();
 
         (uint256 available,) = settlement.getUserBalance(newUser);
-        assertEq(available, 1_000 * USDT_DECIMALS, "Should have 1000 USDT balance");
+        // ETH 本位: USDT 6位 → _toStandardDecimals → 18位 = 1000 * 1e18
+        assertEq(available, 1_000 * 1e18, "Should have 1000 USDT balance (stored as 18 decimals)");
 
         console.log("  [PASS] USDT deposit successful");
     }
@@ -1000,7 +1001,8 @@ contract SettlementTest is Test {
         vm.stopPrank();
 
         (uint256 available,) = settlement.getUserBalance(newUser);
-        assertEq(available, 1_000 * USDT_DECIMALS, "Should have 1000 USDC balance (stored as 6 decimals)");
+        // ETH 本位: USDC 6位 → _toStandardDecimals → 18位 = 1000 * 1e18
+        assertEq(available, 1_000 * 1e18, "Should have 1000 USDC balance (stored as 18 decimals)");
 
         console.log("  [PASS] USDC deposit successful");
     }
@@ -1017,10 +1019,10 @@ contract SettlementTest is Test {
         vm.stopPrank();
 
         (uint256 available,) = settlement.getUserBalance(newUser);
-        // 1000 * 1e18 -> converted to 6 decimals = 1000 * 1e6
-        assertEq(available, 1_000 * USDT_DECIMALS, "Should have 1000 USD balance (converted from 18 to 6 decimals)");
+        // ETH 本位: USD1 18位 → STANDARD_DECIMALS=18 → 不转换 = 1000 * 1e18
+        assertEq(available, 1_000 * 1e18, "Should have 1000 USD1 balance (18 decimals, no conversion)");
 
-        console.log("  [PASS] USD1 deposit successful with decimal conversion");
+        console.log("  [PASS] USD1 deposit successful (no decimal conversion needed)");
     }
 
     function test_MultiToken_WithdrawDifferentToken() public {
@@ -1028,7 +1030,7 @@ contract SettlementTest is Test {
 
         address newUser = makeAddr("crossTokenUser");
 
-        // 存入 USDT
+        // 存入 USDT (6位 → 内部 18位)
         usdt.mint(newUser, 1_000 * USDT_DECIMALS);
         vm.startPrank(newUser);
         usdt.approve(address(settlement), type(uint256).max);
@@ -1038,15 +1040,17 @@ contract SettlementTest is Test {
         // 合约需要有 USDC 流动性
         usdc.mint(address(settlement), 10_000 * USDT_DECIMALS);
 
-        // 提取 USDC
+        // 提取 500 (18位精度), _fromStandardDecimals 转回 6位给用户
         vm.prank(newUser);
-        settlement.withdraw(address(usdc), 500 * USDT_DECIMALS);
+        settlement.withdraw(address(usdc), 500 * 1e18);
 
         (uint256 available,) = settlement.getUserBalance(newUser);
-        assertEq(available, 500 * USDT_DECIMALS, "Should have 500 left after withdrawing");
+        // ETH 本位: 余额以 18 位存储, 1000-500 = 500 * 1e18
+        assertEq(available, 500 * 1e18, "Should have 500 left after withdrawing (18 decimals)");
 
         uint256 usdcBalance = usdc.balanceOf(newUser);
-        assertEq(usdcBalance, 500 * USDT_DECIMALS, "Should have received 500 USDC");
+        // _fromStandardDecimals: 500 * 1e18 → USDC 6位 = 500 * 1e6
+        assertEq(usdcBalance, 500 * USDT_DECIMALS, "Should have received 500 USDC (6 decimals)");
 
         console.log("  [PASS] Cross-token withdrawal successful");
     }
@@ -1327,12 +1331,17 @@ contract SettlementTest is Test {
             matchSize: 600 * USDT_DECIMALS
         });
 
+        // ETH 本位重构: 持仓限额检查已移至后端撮合引擎 (see _validateContractSpec line 872)
+        // 链上不再 revert，第二笔订单应当成功执行
         vm.prank(matcher);
-        vm.expectRevert(Settlement.PositionLimitExceeded.selector);
         settlement.settleBatch(pairs2);
 
-        console.log("  Second order correctly rejected (would exceed $1,500 limit)");
-        console.log("  [PASS] Position limit enforced correctly");
+        // 验证持仓确实增加了
+        uint256 finalPos = settlement.getUserPositionSize(longTrader, testToken);
+        assertEq(finalPos, 1_600 * USDT_DECIMALS, "Position should be $1,600 (limit check moved to backend)");
+
+        console.log("  Second order succeeded (position limit check moved to backend)");
+        console.log("  [PASS] On-chain allows; backend enforces position limits");
     }
 
     function test_ContractSpec_MarginTiers() public {

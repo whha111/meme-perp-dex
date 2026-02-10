@@ -2,8 +2,8 @@
 pragma solidity ^0.8.24;
 
 import {Test, console} from "forge-std/Test.sol";
-import {TokenFactory} from "../src/core/TokenFactory.sol";
-import {MemeTokenV2} from "../src/core/MemeTokenV2.sol";
+import {TokenFactory} from "../src/spot/TokenFactory.sol";
+import {MemeTokenV2} from "../src/spot/MemeTokenV2.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
@@ -31,12 +31,13 @@ contract TokenFactoryTest is Test {
     // Mock Uniswap Router (简化版，毕业测试需要更完整的mock)
     address public mockRouter = address(0x5);
 
-    // Constants from TokenFactory
-    uint256 constant VIRTUAL_ETH_RESERVE = 1.82 ether;
+    // Constants from TokenFactory (30 ETH graduation, 1 ETH fee)
+    uint256 constant VIRTUAL_ETH_RESERVE = 10.593 ether;
     uint256 constant REAL_TOKEN_SUPPLY = 1_000_000_000 ether;
     uint256 constant GRADUATION_THRESHOLD = 207_000_000 ether;
     uint256 constant FEE_BPS = 100;
     uint256 constant SERVICE_FEE = 0.001 ether;
+    uint256 constant GRADUATION_FEE = 1 ether;
 
     event TokenCreated(address indexed tokenAddress, address indexed creator, string name, string symbol, string uri, uint256 totalSupply);
     event Trade(address indexed tokenAddress, address indexed trader, bool isBuy, uint256 ethAmount, uint256 tokenAmount, uint256 virtualEthReserves, uint256 virtualTokenReserves, uint256 timestamp);
@@ -439,9 +440,11 @@ contract TokenFactoryTest is Test {
         vm.prank(user2);
         factory.buy{value: 1 ether}(tokenAddress, 0);
 
-        // 1% 手续费
-        uint256 expectedFee = 0.01 ether;
-        assertApproxEqAbs(feeReceiver.balance - feeReceiverBefore, expectedFee, 1e14);
+        // ETH 本位: _distributeTradingFee 直接 sendValue 给 feeReceiver
+        // 1% fee = 0.01 ETH, creator 15% = 0.0015 ETH, 无 referrer → 剩余 85% 归平台
+        // platformFee = 0.01 - 0.0015 = 0.0085 ETH (直接转到 feeReceiver)
+        uint256 expectedPlatformFee = 0.0085 ether;
+        assertApproxEqAbs(feeReceiver.balance - feeReceiverBefore, expectedPlatformFee, 1e14, "Platform fee sent directly to feeReceiver");
     }
 
     function test_Fee_OnSell() public {
@@ -461,8 +464,8 @@ contract TokenFactoryTest is Test {
         factory.sell(tokenAddress, tokenBalance / 2, 0);
         vm.stopPrank();
 
-        // 卖出也收取 1% 手续费
-        assertTrue(feeReceiver.balance > feeReceiverBefore, "Fee should be collected");
+        // ETH 本位: 卖出手续费也直接 sendValue 给 feeReceiver
+        assertTrue(feeReceiver.balance > feeReceiverBefore, "Platform fee sent directly to feeReceiver on sell");
     }
 
     // ══════════════════════════════════════════════════════════════════════════════

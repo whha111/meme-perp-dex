@@ -5,7 +5,9 @@
  * 撮合引擎配对后提交到链上验证签名并结算
  */
 
-import { type Address, type Hex, type WalletClient, parseEther, formatEther } from "viem";
+import { type Address, type Hex, type WalletClient, parseEther, formatEther, parseUnits } from "viem";
+import { MATCHING_ENGINE_URL } from "@/config/api";
+import { type PerpTradeRecord } from "@/lib/stores/tradingDataStore";
 
 // ============================================================
 // Types
@@ -105,7 +107,8 @@ export async function signOrder(
 }
 
 /**
- * 创建市价单参数
+ * 创建市价单参数 (ETH 本位)
+ * @param sizeEth - 订单名义价值（ETH），例如 0.2 表示 0.2 ETH
  */
 export function createMarketOrderParams(
   token: Address,
@@ -119,6 +122,7 @@ export function createMarketOrderParams(
   return {
     token,
     isLong,
+    // ETH 本位：size 是 ETH 名义价值，使用 1e18 精度
     size: parseEther(sizeEth.toString()),
     leverage: BigInt(Math.floor(leverage)) * LEVERAGE_PRECISION,
     price: 0n, // 市价
@@ -129,14 +133,16 @@ export function createMarketOrderParams(
 }
 
 /**
- * 创建限价单参数
+ * 创建限价单参数 (ETH 本位)
+ * @param sizeEth - 订单名义价值（ETH），例如 0.2 表示 0.2 ETH
+ * @param limitPrice - 限价价格（Token/ETH，1e18 精度）
  */
 export function createLimitOrderParams(
   token: Address,
   isLong: boolean,
   sizeEth: number,
   leverage: number,
-  priceEth: number,
+  limitPrice: number,
   nonce: bigint,
   validityHours: number = 24
 ): OrderParams {
@@ -145,9 +151,10 @@ export function createLimitOrderParams(
   return {
     token,
     isLong,
+    // ETH 本位：size 是 ETH 名义价值，使用 1e18 精度
     size: parseEther(sizeEth.toString()),
     leverage: BigInt(Math.floor(leverage)) * LEVERAGE_PRECISION,
-    price: parseEther(priceEth.toString()),
+    price: parseEther(limitPrice.toString()),
     deadline: BigInt(Math.floor(Date.now() / 1000) + validityHours * 3600),
     nonce,
     orderType: OrderType.LIMIT,
@@ -160,33 +167,8 @@ export function createLimitOrderParams(
 
 /**
  * Get Matching Engine API URL
- *
- * Priority:
- * 1. NEXT_PUBLIC_MATCHING_ENGINE_URL (specific to matching engine)
- * 2. NEXT_PUBLIC_API_URL (general API, backward compatible)
- * 3. Development fallback to localhost:8081 (matching engine default port)
  */
-const getApiUrl = (): string => {
-  // Check for matching engine specific URL first
-  const matchingUrl = process.env.NEXT_PUBLIC_MATCHING_ENGINE_URL;
-  if (matchingUrl) {
-    return matchingUrl;
-  }
-
-  // Fallback to general API URL
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-
-  // Production: One of the URLs is required
-  if (process.env.NODE_ENV === "production" && !apiUrl) {
-    throw new Error(
-      "Neither NEXT_PUBLIC_MATCHING_ENGINE_URL nor NEXT_PUBLIC_API_URL is configured. " +
-      "Please set one of these environment variables in production."
-    );
-  }
-
-  // Development: fallback to matching engine default port
-  return apiUrl || "http://localhost:8081";
-};
+const getApiUrl = (): string => MATCHING_ENGINE_URL;
 
 /**
  * 提交签名订单到撮合引擎
@@ -305,8 +287,7 @@ export interface OrderDetails {
   totalFillValue: string;
 
   // === 费用信息 ===
-  fee: string;
-  feeCurrency: string;
+  fee: string;                    // 手续费金额 (ETH)
 
   // === 保证金信息 ===
   margin: string;
@@ -336,7 +317,10 @@ export interface OrderDetails {
 export async function getUserOrders(trader: Address): Promise<OrderDetails[]> {
   try {
     const response = await fetch(`${getApiUrl()}/api/user/${trader}/orders`);
-    return await response.json();
+    const data = await response.json();
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data?.orders)) return data.orders;
+    return [];
   } catch {
     return [];
   }
@@ -368,10 +352,10 @@ export async function cancelOrder(
 /**
  * 获取用户仓位（从撮合引擎 API）
  *
- * 返回值精度说明：
- * - size: 1e18 (代币数量)
- * - entryPrice, markPrice, liquidationPrice: 1e12 (USD价格)
- * - collateral, unrealizedPnL, maintenanceMargin: 1e6 (USD金额)
+ * ETH 本位返回值精度说明：
+ * - size: 1e18 (ETH 名义价值)
+ * - entryPrice, markPrice, liquidationPrice: 1e18 (ETH/Token 价格)
+ * - collateral, unrealizedPnL, maintenanceMargin: 1e18 (ETH 金额)
  * - marginRatio, mmr, roe: 基点 (100 = 1%)
  * - leverage: 人类可读 (如 "75")
  */
@@ -380,31 +364,80 @@ export async function getUserPositions(trader: Address): Promise<
     pairId: string;
     token: Address;
     isLong: boolean;
-    size: string;              // 1e18 精度 (代币数量)
-    entryPrice: string;        // 1e12 精度 (USD)
-    collateral: string;        // 1e6 精度 (USD)
+    size: string;              // 1e18 精度 (ETH 名义价值)
+    entryPrice: string;        // 1e18 精度 (ETH/Token)
+    collateral: string;        // 1e18 精度 (ETH)
     leverage: string;          // 人类可读 (如 "75")
+    marginMode: "cross" | "isolated"; // 保证金模式
     counterparty: Address;
-    unrealizedPnL: string;     // 1e6 精度 (USD)
-    // 新增字段
-    markPrice?: string;        // 1e12 精度 (USD)
-    liquidationPrice?: string; // 1e12 精度 (USD)
-    breakEvenPrice?: string;   // 1e12 精度 (USD)
-    margin?: string;           // 1e6 精度 (USD)
+    unrealizedPnL: string;     // 1e18 精度 (ETH)
+    // 可选字段
+    markPrice?: string;        // 1e18 精度 (ETH/Token)
+    liquidationPrice?: string; // 1e18 精度 (ETH/Token)
+    breakEvenPrice?: string;   // 1e18 精度 (ETH/Token)
+    margin?: string;           // 1e18 精度 (ETH)
     marginRatio?: string;      // 基点 (100 = 1%)
-    maintenanceMargin?: string;// 1e6 精度 (USD)
+    maintenanceMargin?: string;// 1e18 精度 (ETH)
     mmr?: string;              // 基点 (100 = 1%)
     roe?: string;              // 基点 (100 = 1%)
-    realizedPnL?: string;      // 1e6 精度 (USD)
-    fundingFee?: string;       // 1e6 精度 (USD)
-    riskLevel?: string;        // "low" | "medium" | "high" | "critical"
+    realizedPnL?: string;      // 1e18 精度 (ETH)
+    fundingFee?: string;       // 1e18 精度 (ETH)
+    riskLevel?: "low" | "medium" | "high" | "critical";  // 风险等级
     isLiquidatable?: boolean;
     adlRanking?: number;
   }>
 > {
   try {
     const response = await fetch(`${getApiUrl()}/api/user/${trader}/positions`);
-    return await response.json();
+    const data = await response.json();
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data?.positions)) return data.positions;
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Historical order type (completed/cancelled/expired)
+ */
+export interface HistoricalOrder extends OrderDetails {
+  closeReason?: "filled" | "cancelled" | "expired" | "liquidated";
+}
+
+// 重新导出 PerpTradeRecord 以保持向后兼容
+// 永续合约成交记录类型定义在 tradingDataStore.ts
+export type { PerpTradeRecord };
+/** @deprecated 使用 PerpTradeRecord 代替 */
+export type TradeRecord = PerpTradeRecord;
+
+/**
+ * 获取历史订单 (已完成/已取消/已过期)
+ */
+export async function getOrderHistory(trader: Address, limit = 50): Promise<HistoricalOrder[]> {
+  try {
+    const response = await fetch(`${getApiUrl()}/api/user/${trader}/orders?limit=${limit}`);
+    const data = await response.json();
+    // Backend returns bare array, but handle wrapped format defensively
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data?.orders)) return data.orders;
+    return [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 获取永续合约成交记录
+ */
+export async function getTradeHistory(trader: Address, limit = 50): Promise<PerpTradeRecord[]> {
+  try {
+    const response = await fetch(`${getApiUrl()}/api/user/${trader}/trades?limit=${limit}`);
+    const data = await response.json();
+    // Backend returns { success, trades, total } — extract the trades array
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data?.trades)) return data.trades;
+    return [];
   } catch {
     return [];
   }
@@ -412,16 +445,18 @@ export async function getUserPositions(trader: Address): Promise<
 
 /**
  * 平仓请求
+ * H-08 fix: 添加签名验证，防止任何人冒充 trader 平仓
  */
 export async function requestClosePair(
   pairId: string,
-  trader: Address
+  trader: Address,
+  signature?: Hex
 ): Promise<{ success: boolean; txHash?: string; error?: string }> {
   try {
     const response = await fetch(`${getApiUrl()}/api/position/${pairId}/close`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ trader }),
+      body: JSON.stringify({ trader, signature }),
     });
     return await response.json();
   } catch (error) {
@@ -430,6 +465,14 @@ export async function requestClosePair(
       error: error instanceof Error ? error.message : "Unknown error",
     };
   }
+}
+
+/**
+ * 生成平仓签名消息
+ * H-08: 用于签名平仓请求，防伪造
+ */
+export function getClosePairMessage(pairId: string, trader: Address): string {
+  return `Close pair ${pairId} for ${trader}`;
 }
 
 // ============================================================

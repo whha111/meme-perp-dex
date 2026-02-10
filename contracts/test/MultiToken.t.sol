@@ -2,12 +2,12 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
-import "../src/core/Vault.sol";
-import "../src/core/PositionManager.sol";
-import "../src/core/RiskManager.sol";
-import "../src/core/Liquidation.sol";
-import "../src/core/PriceFeed.sol";
-import "../src/core/FundingRate.sol";
+import "../src/common/Vault.sol";
+import "../src/perpetual/PositionManager.sol";
+import "../src/perpetual/RiskManager.sol";
+import "../src/perpetual/Liquidation.sol";
+import "../src/common/PriceFeed.sol";
+import "../src/perpetual/FundingRate.sol";
 import "../src/periphery/Reader.sol";
 
 /**
@@ -98,17 +98,13 @@ contract MultiTokenTest is Test {
         riskManager.setVault(address(vault));
         riskManager.setInsuranceFund(address(liquidation));
 
-        // Initialize prices for tokens
-        priceFeed.initializePrice(INITIAL_PRICE_A); // Default price
+        // Initialize prices for tokens (simplified: no TWAP, no deviation protection)
         priceFeed.addSupportedToken(tokenA, INITIAL_PRICE_A);
         priceFeed.addSupportedToken(tokenB, INITIAL_PRICE_B);
         priceFeed.addSupportedToken(tokenC, INITIAL_PRICE_C);
 
-        // Set test contract as AMM to allow price updates
-        priceFeed.setAMM(address(this));
-
-        // 禁用价格偏差保护（允许测试模拟极端价格场景）
-        priceFeed.setDeviationProtection(false);
+        // Set test contract as TokenFactory for price updates
+        priceFeed.setTokenFactory(address(this));
 
         // Deposit insurance fund
         vm.deal(owner, 1000 ether);
@@ -211,7 +207,7 @@ contract MultiTokenTest is Test {
 
         // Price increases 10%
         uint256 newPrice = INITIAL_PRICE_A * 110 / 100;
-        priceFeed.updateTokenPrice(tokenA, newPrice);
+        priceFeed.updateTokenPriceFromFactory(tokenA, newPrice);
 
         int256 pnl = positionManager.getTokenUnrealizedPnL(user1, tokenA);
 
@@ -232,7 +228,7 @@ contract MultiTokenTest is Test {
 
         // Price decreases 10%
         uint256 newPrice = INITIAL_PRICE_B * 90 / 100;
-        priceFeed.updateTokenPrice(tokenB, newPrice);
+        priceFeed.updateTokenPriceFromFactory(tokenB, newPrice);
 
         int256 pnl = positionManager.getTokenUnrealizedPnL(user1, tokenB);
 
@@ -248,7 +244,7 @@ contract MultiTokenTest is Test {
 
         // Price decreases 5%
         uint256 newPrice = INITIAL_PRICE_A * 95 / 100;
-        priceFeed.updateTokenPrice(tokenA, newPrice);
+        priceFeed.updateTokenPriceFromFactory(tokenA, newPrice);
 
         int256 pnl = positionManager.getTokenUnrealizedPnL(user1, tokenA);
 
@@ -287,7 +283,7 @@ contract MultiTokenTest is Test {
 
         // Drop price significantly (50%)
         uint256 crashPrice = INITIAL_PRICE_A * 50 / 100;
-        priceFeed.updateTokenPrice(tokenA, crashPrice);
+        priceFeed.updateTokenPriceFromFactory(tokenA, crashPrice);
 
         bool canLiqAfter = positionManager.canLiquidateToken(user1, tokenA);
         assertTrue(canLiqAfter, "Should be liquidatable after crash");
@@ -310,7 +306,7 @@ contract MultiTokenTest is Test {
 
         // Drop price to trigger liquidation condition
         uint256 crashPrice = INITIAL_PRICE_A * 85 / 100;  // 15% drop
-        priceFeed.updateTokenPrice(tokenA, crashPrice);
+        priceFeed.updateTokenPriceFromFactory(tokenA, crashPrice);
 
         // Verify liquidation condition is met
         bool canLiqAfter = positionManager.canLiquidateToken(user1, tokenA);
@@ -356,7 +352,7 @@ contract MultiTokenTest is Test {
 
         // Price increases 10%
         uint256 newPrice = INITIAL_PRICE_A * 110 / 100;
-        priceFeed.updateTokenPrice(tokenA, newPrice);
+        priceFeed.updateTokenPriceFromFactory(tokenA, newPrice);
 
         uint256 marginRatioAfter = positionManager.getTokenMarginRatio(user1, tokenA);
 
@@ -470,7 +466,7 @@ contract MultiTokenTest is Test {
         positionManager.openLongToken(tokenA, 5 ether, 2 * LEVERAGE_PRECISION, IPositionManager.MarginMode.ISOLATED);
 
         // Drop price
-        priceFeed.updateTokenPrice(tokenA, INITIAL_PRICE_A * 50 / 100);
+        priceFeed.updateTokenPriceFromFactory(tokenA, INITIAL_PRICE_A * 50 / 100);
 
         address[] memory users = new address[](2);
         users[0] = user1;

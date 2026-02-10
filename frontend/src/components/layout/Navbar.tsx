@@ -82,6 +82,20 @@ export function Navbar() {
             >
               {t('createToken')}
             </Link>
+            <Link
+              href="/earnings"
+              prefetch={false}
+              className="hover:text-okx-text-primary cursor-pointer hidden lg:inline"
+            >
+              {t('earnings')}
+            </Link>
+            <Link
+              href="/lend"
+              prefetch={false}
+              className="hover:text-okx-text-primary cursor-pointer hidden lg:inline"
+            >
+              {t('lending')}
+            </Link>
           </div>
         </div>
 

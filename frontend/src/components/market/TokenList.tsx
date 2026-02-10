@@ -2,7 +2,7 @@
 
 import React, { useState, useMemo } from "react";
 import Link from "next/link";
-import { useMarketList, MarketData } from "@/hooks/useMarketData";
+import { useMarketList, MarketData } from "@/hooks/common/useMarketData";
 
 interface TokenListProps {
   className?: string;

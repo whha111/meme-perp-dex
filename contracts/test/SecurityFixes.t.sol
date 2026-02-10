@@ -2,9 +2,9 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Test.sol";
-import "../src/core/Settlement.sol";
-import "../src/core/PositionManager.sol";
-import "../src/core/Vault.sol";
+import "../src/perpetual/Settlement.sol";
+import "../src/perpetual/PositionManager.sol";
+import "../src/common/Vault.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 /**

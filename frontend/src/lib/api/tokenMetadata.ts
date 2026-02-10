@@ -1,9 +1,14 @@
 /**
  * Token Metadata API Client
- * 用于保存和获取代币元数据（logo、描述、社交链接等）
+ *
+ * Connects to backend REST API at /api/v1/token/metadata
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
+import { MATCHING_ENGINE_URL } from "@/config/api";
+
+// ============================================================
+// Types
+// ============================================================
 
 export interface TokenMetadata {
   instId: string;
@@ -43,51 +48,52 @@ export interface CreateTokenMetadataRequest {
   initialBuyAmount?: string;
 }
 
+// ============================================================
+// API Functions
+// ============================================================
+
 /**
  * 创建或更新代币元数据
  */
-export async function createTokenMetadata(data: CreateTokenMetadataRequest): Promise<TokenMetadata> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/token/metadata`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
+export async function createTokenMetadata(
+  data: CreateTokenMetadataRequest
+): Promise<TokenMetadata> {
+  const res = await fetch(`${MATCHING_ENGINE_URL}/api/v1/token/metadata`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: 'Unknown error' }));
-    throw new Error(error.message || `Failed to save token metadata: ${response.statusText}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `Failed to create token metadata: ${res.status}`);
   }
-
-  const result = await response.json();
-  return result.data;
+  const json = await res.json();
+  return json.data ?? json;
 }
 
 /**
  * 获取代币元数据
  */
 export async function getTokenMetadata(instId: string): Promise<TokenMetadata> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/token/metadata?instId=${instId}`);
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch token metadata: ${response.statusText}`);
+  const res = await fetch(
+    `${MATCHING_ENGINE_URL}/api/v1/token/metadata?instId=${encodeURIComponent(instId)}`
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `Failed to get token metadata: ${res.status}`);
   }
-
-  const result = await response.json();
-  return result.data;
+  const json = await res.json();
+  return json.data ?? json;
 }
 
 /**
  * 获取所有代币元数据
  */
 export async function getAllTokenMetadata(): Promise<TokenMetadata[]> {
-  const response = await fetch(`${API_BASE_URL}/api/v1/token/metadata/all`);
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch all token metadata: ${response.statusText}`);
+  const res = await fetch(`${MATCHING_ENGINE_URL}/api/v1/token/metadata/all`);
+  if (!res.ok) {
+    return [];
   }
-
-  const result = await response.json();
-  return result.data;
+  const json = await res.json();
+  return json.data ?? json ?? [];
 }

@@ -104,6 +104,13 @@ func (k *LiquidationKeeper) InitBlockchain() error {
 	return nil
 }
 
+// checkInterval is the interval between liquidation checks
+const checkInterval = 2 * time.Second
+
+// dangerThreshold is the percentage threshold for "dangerous" positions
+// Positions within 5% of liquidation price are considered dangerous
+const dangerThreshold = 0.05
+
 func (k *LiquidationKeeper) Start(ctx context.Context) {
 	k.logger.Info("Liquidation keeper starting...")
 
@@ -116,9 +123,9 @@ func (k *LiquidationKeeper) Start(ctx context.Context) {
 	}
 
 	k.logger.Info("Liquidation keeper started",
-		zap.Duration("checkInterval", 5*time.Second))
+		zap.Duration("checkInterval", checkInterval))
 
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 
 	for {
@@ -154,94 +161,157 @@ func (k *LiquidationKeeper) checkPositions(ctx context.Context) {
 	k.logger.Debug("Checking positions for liquidation",
 		zap.Int("count", len(positions)))
 
+	// Step 1: Local pre-check to filter dangerous positions
+	var dangerousPositions []struct {
+		pos       model.Position
+		markPrice model.Decimal
+		user      *model.User
+	}
+
 	for _, pos := range positions {
-		// Get user's wallet address from database
-		user, err := k.userRepo.GetByID(pos.UserID)
+		// Get mark price from cache (local, fast)
+		markPriceStr, err := k.cache.GetMarkPrice(ctx, pos.InstID)
 		if err != nil {
-			k.logger.Warn("Failed to get user for position",
-				zap.String("posId", pos.PosID),
-				zap.Int64("userId", pos.UserID),
+			k.logger.Debug("Failed to get mark price from cache",
+				zap.String("instId", pos.InstID),
 				zap.Error(err))
 			continue
 		}
 
-		// First check on-chain if blockchain is available
+		markPrice, err := model.NewDecimalFromString(markPriceStr)
+		if err != nil {
+			continue
+		}
+
+		// Local pre-check: is position in danger zone?
+		isDangerous, isLiquidatable := k.checkPositionRisk(&pos, markPrice)
+
+		if isLiquidatable {
+			// Position should be liquidated immediately
+			user, err := k.userRepo.GetByID(pos.UserID)
+			if err != nil {
+				k.logger.Warn("Failed to get user for position",
+					zap.String("posId", pos.PosID),
+					zap.Error(err))
+				continue
+			}
+			dangerousPositions = append(dangerousPositions, struct {
+				pos       model.Position
+				markPrice model.Decimal
+				user      *model.User
+			}{pos, markPrice, user})
+		} else if isDangerous {
+			// Position is close to liquidation, add to check list
+			user, err := k.userRepo.GetByID(pos.UserID)
+			if err != nil {
+				continue
+			}
+			dangerousPositions = append(dangerousPositions, struct {
+				pos       model.Position
+				markPrice model.Decimal
+				user      *model.User
+			}{pos, markPrice, user})
+		}
+		// Safe positions are skipped - no RPC call needed
+	}
+
+	if len(dangerousPositions) == 0 {
+		return
+	}
+
+	k.logger.Debug("Found dangerous positions after pre-check",
+		zap.Int("dangerous", len(dangerousPositions)),
+		zap.Int("total", len(positions)))
+
+	// Step 2: On-chain confirmation for dangerous positions only
+	for _, dp := range dangerousPositions {
 		if k.positionMgrCtx != nil {
-			userAddr := common.HexToAddress(user.Address)
+			// On-chain confirmation
+			userAddr := common.HexToAddress(dp.user.Address)
 			canLiq, err := k.positionMgrCtx.CanLiquidate(ctx, userAddr)
 			if err != nil {
 				k.logger.Warn("Failed to check on-chain liquidation status",
-					zap.String("user", user.Address),
+					zap.String("user", dp.user.Address),
 					zap.Error(err))
-				// Fall back to local check
-				k.checkLocalLiquidation(ctx, &pos)
+				// Fall back to local liquidation if pre-check said liquidatable
+				if k.shouldLiquidate(&dp.pos, dp.markPrice) {
+					k.executeLiquidation(ctx, &dp.pos, dp.user, dp.markPrice)
+				}
 				continue
 			}
 
 			if canLiq {
-				k.logger.Warn("Position can be liquidated (on-chain check)",
-					zap.String("posId", pos.PosID),
-					zap.String("user", user.Address),
-					zap.String("instId", pos.InstID))
+				k.logger.Warn("Position confirmed liquidatable (on-chain)",
+					zap.String("posId", dp.pos.PosID),
+					zap.String("user", dp.user.Address),
+					zap.String("instId", dp.pos.InstID))
 
-				if err := k.liquidateOnChain(ctx, &pos, user.Address); err != nil {
-					k.logger.Error("On-chain liquidation failed",
-						zap.String("posId", pos.PosID),
-						zap.Error(err))
-					k.liquidationsFailed++
-				}
+				k.executeLiquidation(ctx, &dp.pos, dp.user, dp.markPrice)
 			}
 		} else {
 			// No blockchain connection, use local check
-			k.checkLocalLiquidation(ctx, &pos)
+			if k.shouldLiquidate(&dp.pos, dp.markPrice) {
+				k.executeLiquidation(ctx, &dp.pos, dp.user, dp.markPrice)
+			}
 		}
 	}
 }
 
-// checkLocalLiquidation checks if position should be liquidated using local data
-func (k *LiquidationKeeper) checkLocalLiquidation(ctx context.Context, pos *model.Position) {
-	// Get mark price from cache
-	markPriceStr, err := k.cache.GetMarkPrice(ctx, pos.InstID)
-	if err != nil {
-		return
+// checkPositionRisk checks if a position is dangerous or liquidatable
+// Returns: (isDangerous, isLiquidatable)
+// isDangerous: position is within dangerThreshold of liquidation price
+// isLiquidatable: position has crossed liquidation price
+func (k *LiquidationKeeper) checkPositionRisk(pos *model.Position, markPrice model.Decimal) (bool, bool) {
+	if pos.LiqPx.IsZero() {
+		return false, false
 	}
 
-	markPrice, err := model.NewDecimalFromString(markPriceStr)
-	if err != nil {
-		return
+	// Calculate distance to liquidation price as percentage
+	var distanceRatio float64
+	liqPxFloat, _ := pos.LiqPx.Float64()
+	markPxFloat, _ := markPrice.Float64()
+
+	if pos.PosSide == model.PosSideLong {
+		// Long: liquidated when price drops below liq price
+		// Distance = (markPrice - liqPrice) / markPrice
+		if markPxFloat > 0 {
+			distanceRatio = (markPxFloat - liqPxFloat) / markPxFloat
+		}
+		isLiquidatable := markPrice.LessThanOrEqual(pos.LiqPx)
+		isDangerous := distanceRatio <= dangerThreshold && distanceRatio > 0
+		return isDangerous || isLiquidatable, isLiquidatable
+	} else {
+		// Short: liquidated when price rises above liq price
+		// Distance = (liqPrice - markPrice) / markPrice
+		if markPxFloat > 0 {
+			distanceRatio = (liqPxFloat - markPxFloat) / markPxFloat
+		}
+		isLiquidatable := markPrice.GreaterThanOrEqual(pos.LiqPx)
+		isDangerous := distanceRatio <= dangerThreshold && distanceRatio > 0
+		return isDangerous || isLiquidatable, isLiquidatable
 	}
+}
 
-	// Check if position should be liquidated
-	if k.shouldLiquidate(pos, markPrice) {
-		k.logger.Warn("Position needs liquidation (local check)",
-			zap.String("posId", pos.PosID),
-			zap.String("instId", pos.InstID),
-			zap.String("markPrice", markPrice.String()),
-			zap.String("liqPrice", pos.LiqPx.String()))
+// executeLiquidation handles the liquidation execution
+func (k *LiquidationKeeper) executeLiquidation(ctx context.Context, pos *model.Position, user *model.User, markPrice model.Decimal) {
+	k.logger.Warn("Executing liquidation",
+		zap.String("posId", pos.PosID),
+		zap.String("user", user.Address),
+		zap.String("instId", pos.InstID),
+		zap.String("markPrice", markPrice.String()),
+		zap.String("liqPrice", pos.LiqPx.String()))
 
-		// Get user's wallet address for on-chain liquidation
-		user, err := k.userRepo.GetByID(pos.UserID)
-		if err != nil {
-			k.logger.Warn("Failed to get user, falling back to DB-only liquidation",
-				zap.Int64("userId", pos.UserID),
+	// Try on-chain liquidation first
+	if k.liquidationCtx != nil {
+		if err := k.liquidateOnChain(ctx, pos, user.Address); err != nil {
+			k.logger.Error("On-chain liquidation failed, falling back to DB",
+				zap.String("posId", pos.PosID),
 				zap.Error(err))
 			k.liquidateInDB(pos, markPrice)
-			return
 		}
-
-		// Try on-chain liquidation first
-		if k.liquidationCtx != nil {
-			if err := k.liquidateOnChain(ctx, pos, user.Address); err != nil {
-				k.logger.Error("On-chain liquidation failed, updating DB only",
-					zap.String("posId", pos.PosID),
-					zap.Error(err))
-				// Fall back to DB update
-				k.liquidateInDB(pos, markPrice)
-			}
-		} else {
-			// No blockchain connection, update DB
-			k.liquidateInDB(pos, markPrice)
-		}
+	} else {
+		// No blockchain connection, update DB only
+		k.liquidateInDB(pos, markPrice)
 	}
 }
 

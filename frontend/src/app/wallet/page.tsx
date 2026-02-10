@@ -1,88 +1,124 @@
 "use client";
 
+/**
+ * 钱包管理页面 (ETH 本位)
+ *
+ * ETH 本位永续合约:
+ * - 所有余额以 ETH 计价 (1e18 精度)
+ * - 充值: 发送 ETH 到派生钱包
+ * - 提现: Settlement → 派生钱包 → 主钱包
+ */
+
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { useAccount } from "wagmi";
-import { formatEther } from "viem";
+import { formatUnits, type Address } from "viem";
 import { Navbar } from "@/components/layout/Navbar";
-import { usePerpetual } from "@/hooks/usePerpetual";
+import { usePerpetualV2 } from "@/hooks/perpetual/usePerpetualV2";
+import { useTradingWallet } from "@/hooks/perpetual/useTradingWallet";
+
+// ETH 本位: 使用 WETH 或原生 ETH
+const WETH_ADDRESS = (process.env.NEXT_PUBLIC_WETH_ADDRESS || "0x4200000000000000000000000000000000000006") as Address;
 
 export default function WalletPage() {
   const t = useTranslations("walletManagement");
   const { address, isConnected } = useAccount();
+  const { address: tradingWalletAddr, getSignature } = useTradingWallet();
+  const tradingWalletSignature = getSignature();
+
   const {
     walletBalance,
-    vaultBalance,
-    availableBalance,
-    lockedMargin,
+    balance,
     deposit,
     withdraw,
     isPending,
     isConfirming,
-    txHash,
     error,
-  } = usePerpetual();
+  } = usePerpetualV2({
+    tradingWalletAddress: tradingWalletAddr || undefined,
+    tradingWalletSignature: tradingWalletSignature || undefined,
+    mainWalletAddress: address,
+  });
+
+  // Extract balances from V2 hook
+  const derivedWalletBalance = balance?.walletBalance || 0n;
+  const settlementAvailable = balance?.settlementAvailable || 0n;
+  const settlementLocked = balance?.settlementLocked || 0n;
+  const availableBalance = balance?.available || 0n;
+  const lockedMargin = balance?.locked || 0n;
+  const vaultBalance = availableBalance + lockedMargin;
 
   const [depositAmount, setDepositAmount] = useState("");
   const [withdrawAmount, setWithdrawAmount] = useState("");
   const [activeTab, setActiveTab] = useState<"deposit" | "withdraw">("deposit");
   const [actionError, setActionError] = useState<string | null>(null);
+  const [txHash, setTxHash] = useState<string | null>(null);
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
 
-  // Format balance for display
+  // Format ETH balance for display (18 decimals)
   const formatBalance = (balance: bigint | null | undefined): string => {
     if (balance === null || balance === undefined) return "0.0000";
-    return parseFloat(formatEther(balance)).toFixed(4);
+    const val = parseFloat(formatUnits(balance, 18));
+    if (val >= 1000) return `${(val / 1000).toFixed(2)}K`;
+    if (val >= 1) return val.toFixed(4);
+    if (val >= 0.001) return val.toFixed(4);
+    return val.toFixed(6);
   };
 
-  // Handle deposit
+  // Handle deposit (ETH 本位: 存入 ETH/WETH)
   const handleDeposit = async () => {
     if (!depositAmount || parseFloat(depositAmount) <= 0) {
       setActionError(t("errors.invalidAmount"));
       return;
     }
     setActionError(null);
+    setTxHash(null);
     try {
-      await deposit(depositAmount);
+      await deposit(WETH_ADDRESS, depositAmount);
       setDepositAmount("");
     } catch (err) {
       setActionError((err as Error).message);
     }
   };
 
-  // Handle withdraw
+  // Handle withdraw (ETH 本位: Settlement → derived wallet → main wallet)
   const handleWithdraw = async () => {
     if (!withdrawAmount || parseFloat(withdrawAmount) <= 0) {
       setActionError(t("errors.invalidAmount"));
       return;
     }
     const withdrawAmountNum = parseFloat(withdrawAmount);
-    const availableNum = availableBalance ? parseFloat(formatEther(availableBalance)) : 0;
-    if (withdrawAmountNum > availableNum) {
+    const withdrawableNum = parseFloat(formatUnits(derivedWalletBalance + settlementAvailable, 18));
+    if (withdrawAmountNum > withdrawableNum) {
       setActionError(t("errors.insufficientBalance"));
       return;
     }
     setActionError(null);
+    setTxHash(null);
+    setIsWithdrawing(true);
     try {
-      await withdraw(withdrawAmount);
+      await withdraw(WETH_ADDRESS, withdrawAmount);
       setWithdrawAmount("");
     } catch (err) {
       setActionError((err as Error).message);
+    } finally {
+      setIsWithdrawing(false);
     }
   };
 
-  // Set max deposit amount
+  // Set max deposit amount (derived wallet ETH balance)
   const handleMaxDeposit = () => {
-    if (walletBalance) {
-      // Leave some ETH for gas
-      const maxAmount = walletBalance > BigInt(1e16) ? walletBalance - BigInt(1e16) : 0n;
-      setDepositAmount(formatEther(maxAmount));
+    if (derivedWalletBalance) {
+      setDepositAmount(formatUnits(derivedWalletBalance, 18));
     }
   };
 
-  // Set max withdraw amount
+  // Set max withdraw amount (wallet + settlement available)
   const handleMaxWithdraw = () => {
-    if (availableBalance) {
-      setWithdrawAmount(formatEther(availableBalance));
+    // 可提现 = 派生钱包余额 + Settlement 可用（不含挂单锁定）
+    const withdrawable = derivedWalletBalance + settlementAvailable;
+    if (withdrawable > 0n) {
+      setWithdrawAmount(formatUnits(withdrawable, 18));
     }
   };
 
@@ -118,7 +154,7 @@ export default function WalletPage() {
           <div className="space-y-6">
             {/* Balance Overview */}
             <div className="grid md:grid-cols-2 gap-4">
-              {/* Wallet Balance Card */}
+              {/* Derived Wallet Balance Card */}
               <div className="bg-okx-bg-secondary rounded-2xl border border-okx-border-primary p-6">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="w-10 h-10 rounded-full bg-blue-500/20 flex items-center justify-center">
@@ -127,16 +163,16 @@ export default function WalletPage() {
                   <div>
                     <div className="text-okx-text-tertiary text-sm">{t("walletBalance")}</div>
                     <div className="text-xl font-bold text-okx-text-primary">
-                      {formatBalance(walletBalance)} ETH
+                      Ξ {formatBalance(derivedWalletBalance)}
                     </div>
                   </div>
                 </div>
                 <div className="text-okx-text-tertiary text-xs font-mono truncate">
-                  {address}
+                  {tradingWalletAddr || address}
                 </div>
               </div>
 
-              {/* Vault Balance Card */}
+              {/* Settlement Balance Card */}
               <div className="bg-okx-bg-secondary rounded-2xl border border-okx-border-primary p-6">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="w-10 h-10 rounded-full bg-okx-up/20 flex items-center justify-center">
@@ -145,17 +181,21 @@ export default function WalletPage() {
                   <div>
                     <div className="text-okx-text-tertiary text-sm">{t("vaultBalance")}</div>
                     <div className="text-xl font-bold text-okx-text-primary">
-                      {formatBalance(vaultBalance)} ETH
+                      Ξ {formatBalance(vaultBalance)}
                     </div>
                   </div>
                 </div>
                 <div className="flex justify-between text-sm">
                   <span className="text-okx-text-tertiary">{t("available")}:</span>
-                  <span className="text-okx-up">{formatBalance(availableBalance)} ETH</span>
+                  <span className="text-okx-up">Ξ {formatBalance(availableBalance)}</span>
+                </div>
+                <div className="flex justify-between text-sm mt-1">
+                  <span className="text-okx-text-tertiary">Settlement:</span>
+                  <span className="text-blue-400">Ξ {formatBalance(settlementAvailable)}</span>
                 </div>
                 <div className="flex justify-between text-sm mt-1">
                   <span className="text-okx-text-tertiary">{t("locked")}:</span>
-                  <span className="text-yellow-500">{formatBalance(lockedMargin)} ETH</span>
+                  <span className="text-yellow-500">Ξ {formatBalance(settlementLocked)}</span>
                 </div>
               </div>
             </div>
@@ -216,7 +256,7 @@ export default function WalletPage() {
                         </button>
                       </div>
                       <div className="text-okx-text-tertiary text-sm mt-2">
-                        {t("walletBalance")}: {formatBalance(walletBalance)} ETH
+                        {t("walletBalance")}: Ξ {formatBalance(derivedWalletBalance)}
                       </div>
                     </div>
 
@@ -257,19 +297,19 @@ export default function WalletPage() {
                         </button>
                       </div>
                       <div className="text-okx-text-tertiary text-sm mt-2">
-                        {t("available")}: {formatBalance(availableBalance)} ETH
+                        {t("available")}: Ξ {formatBalance(availableBalance)}
                       </div>
                     </div>
 
                     <button
                       onClick={handleWithdraw}
-                      disabled={isPending || isConfirming || !withdrawAmount}
+                      disabled={isPending || isConfirming || isWithdrawing || !withdrawAmount}
                       className="w-full bg-okx-down text-white py-3 rounded-xl font-bold hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {isPending || isConfirming ? (
+                      {isPending || isConfirming || isWithdrawing ? (
                         <span className="flex items-center justify-center gap-2">
                           <LoadingSpinner />
-                          {isConfirming ? t("confirming") : t("processing")}
+                          {isWithdrawing ? t("processing") : isConfirming ? t("confirming") : t("processing")}
                         </span>
                       ) : (
                         t("withdrawButton")
@@ -281,7 +321,9 @@ export default function WalletPage() {
                 {/* Error Message */}
                 {(actionError || error) && (
                   <div className="mt-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl">
-                    <p className="text-red-500 text-sm">{actionError || error?.message}</p>
+                    <p className="text-red-500 text-sm">
+                      {actionError || (typeof error === 'string' ? error : (error as unknown as Error)?.message)}
+                    </p>
                   </div>
                 )}
 
@@ -392,8 +434,8 @@ function WalletIcon({ className }: { className?: string }) {
 function EthIcon({ className }: { className?: string }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 1.5l-7 10.5 7 4 7-4-7-10.5z" opacity="0.6" />
-      <path d="M5 12l7 4 7-4-7 10.5L5 12z" />
+      <path d="M12 1.5L4.5 12L12 16.5L19.5 12L12 1.5Z" opacity="0.6" />
+      <path d="M12 16.5L4.5 12L12 22.5L19.5 12L12 16.5Z" opacity="0.9" />
     </svg>
   );
 }

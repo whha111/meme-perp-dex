@@ -2,8 +2,8 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Script.sol";
-import "../src/core/Vault.sol";
-import "../src/core/PositionManager.sol";
+import "../src/common/Vault.sol";
+import "../src/perpetual/PositionManager.sol";
 
 /**
  * @title TestFeeCollection

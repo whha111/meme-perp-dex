@@ -8,18 +8,17 @@
 import { type Address } from "viem";
 
 /**
- * DomainFi DEX Contract Addresses
+ * DEX Contract Addresses (Uniswap V2 Compatible)
  *
  * Base Sepolia addresses:
- * - These are DomainFi's own DEX contracts (Uniswap V2 compatible)
  * - Graduated tokens from bonding curve are migrated to this DEX
  * - Can be overridden via environment variables
  */
 export const UNISWAP_V2_ADDRESSES = {
-  // DomainFi DEX Router (Base Sepolia)
+  // DEX Router (Base Sepolia)
   ROUTER: (process.env.NEXT_PUBLIC_DEX_ROUTER ||
     "0x5AAf159EFb99069489A4d111c66f9E9147E1EF94") as Address,
-  // DomainFi DEX Factory (Base Sepolia)
+  // DEX Factory (Base Sepolia)
   FACTORY: (process.env.NEXT_PUBLIC_DEX_FACTORY ||
     "0x8c87e2ECeBCEc34eCc6d8971d8C3BbcC8F449029") as Address,
   // WETH address on Base Sepolia

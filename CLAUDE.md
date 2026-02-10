@@ -19,13 +19,18 @@ cat /Users/qinlinqiu/Desktop/meme-perp-dex/DEVELOPMENT_RULES.md
 
 ## 当前状态
 
-系统存在严重的架构问题，合约之间调用链断裂，前端调用错误的合约函数。
+系统架构已完成清理和优化 (2026-02-02)。
 
-**核心问题:**
-1. TokenFactory 交易不更新 PriceFeed 价格
-2. 前端调用旧的单代币函数，合约已支持多代币
-3. PnL 和强平价格计算公式不符合行业标准
-4. 前端没有显示仓位信息
+**已解决:**
+- ✅ API URL 统一到 `config/api.ts`
+- ✅ WebSocket 统一到 `useUnifiedWebSocket`
+- ✅ Store 统一到 `tradingDataStore`
+- ✅ 死代码已清理 (~2000+ 行)
+
+**仍需注意:**
+1. TokenFactory 交易需同步更新 PriceFeed 价格
+2. 使用多代币函数 `openLongToken/openShortToken`
+3. PnL 和强平价格计算必须符合行业标准
 
 ## 行业标准 (必须遵循)
 
@@ -43,12 +48,40 @@ hasProfit = isLong ? (currentPrice > avgPrice) : (avgPrice > currentPrice)
 
 ## 关键文件位置
 
+**架构已重构 (2026-02-02)**: 现货和合约代码已分离到独立目录
+
 | 功能 | 合约 | 前端 |
 |------|------|------|
-| 价格 | contracts/src/core/PriceFeed.sol | - |
-| 仓位 | contracts/src/core/PositionManager.sol | frontend/src/hooks/usePerpetual.ts |
-| 交易 | contracts/src/core/TokenFactory.sol | frontend/src/hooks/useExecuteSwap.ts |
-| 下单面板 | - | frontend/src/components/trading/PerpetualOrderPanel.tsx |
+| 价格 | contracts/src/common/PriceFeed.sol | - |
+| 仓位 | contracts/src/perpetual/PositionManager.sol | frontend/src/hooks/perpetual/usePerpetualV2.ts |
+| 现货交易 | contracts/src/spot/TokenFactory.sol | frontend/src/hooks/spot/useExecuteSwap.ts |
+| 合约下单面板 | - | frontend/src/components/perpetual/PerpetualOrderPanelV2.tsx |
+| 现货下单面板 | - | frontend/src/components/spot/SwapPanelOKX.tsx |
+| 交易状态 | - | frontend/src/lib/stores/tradingDataStore.ts |
+| API 配置 | - | frontend/src/config/api.ts |
+
+### 目录结构
+
+```
+frontend/src/
+├── components/
+│   ├── common/      # 共用组件 (OrderBook, TradeHistory, PriceBoard)
+│   ├── spot/        # 现货交易组件
+│   └── perpetual/   # 合约交易组件
+├── hooks/
+│   ├── common/      # 共用 hooks (useETHPrice, useMarketData)
+│   ├── spot/        # 现货 hooks (useSpotSwap, useTokenFactory)
+│   └── perpetual/   # 合约 hooks (usePerpetualV2, useRiskControl)
+
+contracts/src/
+├── common/          # 共用合约 (PriceFeed, Vault, ContractRegistry)
+├── spot/            # 现货合约 (TokenFactory, AMM, Router)
+└── perpetual/       # 合约合约 (PositionManager, Settlement, Liquidation)
+
+backend/src/
+├── matching/        # 合约撮合引擎
+└── spot/            # 现货后端服务
+```
 
 ## 禁止事项
 

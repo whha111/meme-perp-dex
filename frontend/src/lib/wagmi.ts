@@ -16,7 +16,7 @@ const isMainnet = chainId === 8453;
 
 // Get RPC URLs for both chains
 const mainnetRpcUrl = process.env.NEXT_PUBLIC_BASE_MAINNET_RPC_URL || "https://mainnet.base.org";
-const testnetRpcUrl = process.env.NEXT_PUBLIC_BASE_TESTNET_RPC_URL || "https://sepolia.base.org";
+const testnetRpcUrl = process.env.NEXT_PUBLIC_BASE_TESTNET_RPC_URL || "https://base-sepolia-rpc.publicnode.com";
 
 // Get WalletConnect Project ID from environment
 const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "";

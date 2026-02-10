@@ -199,6 +199,28 @@ Custom Hook (usePerpetualToken)
 | A-02 | 没有 Keeper 更新资金费率 | 系统架构 | ✅ 已修复 (2026-01-21) |
 | A-03 | 没有清算机器人 | 系统架构 | ✅ 已修复 - 支持多代币 (2026-01-21) |
 
+### 🔴 借贷合约问题
+
+| ID | 问题 | 文件 | 状态 |
+|----|------|------|------|
+| L-01 | claimInterest() 未减少 totalDeposits，导致会计膨胀 | LendingPool.sol | ✅ 已修复 (2026-02-10) |
+
+### 🔴 V2 审计发现 (2026-02-10 全项目审计)
+
+| ID | 严重性 | 问题 | 文件 | 状态 |
+|----|--------|------|------|------|
+| V2-C01 | Critical | Settlement funding fee 双重收费 (用 openTime 不更新) | Settlement.sol | ✅ 已修复 - 用 lastFundingSettled 替代 openTime |
+| V2-C04 | Critical | parseFloat*1e18 精度丢失 (>9007 ETH 失败) | usePerpetualV2.ts | ✅ 已修复 - 改用 parseEther() |
+| V2-C06 | Critical | 私钥存 React state (DevTools 可见) | useTradingWallet.ts | ✅ 已修复 - 改用 useRef 存储私钥 |
+| V2-C05 | Critical | buy/sell 默认 minOut=0n (三明治攻击) | useTokenFactory.ts | ✅ 已修复 - 移除默认值强制传入 |
+| V2-C03 | Critical | LendingPool share inflation attack | LendingPool.sol | ✅ 已修复 - 添加 virtual offset + 最小首存 |
+| V2-H08 | High | closePair 无签名验证 (可冒充平仓) | orderSigning.ts | ✅ 已修复 - 添加签名验证 |
+| V2-H11 | High | 浮点数计算 minAmountOut (精度丢失) | useSpotSwap.ts | ✅ 已修复 - 改用 bigint 计算 |
+| V2-H10 | High | HTTP 明文传签名 (无 TLS) | api.ts | ✅ 已修复 - 生产环境强制 HTTPS |
+| V2-H09 | High | 4 个独立 WebSocket 连接 | useWebSocketMarketData.ts | ⚠️ 已标记废弃 - 推荐迁移到 useUnifiedWebSocket |
+| V2-H03 | High | ADL 只发事件不执行 | Settlement.sol | ✅ 确认合约逻辑正确 - 链下撮合引擎监听 ADLTriggered |
+| V2-C02 | Critical | 保险金碎片化 (三个独立余额) | V1 合约 | ✅ V1 已废弃 - V2 Settlement 统一用 balances[insuranceFund] |
+
 ### 🟢 中等问题 (优化项)
 
 | ID | 问题 | 文件 | 状态 |
@@ -270,6 +292,56 @@ Custom Hook (usePerpetualToken)
 ---
 
 ## 六、修复记录
+
+### 2026-02-10 (V2 全项目安全审计修复 — 11 个发现)
+
+**V1 架构已确认废弃，以下修复全部针对 V2 架构。**
+
+**合约修复 (3 个):**
+- V2-C01: Settlement.sol `_settleFunding()` 双重收费 — 添加 `lastFundingSettled` 字段到 PairedPosition，每次结算后更新，避免从 openTime 重复计算
+- V2-C03: LendingPool.sol share inflation attack — 添加 `VIRTUAL_SHARES/VIRTUAL_ASSETS` offset + `MIN_INITIAL_DEPOSIT=1000` 最小首存量
+- V2-C01 详细：`pos.lastFundingSettled += periods * FUNDING_INTERVAL` 对齐到周期边界
+
+**前端修复 (7 个):**
+- V2-C04: usePerpetualV2.ts 提现金额转换 `BigInt(Math.floor(parseFloat(amount)*1e18))` → `parseEther(amount)`
+- V2-C06: useTradingWallet.ts 私钥从 `useState` 改为 `useRef`，不再暴露给 React DevTools
+- V2-C05: useTokenFactory.ts buy/sell 移除 `minOut=0n` 默认值，强制调用者传入滑点保护值
+- V2-H08: orderSigning.ts `requestClosePair` 添加签名参数 + `getClosePairMessage` 签名消息生成
+- V2-H11: useSpotSwap.ts `minAmountOut` 从浮点计算改为 bigint 基点计算
+- V2-H10: api.ts 生产环境自动升级 HTTP→HTTPS
+- V2-H09: useWebSocketMarketData.ts 添加 @deprecated 标记，推荐迁移到 useUnifiedWebSocket
+
+**降级/关闭 (2 个):**
+- V2-H03: Settlement ADL — 确认 `executeADL()` 实际调用 `_closePair()`，逻辑正确。`ADLTriggered` 事件是链下撮合引擎的 ADL 触发信号
+- V2-C02: 保险金碎片化 — V1 问题，V2 Settlement 已统一使用 `balances[insuranceFund]` 内部记账
+
+**修改的文件:**
+- `contracts/src/perpetual/Settlement.sol` — PairedPosition 添加 lastFundingSettled 字段 + _settleFunding 修复
+- `contracts/src/spot/LendingPool.sol` — 添加 MIN_INITIAL_DEPOSIT + VIRTUAL_SHARES offset
+- `frontend/src/hooks/perpetual/usePerpetualV2.ts` — parseEther + closePair 签名
+- `frontend/src/hooks/perpetual/useTradingWallet.ts` — privateKey useState→useRef
+- `frontend/src/hooks/spot/useTokenFactory.ts` — 移除 minOut 默认值
+- `frontend/src/hooks/spot/useSpotSwap.ts` — bigint 滑点计算
+- `frontend/src/utils/orderSigning.ts` — closePair 签名 + getClosePairMessage
+- `frontend/src/config/api.ts` — 生产环境 HTTPS 强制
+- `frontend/src/hooks/common/useWebSocketMarketData.ts` — @deprecated 标记
+
+### 2026-02-10 (LendingPool claimInterest 会计 bug 修复)
+**合约修复:**
+- L-01: `claimInterest()` 转出利息代币但未减少 `pool.totalDeposits`，导致会计膨胀。
+  长期后果：totalDeposits 超出合约实际余额，最后提取的用户无法 withdraw。
+  修复：在 `safeTransfer` 前添加 `pool.totalDeposits -= interest;`
+
+**新增测试 (4 个):**
+- `test_ClaimInterest_ReducesTotalDeposits` — 验证 totalDeposits 在 claim 后减少
+- `test_ClaimInterest_BalanceInvariant` — 验证 `contractBalance >= totalDeposits - totalBorrowed` 不变量
+- `test_ClaimInterest_MultiUser_WithdrawAfterClaim` — 多用户场景：一人 claim 后其他人仍可完整 withdraw
+- `test_ClaimInterest_ZeroPending_NoOp` — 零利息 claim 不影响 totalDeposits
+
+**修改的文件:**
+- `contracts/src/spot/LendingPool.sol` — claimInterest() +1 行
+- `contracts/test/LendingPool.t.sol` — +4 个新测试
+- 测试结果: 50 passed, 0 failed
 
 ### 2026-01-21 (第二批修复)
 **合约修复:**
@@ -388,9 +460,69 @@ cast send $SETTLEMENT_ADDRESS "setAuthorizedMatcher(address,bool)" $MATCHER_ADDR
 
 ---
 
-**最后更新**: 2026-01-25
+**最后更新**: 2026-02-10
 **下次修改前必须先读取本文件**
-**V2 Settlement 架构已添加！**
+**V2 Settlement 架构已添加！V1 已废弃！**
+
+---
+
+## 九、PerpVault 生产级审计修复记录
+
+### 2026-02-10 — 基于 GMX V1/V2、HyperLiquid、Jupiter、Gains Network 源码级审计
+
+**审计报告**: `PERPVAULT_AUDIT_REPORT.md`
+
+**修复的致命问题 (C1-C3):**
+
+| ID | 问题 | 对标 | 修复 |
+|----|------|------|------|
+| C1 | 池子价值不含未实现盈亏 | GMX `getAum()`, Jupiter AUM, Gains `accPnlPerTokenUsed` | 添加 `netPendingPnL` + `updatePendingPnL()` + 修改 `getPoolValue()` |
+| C2 | 无 ADL 自动减仓机制 | GMX V2 `AdlUtils.sol`, HyperLiquid 阶梯式减仓 | `shouldADL()` 视图 + `settleTraderProfit` 部分结算替代 revert |
+| C3 | 低流动性代币仓位无限制 | HyperLiquid JELLY 事件教训 | 运营层面合理配置 `maxOIPerToken` |
+
+**修复的高优先级问题 (H1-H2):**
+
+| ID | 问题 | 对标 | 修复 |
+|----|------|------|------|
+| H1 | 冷却期 hardcoded 不可调 | GMX `cooldownDuration` 可配置 | `setCooldown()` + `MAX_COOLDOWN=7days` |
+| H2 | 无存款上限/私有模式 | GMX `inPrivateMode` + `maxUsdgAmount` | `setMaxPoolValue()` + `setDepositsPaused()` |
+
+**新增函数:**
+```solidity
+// C1: 未实现盈亏
+function updatePendingPnL(int256 _netPnL) external onlyAuthorized;
+function getRawBalance() public view returns (uint256);
+
+// C2: ADL
+function shouldADL() public view returns (bool shouldTrigger, uint256 pnlToPoolBps);
+
+// H1: 可配置冷却期
+function setCooldown(uint256 _cooldown) external onlyOwner;
+
+// H2: 存款控制
+function setMaxPoolValue(uint256 _maxValue) external onlyOwner;
+function setDepositsPaused(bool _paused) external onlyOwner;
+
+// 扩展统计
+function getExtendedStats() external view returns (...);
+```
+
+**关键公式变更:**
+```solidity
+// BEFORE:
+getPoolValue() = address(this).balance
+
+// AFTER (GMX 标准):
+getPoolValue() = address(this).balance - netPendingPnL
+// netPendingPnL > 0 = 交易者赚钱 = 池子负债
+// netPendingPnL < 0 = 交易者亏钱 = 池子资产
+```
+
+**撮合引擎需要配合的改动:**
+- 每次开仓/平仓/价格变动时调用 `updatePendingPnL()`
+- 定期检查 `shouldADL()` 并执行减仓
+
+**测试覆盖: 85 个测试全部通过** (原 57 + 新增 28)
 
 ---
 

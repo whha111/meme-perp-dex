@@ -7,10 +7,11 @@
  */
 
 import "dotenv/config";
-import { type Address, type Hex, verifyTypedData, createPublicClient, http } from "viem";
+import { type Address, type Hex, verifyTypedData, createPublicClient, http, webSocket } from "viem";
 import { baseSepolia } from "viem/chains";
 import { WebSocketServer, WebSocket } from "ws";
-import { MatchingEngine, SettlementSubmitter, OrderType, OrderStatus, TimeInForce, OrderSource, type Order, type Match, type Trade, type Kline, type TokenStats } from "./engine";
+import { MatchingEngine, OrderType, OrderStatus, TimeInForce, OrderSource, registerPriceChangeCallback, type Order, type Match, type Trade, type Kline, type TokenStats } from "./engine";
+// ❌ Mode 2: SettlementSubmitter 已从导入中移除
 import type { TradeRecord } from "./types";
 import db, {
   PositionRepo,
@@ -24,8 +25,35 @@ import db, {
   type SettlementLog,
   type MarketStats,
 } from "./database";
-import { connectRedis as connectNewRedis } from "./database/redis";
+import { connectRedis as connectNewRedis, TradeRepo, OrderMarginRepo, Mode2AdjustmentRepo, SettlementLogRepo as RedisSettlementLogRepo, withLock, safeBigInt, cleanupStaleOrders, cleanupClosedPositions, type PerpTrade } from "./database/redis";
 import { verifyOrderSignature } from "./utils/crypto";
+import { createWalletClient } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { getSigningKey, getActiveSessionForDerived, registerTradingSession } from "./modules/wallet";
+import { getTokenHolders } from "./modules/tokenHolders";
+// ============================================================
+// Mode 2 Modules (Off-chain Execution + On-chain Attestation)
+// ============================================================
+import { initializeSnapshotModule, startSnapshotJob, getUserProof, getSnapshotJobStatus } from "./modules/snapshot";
+import { initializeWithdrawModule, requestWithdrawal, getWithdrawModuleStatus } from "./modules/withdraw";
+import {
+  initLendingLiquidation,
+  detectLendingLiquidations,
+  updateLendingLiquidationQueue,
+  processLendingLiquidations,
+  getActiveBorrows,
+  getLendingLiquidationMetrics,
+  trackBorrow,
+  trackRepay,
+} from "./modules/lendingLiquidation";
+import {
+  initPerpVault,
+  isPerpVaultEnabled,
+  getPoolStats as getPerpVaultPoolStats,
+  getTokenOI as getPerpVaultTokenOI,
+  getLPInfo as getPerpVaultLPInfo,
+  getPerpVaultMetrics,
+} from "./modules/perpVault";
 
 // ============================================================
 // Configuration
@@ -33,19 +61,44 @@ import { verifyOrderSignature } from "./utils/crypto";
 
 const PORT = parseInt(process.env.PORT || "8081");
 const RPC_URL = process.env.RPC_URL || "https://base-sepolia-rpc.publicnode.com";
+const WSS_URL = process.env.WSS_URL || "wss://base-sepolia-rpc.publicnode.com";
 const MATCHER_PRIVATE_KEY = process.env.MATCHER_PRIVATE_KEY as Hex;
 const SETTLEMENT_ADDRESS = process.env.SETTLEMENT_ADDRESS as Address;
-const TOKEN_FACTORY_ADDRESS = (process.env.TOKEN_FACTORY_ADDRESS || "0x4a9aa9CBE6011923267c090817AEEF98B3Ab3ce3") as Address;
-const PRICE_FEED_ADDRESS = (process.env.PRICE_FEED_ADDRESS || "0xf6CE7410c07711ABc2bD700A98a5f49f30599B61") as Address;
+const TOKEN_FACTORY_ADDRESS = (process.env.TOKEN_FACTORY_ADDRESS || "0x8de2Ce2a0f974b4CB00EC5B56BD89382690b5523") as Address;
+const PRICE_FEED_ADDRESS = (process.env.PRICE_FEED_ADDRESS || "0xa97a1E55cFfF5C1e45Ac2c1D882717cDD4F44e01") as Address;
+const LENDING_POOL_ADDRESS_LOCAL = (process.env.LENDING_POOL_ADDRESS || "0x7Ddb15B5E680D8a74FE44958d18387Bb3999C633") as Address;
+const LIQUIDATION_ADDRESS_LOCAL = (process.env.LIQUIDATION_ADDRESS || "0x80c720F87cd061B5952d1d84Ce900aa91CBB167B") as Address;
+const PERP_VAULT_ADDRESS_LOCAL = (process.env.PERP_VAULT_ADDRESS || "") as Address;
 const BATCH_INTERVAL_MS = parseInt(process.env.BATCH_INTERVAL_MS || "30000"); // 30 seconds
 const FUNDING_RATE_INTERVAL_MS = parseInt(process.env.FUNDING_RATE_INTERVAL_MS || "5000"); // 5 seconds
 const SPOT_PRICE_SYNC_INTERVAL_MS = parseInt(process.env.SPOT_PRICE_SYNC_INTERVAL_MS || "1000"); // 1 second
 const SKIP_SIGNATURE_VERIFY = process.env.SKIP_SIGNATURE_VERIFY === "true"; // 测试模式：跳过签名验证
+const FEE_RECEIVER_ADDRESS = (process.env.FEE_RECEIVER_ADDRESS || "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE").toLowerCase() as Address; // 平台手续费接收钱包
+
+// ETH/USD 价格 - 仅用于 UI 参考显示，不影响 ETH 本位交易逻辑
+// TODO: 可后续接入价格预言机 (如 Chainlink) 获取实时价格
+let currentEthPriceUsd = 2500;
 
 // 支持的代币列表（动态从 TokenFactory 获取）
 const SUPPORTED_TOKENS: Address[] = [
   // 不再硬编码，从链上 TokenFactory.getAllTokens() 获取
 ];
+
+// ============================================================
+// 毕业代币追踪 (Uniswap V2 价格源切换)
+// ============================================================
+// 当代币从 bonding curve 毕业到 Uniswap V2 后，价格源需要切换
+// token address (lowercase) => { pairAddress, isWethToken0 }
+
+const WETH_ADDRESS = "0x4200000000000000000000000000000000000006" as Address;
+const UNISWAP_V2_FACTORY_ADDRESS = "0x02a84c1b3BBD7401a5f7fa98a384EBC70bB5749E" as Address;
+
+interface GraduatedTokenInfo {
+  pairAddress: Address;    // Uniswap V2 Pair 地址
+  isWethToken0: boolean;   // WETH 是否为 token0 (影响 reserve 顺序)
+}
+
+const graduatedTokens = new Map<string, GraduatedTokenInfo>();
 
 // ============================================================
 // EIP-712 Types for Signature Verification
@@ -72,50 +125,13 @@ const ORDER_TYPES = {
   ],
 } as const;
 
-// Settlement 合约 ABI (用于读取链上仓位和监听事件)
+// ============================================================
+// Settlement 合约 ABI (Mode 2 精简版 - 仅资金托管)
+// ============================================================
+// Mode 2: 移除所有仓位相关函数 (getPairedPosition, settleBatch, closePair, liquidate)
+// 仅保留: 余额查询、存款、提款、资金事件监听
 const SETTLEMENT_ABI = [
-  // ========== View Functions ==========
-  {
-    inputs: [{ name: "user", type: "address" }],
-    name: "getUserPairIds",
-    outputs: [{ type: "uint256[]" }],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [{ name: "pairId", type: "uint256" }],
-    name: "getPairedPosition",
-    outputs: [
-      {
-        components: [
-          { name: "pairId", type: "uint256" },
-          { name: "longTrader", type: "address" },
-          { name: "shortTrader", type: "address" },
-          { name: "token", type: "address" },
-          { name: "size", type: "uint256" },
-          { name: "entryPrice", type: "uint256" },
-          { name: "longCollateral", type: "uint256" },
-          { name: "shortCollateral", type: "uint256" },
-          { name: "longLeverage", type: "uint256" },
-          { name: "shortLeverage", type: "uint256" },
-          { name: "openTime", type: "uint256" },
-          { name: "accFundingLong", type: "int256" },
-          { name: "accFundingShort", type: "int256" },
-          { name: "status", type: "uint8" },
-        ],
-        type: "tuple",
-      },
-    ],
-    stateMutability: "view",
-    type: "function",
-  },
-  {
-    inputs: [],
-    name: "nextPairId",
-    outputs: [{ type: "uint256" }],
-    stateMutability: "view",
-    type: "function",
-  },
+  // ========== View Functions (资金托管) ==========
   {
     inputs: [{ name: "user", type: "address" }],
     name: "getUserBalance",
@@ -126,7 +142,37 @@ const SETTLEMENT_ABI = [
     stateMutability: "view",
     type: "function",
   },
-  // ========== Events (用于监听链上状态变化) ==========
+  // ========== Write Functions (资金托管) ==========
+  {
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "deposit",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    // depositETH: 存入原生 ETH → 自动包装为 WETH → 计入用户 available 余额
+    // 调用者 (msg.sender) 的 ETH 被发送到合约，合约内部 wrap 为 WETH
+    inputs: [],
+    name: "depositETH",
+    outputs: [],
+    stateMutability: "payable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "token", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "withdraw",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  // ========== Events (资金变动监听) ==========
   {
     type: "event",
     name: "Deposited",
@@ -153,42 +199,22 @@ const SETTLEMENT_ABI = [
       { name: "amount", type: "uint256", indexed: false },
     ],
   },
-  {
-    type: "event",
-    name: "PairOpened",
-    inputs: [
-      { name: "pairId", type: "uint256", indexed: true },
-      { name: "longTrader", type: "address", indexed: true },
-      { name: "shortTrader", type: "address", indexed: true },
-      { name: "token", type: "address", indexed: false },
-      { name: "size", type: "uint256", indexed: false },
-      { name: "entryPrice", type: "uint256", indexed: false },
-    ],
-  },
-  {
-    type: "event",
-    name: "PairClosed",
-    inputs: [
-      { name: "pairId", type: "uint256", indexed: true },
-      { name: "exitPrice", type: "uint256", indexed: false },
-      { name: "longPnL", type: "int256", indexed: false },
-      { name: "shortPnL", type: "int256", indexed: false },
-    ],
-  },
-  {
-    type: "event",
-    name: "Liquidated",
-    inputs: [
-      { name: "pairId", type: "uint256", indexed: true },
-      { name: "liquidatedTrader", type: "address", indexed: true },
-      { name: "liquidator", type: "address", indexed: true },
-      { name: "reward", type: "uint256", indexed: false },
-    ],
-  },
 ] as const;
 
 // TokenFactory ABI (用于监听现货交易事件)
 const TOKEN_FACTORY_ABI = [
+  {
+    type: "event",
+    name: "TokenCreated",
+    inputs: [
+      { name: "tokenAddress", type: "address", indexed: true },
+      { name: "creator", type: "address", indexed: true },
+      { name: "name", type: "string", indexed: false },
+      { name: "symbol", type: "string", indexed: false },
+      { name: "uri", type: "string", indexed: false },
+      { name: "totalSupply", type: "uint256", indexed: false },
+    ],
+  },
   {
     type: "event",
     name: "Trade",
@@ -217,6 +243,85 @@ const TOKEN_FACTORY_ABI = [
     stateMutability: "view",
     type: "function",
   },
+  // getPoolState - 用于检测代币毕业状态
+  {
+    inputs: [{ name: "tokenAddress", type: "address" }],
+    name: "getPoolState",
+    outputs: [{
+      name: "",
+      type: "tuple",
+      components: [
+        { name: "realETHReserve", type: "uint256" },
+        { name: "realTokenReserve", type: "uint256" },
+        { name: "soldTokens", type: "uint256" },
+        { name: "isGraduated", type: "bool" },
+        { name: "isActive", type: "bool" },
+        { name: "creator", type: "address" },
+        { name: "createdAt", type: "uint64" },
+        { name: "metadataURI", type: "string" },
+        { name: "graduationFailed", type: "bool" },
+        { name: "graduationAttempts", type: "uint8" },
+        { name: "perpEnabled", type: "bool" },
+      ],
+    }],
+    stateMutability: "view",
+    type: "function",
+  },
+  // LiquidityMigrated 事件 - 代币毕业到 Uniswap V2
+  {
+    type: "event",
+    name: "LiquidityMigrated",
+    inputs: [
+      { name: "tokenAddress", type: "address", indexed: true },
+      { name: "pairAddress", type: "address", indexed: true },
+      { name: "ethLiquidity", type: "uint256", indexed: false },
+      { name: "tokenLiquidity", type: "uint256", indexed: false },
+      { name: "timestamp", type: "uint256", indexed: false },
+    ],
+  },
+] as const;
+
+// Uniswap V2 Pair ABI (用于毕业后从 DEX 读取价格)
+const UNISWAP_V2_PAIR_ABI = [
+  {
+    inputs: [],
+    name: "getReserves",
+    outputs: [
+      { name: "reserve0", type: "uint112" },
+      { name: "reserve1", type: "uint112" },
+      { name: "blockTimestampLast", type: "uint32" },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "token0",
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "token1",
+    outputs: [{ name: "", type: "address" }],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
+
+// Uniswap V2 Factory ABI (用于查找 Pair 地址)
+const UNISWAP_V2_FACTORY_ABI = [
+  {
+    inputs: [
+      { name: "tokenA", type: "address" },
+      { name: "tokenB", type: "address" },
+    ],
+    name: "getPair",
+    outputs: [{ name: "pair", type: "address" }],
+    stateMutability: "view",
+    type: "function",
+  },
 ] as const;
 
 // ============================================================
@@ -224,10 +329,14 @@ const TOKEN_FACTORY_ABI = [
 // ============================================================
 
 const engine = new MatchingEngine();
-let submitter: SettlementSubmitter | null = null;
+// ❌ Mode 2: submitter 已移除，不再提交到链上
+// let submitter: SettlementSubmitter | null = null;
 
-// Current ETH price in USD (updated periodically)
-let currentEthPriceUsd = 2500; // Default fallback
+// ============================================================
+// ETH 本位系统: 不再需要 ETH/USD 价格
+// ============================================================
+// 所有计算直接使用 Token/ETH 价格 (1e18)
+// 用户 PnL 只受 Token/ETH 波动影响，与 ETH/USD 无关
 
 // WebSocket state
 let wss: WebSocketServer | null = null;
@@ -239,6 +348,10 @@ const wsRiskSubscribers = new Set<WebSocket>(); // clients subscribed to global 
 let lastRiskBroadcast = 0;
 const RISK_BROADCAST_INTERVAL_MS = 500; // Broadcast risk data every 500ms max
 
+// Liquidation map broadcast throttling (per token)
+const lastLiquidationMapBroadcast = new Map<Address, number>();
+const LIQUIDATION_MAP_BROADCAST_INTERVAL_MS = 2000; // 2 seconds between broadcasts per token
+
 // User nonces - 不再内部追踪，从链上同步
 // 撮合引擎只负责撮合，nonce验证由链上合约处理
 const userNonces = new Map<Address, bigint>();
@@ -249,12 +362,14 @@ const submittedMatches = new Map<string, Match>();
 
 // Position tracking (from on-chain events, simplified for now)
 /**
- * 仓位信息 (行业标准 - 参考 OKX/Binance/Bybit)
+ * 仓位信息 (ETH 本位 - 参考 OKX/Binance/Bybit)
  *
  * Meme Perp 特有字段：
  * - bankruptcyPrice: 穿仓价格
  * - mmr: 动态维持保证金率 (meme 需要更高)
  * - adlScore: ADL 评分用于排序
+ *
+ * ETH 本位: 所有价格/保证金/盈亏都以 ETH 计价 (1e18 精度)
  */
 interface Position {
   // === 基本标识 ===
@@ -265,32 +380,36 @@ interface Position {
   // === 仓位参数 ===
   isLong: boolean;
   size: string;                   // 仓位大小 (代币数量, 1e18)
-  entryPrice: string;             // 开仓均价 (1e12)
-  averageEntryPrice: string;      // 加仓后的平均价格 (1e12)
+  entryPrice: string;             // 开仓均价 (ETH/Token, 1e18)
+  averageEntryPrice: string;      // 加仓后的平均价格 (ETH/Token, 1e18)
   leverage: string;               // 杠杆倍数 (整数)
 
   // === 价格信息 ===
-  markPrice: string;              // 标记价格 (实时, 1e12)
-  liquidationPrice: string;       // 强平价格 (1e12)
-  bankruptcyPrice: string;        // 穿仓价格 (1e12) - 保证金归零的价格
-  breakEvenPrice: string;         // 盈亏平衡价格 (含手续费, 1e12)
+  markPrice: string;              // 标记价格 (ETH/Token, 1e18)
+  liquidationPrice: string;       // 强平价格 (ETH/Token, 1e18)
+  bankruptcyPrice: string;        // 穿仓价格 (ETH/Token, 1e18)
+  breakEvenPrice: string;         // 盈亏平衡价格 (含手续费, 1e18)
 
-  // === 保证金信息 ===
-  collateral: string;             // 初始保证金 (1e6 USD)
-  margin: string;                 // 当前保证金 = 初始 + UPNL (1e6 USD)
+  // === 保证金信息 (ETH 本位) ===
+  collateral: string;             // 初始保证金 (1e18 ETH)
+  margin: string;                 // 当前保证金 = 初始 + UPNL (1e18 ETH)
   marginRatio: string;            // 保证金率 (基点, 10000 = 100%)
   mmr: string;                    // 维持保证金率 (基点, 动态调整)
-  maintenanceMargin: string;      // 维持保证金金额 (1e6 USD)
+  maintenanceMargin: string;      // 维持保证金金额 (1e18 ETH)
 
-  // === 盈亏信息 ===
-  unrealizedPnL: string;          // 未实现盈亏 (1e6 USD)
-  realizedPnL: string;            // 已实现盈亏 (1e6 USD)
+  // === 盈亏信息 (ETH 本位) ===
+  unrealizedPnL: string;          // 未实现盈亏 (1e18 ETH)
+  realizedPnL: string;            // 已实现盈亏 (1e18 ETH)
   roe: string;                    // 收益率 ROE% (基点)
-  fundingFee: string;             // 累计资金费 (1e6 USD)
+  fundingFee: string;             // 累计资金费 (1e18 ETH)
 
   // === 止盈止损 ===
   takeProfitPrice: string | null;
   stopLossPrice: string | null;
+
+  // === 关联订单 ===
+  orderId: string;                // 创建此仓位的订单ID (排查用)
+  orderIds: string[];             // 所有关联订单ID (加仓时追加)
 
   // === 系统信息 ===
   counterparty: Address;
@@ -323,16 +442,111 @@ async function loadPositionsFromRedis(): Promise<void> {
     const dbPositions = await PositionRepo.getAll();
     console.log(`[Redis] Loading ${dbPositions.length} positions from database...`);
 
-    for (const dbPos of dbPositions) {
-      const memPos = dbPositionToMemory(dbPos);
-      const userAddr = memPos.trader.toLowerCase() as Address;
+    let loaded = 0;
+    let skippedLiquidating = 0;
 
-      const existing = userPositions.get(userAddr) || [];
-      existing.push(memPos);
-      userPositions.set(userAddr, existing);
+    for (const dbPos of dbPositions) {
+      try {
+        // deserializePosition 已兼容旧格式 (userAddress→trader, symbol→token, side→isLong, initialMargin→collateral)
+        // 跳过正在被强平的仓位 (上次重启前未完成的强平)
+        if (dbPos.isLiquidating) {
+          skippedLiquidating++;
+          console.log(`[Redis] Skipping liquidating position: ${dbPos.id} (${dbPos.trader?.slice(0, 10) || '?'})`);
+          // 从 Redis 中删除已标记为强平的仓位 (清理过期数据)
+          PositionRepo.delete(dbPos.id).catch(e => console.error(`[Redis] Failed to delete liquidating position: ${e}`));
+          continue;
+        }
+
+        // ✅ 清理僵尸仓位: collateral=0 且 size>0 说明已被强平但未从 Redis 清理
+        const posCollateral = BigInt(dbPos.collateral?.toString() || "0");
+        const posSize = BigInt(dbPos.size?.toString() || "0");
+        if (posCollateral <= 0n && posSize > 0n) {
+          skippedLiquidating++;
+          console.log(`[Redis] Cleaning zombie position (collateral=0): ${dbPos.id} (${dbPos.trader?.slice(0, 10) || '?'} size=${dbPos.size})`);
+          PositionRepo.delete(dbPos.id).catch(e => console.error(`[Redis] Failed to delete zombie position: ${e}`));
+          continue;
+        }
+
+        // 验证必要字段
+        // dbPos.trader 来自 deserializePosition，已兼容旧格式 (data.trader || data.userAddress)
+        const traderRaw = dbPos.trader || (dbPos as any).userAddress || "";
+        const userAddr = traderRaw.toLowerCase() as Address;
+        if (!userAddr || userAddr.length < 10) {
+          console.warn(`[Redis] Skipping position with empty trader: ${dbPos.id} (raw trader='${traderRaw}', keys=${Object.keys(dbPos).slice(0, 5).join(",")})`);
+          continue;
+        }
+
+        // token 也需要兼容旧格式
+        const tokenRaw = dbPos.token || ((dbPos as any).symbol ? (dbPos as any).symbol.replace("-ETH", "") : "");
+        const tokenAddr = tokenRaw.toLowerCase() as Address;
+        if (!tokenAddr || tokenAddr.length < 10) {
+          console.warn(`[Redis] Skipping position with empty token: ${dbPos.id} (raw token='${tokenRaw}')`);
+          continue;
+        }
+
+        // 直接使用 deserializePosition 返回的数据 (已经是正确的 Position 格式)
+        // 补充 dbPositionToMemory 中的额外处理
+        const memPos: Position = {
+          ...dbPos,
+          pairId: dbPos.pairId || dbPos.id,
+          trader: userAddr,
+          token: tokenAddr,
+          leverage: dbPos.leverage?.toString() || "1",
+          collateral: dbPos.collateral?.toString() || dbPos.margin?.toString() || "0",
+          margin: dbPos.margin?.toString() || dbPos.collateral?.toString() || "0",
+          maintenanceMargin: dbPos.maintenanceMargin?.toString() || "0",
+          markPrice: dbPos.markPrice?.toString() || "0",
+          unrealizedPnL: dbPos.unrealizedPnL?.toString() || "0",
+          marginRatio: dbPos.marginRatio?.toString() || "10000",
+          mmr: dbPos.mmr?.toString() || "200",
+          liquidationPrice: dbPos.liquidationPrice?.toString() || "0",
+          bankruptcyPrice: dbPos.bankruptcyPrice?.toString() || "0",
+          roe: dbPos.roe?.toString() || "0",
+          realizedPnL: dbPos.realizedPnL?.toString() || "0",
+          accFundingFee: "0",
+          adlRanking: dbPos.adlRanking || 1,
+          adlScore: dbPos.adlScore?.toString() || "0",
+          riskLevel: dbPos.riskLevel || "low",
+          isLiquidatable: dbPos.riskLevel === "critical",
+          isAdlCandidate: false,
+          fundingIndex: dbPos.fundingIndex?.toString() || "0",
+          size: dbPos.size?.toString() || "0",
+          entryPrice: dbPos.entryPrice?.toString() || "0",
+        };
+
+        const existing = userPositions.get(userAddr) || [];
+
+        // ✅ 修复: 去重 — 同一 (token, isLong) 只保留最新的仓位 (最大 size)
+        // 防止旧 bug 导致的重复 Redis 记录全部加载到内存
+        const dupeIndex = existing.findIndex(
+          (p) => p.token === tokenAddr && p.isLong === memPos.isLong
+        );
+        if (dupeIndex >= 0) {
+          const dupePos = existing[dupeIndex];
+          // 保留 size 更大的那个 (最终合并后的仓位)
+          if (BigInt(memPos.size) > BigInt(dupePos.size)) {
+            console.log(`[Redis] Dedup: replacing ${dupePos.pairId.slice(0, 12)} (size=${dupePos.size}) with ${memPos.pairId.slice(0, 12)} (size=${memPos.size})`);
+            // 删除旧的重复记录
+            PositionRepo.delete(dupePos.pairId).catch(e =>
+              console.error(`[Redis] Failed to delete duplicate position:`, e));
+            existing[dupeIndex] = memPos;
+          } else {
+            // 当前记录 size 更小，说明它是旧的部分成交记录，删除它
+            PositionRepo.delete(memPos.pairId).catch(e =>
+              console.error(`[Redis] Failed to delete duplicate position:`, e));
+          }
+        } else {
+          existing.push(memPos);
+        }
+
+        userPositions.set(userAddr, existing);
+        loaded++;
+      } catch (posError) {
+        console.error(`[Redis] Failed to load position ${dbPos.id}:`, posError);
+      }
     }
 
-    console.log(`[Redis] Loaded ${dbPositions.length} positions into memory`);
+    console.log(`[Redis] Loaded ${loaded} positions into memory (skipped ${skippedLiquidating} liquidating)`);
   } catch (error) {
     console.error("[Redis] Failed to load positions:", error);
   }
@@ -350,7 +564,7 @@ async function loadOrdersFromRedis(): Promise<void> {
 
     // 获取所有支持的代币
     for (const token of SUPPORTED_TOKENS) {
-      const symbol = `${token.slice(0, 10).toUpperCase()}-USDT`;
+      const symbol = `${token.slice(0, 10).toUpperCase()}-ETH`;
       symbols.add(symbol);
     }
 
@@ -380,7 +594,7 @@ async function loadOrdersFromRedis(): Promise<void> {
           avgFillPrice: BigInt(dbOrder.avgFillPrice),
           totalFillValue: 0n,
           fee: BigInt(dbOrder.fee),
-          feeCurrency: "USDT",
+          feeCurrency: "ETH",
           margin: BigInt(dbOrder.margin),
           collateral: BigInt(dbOrder.margin),
           takeProfitPrice: dbOrder.triggerPrice ? BigInt(dbOrder.triggerPrice) : undefined,
@@ -412,25 +626,63 @@ async function loadOrdersFromRedis(): Promise<void> {
 
 /**
  * 保存仓位到 Redis
+ *
+ * ✅ 修复 1：用 token + trader + isLong 查找已有仓位，避免重复创建
+ * ✅ 修复 2：per-user 锁防止并发写入创建重复记录 (partial fill 批量成交场景)
+ *
+ * 原理：当同一用户的多笔部分成交在同一个撮合批次中完成时，
+ * 多次异步 savePositionToRedis 可能并行执行。
+ * 没有锁时，第2-N次调用会在第1次创建完成前查询 Redis，找不到已有记录，
+ * 从而各自创建新记录，导致同一仓位出现多条 Redis 记录（僵尸仓位）。
  */
+const positionSaveLocks = new Map<string, Promise<string | null>>();
+
 async function savePositionToRedis(position: Position): Promise<string | null> {
   if (!db.isConnected()) return null;
 
+  // 构建锁 key: trader + token + side
+  const lockKey = `${position.trader}_${position.token}_${position.isLong}`.toLowerCase();
+
+  // 等待同一仓位的前一次保存完成 (串行化)
+  const prevLock = positionSaveLocks.get(lockKey);
+  if (prevLock) {
+    await prevLock.catch(() => {}); // 忽略前一次的错误
+  }
+
+  // 创建新的锁 promise
+  const savePromise = _doSavePositionToRedis(position);
+  positionSaveLocks.set(lockKey, savePromise);
+
+  try {
+    return await savePromise;
+  } finally {
+    // 只有当前 promise 仍是最新的锁时才清理
+    if (positionSaveLocks.get(lockKey) === savePromise) {
+      positionSaveLocks.delete(lockKey);
+    }
+  }
+}
+
+async function _doSavePositionToRedis(position: Position): Promise<string | null> {
   try {
     const dbPos = memoryPositionToDB(position);
 
-    // Check if position already exists
-    if (position.pairId && position.pairId.length > 10) {
-      // Looks like a UUID, try to update
-      const existing = await PositionRepo.get(position.pairId);
-      if (existing) {
-        await PositionRepo.update(position.pairId, dbPos);
-        return position.pairId;
-      }
+    // 先按 token + trader + side 查找已有仓位
+    const existingPositions = await PositionRepo.getByUser(position.trader);
+    const existing = existingPositions.find(
+      (p) => p.token === position.token &&
+             p.side === (position.isLong ? "LONG" : "SHORT")
+    );
+
+    if (existing) {
+      // 更新已有仓位
+      await PositionRepo.update(existing.id, dbPos);
+      return existing.id;
     }
 
-    // Create new position
+    // 创建新仓位
     const created = await PositionRepo.create(dbPos);
+    console.log(`[Redis] Position created: ${created.id} (trader=${position.trader.slice(0, 10)})`);
     return created.id;
   } catch (error) {
     console.error("[Redis] Failed to save position:", error);
@@ -500,22 +752,23 @@ async function logSettlement(
 
 /**
  * 转换: 内存 Position → DB Position
+ * ETH 本位: 所有金额字段都是 ETH (1e18 精度)
  */
 function memoryPositionToDB(pos: Position): Omit<DBPosition, "id" | "createdAt" | "updatedAt"> {
   return {
     userAddress: pos.trader.toLowerCase() as Address,
-    symbol: `${pos.token}-USDT`,
+    symbol: `${pos.token}-ETH`,  // ETH 本位交易对
     side: pos.isLong ? "LONG" : "SHORT",
     size: pos.size,
     entryPrice: pos.entryPrice,
     leverage: Number(pos.leverage),
     marginType: "ISOLATED",
-    initialMargin: pos.collateral,
-    maintMargin: pos.maintenanceMargin || "0",
+    initialMargin: pos.collateral,  // 1e18 ETH
+    maintMargin: pos.maintenanceMargin || "0",  // 1e18 ETH
     fundingIndex: pos.fundingIndex || "0",
     isLiquidating: pos.isLiquidating || false,
     markPrice: pos.markPrice,
-    unrealizedPnL: pos.unrealizedPnL,
+    unrealizedPnL: pos.unrealizedPnL,  // 1e18 ETH
     marginRatio: pos.marginRatio,
     liquidationPrice: pos.liquidationPrice,
     riskLevel: pos.riskLevel,
@@ -528,7 +781,7 @@ function memoryPositionToDB(pos: Position): Omit<DBPosition, "id" | "createdAt" 
  * 转换: DB Position → 内存 Position
  */
 function dbPositionToMemory(dbPos: DBPosition): Position {
-  const token = dbPos.symbol.replace("-USDT", "") as Address;
+  const token = dbPos.symbol.replace("-ETH", "") as Address;
   return {
     pairId: dbPos.id,
     trader: dbPos.userAddress,
@@ -680,10 +933,25 @@ async function executeADL(
   deficit: bigint
 ): Promise<void> {
   const token = bankruptPosition.token.toLowerCase() as Address;
-  const queue = adlQueues.get(token);
+
+  // ADL 诊断日志
+  console.log(`[ADL] Executing for bankrupt ${bankruptPosition.isLong ? 'LONG' : 'SHORT'} position: token=${token.slice(0, 10)}, deficit=Ξ${Number(deficit) / 1e18}`);
+  console.log(`[ADL] ADL queues available: ${adlQueues.size} tokens`);
+  for (const [qToken, q] of adlQueues) {
+    console.log(`[ADL]   ${qToken.slice(0, 10)}: longs=${q.longQueue.length}, shorts=${q.shortQueue.length}`);
+  }
+
+  let queue = adlQueues.get(token);
 
   if (!queue) {
-    console.log(`[ADL] No queue for token ${token}, socializing loss`);
+    // 尝试刷新 ADL 队列 (可能仓位加载后 PnL 未更新)
+    console.log(`[ADL] No queue for token ${token.slice(0, 10)}, refreshing ADL queues...`);
+    updateADLQueues();
+    queue = adlQueues.get(token);
+  }
+
+  if (!queue) {
+    console.log(`[ADL] Still no queue after refresh, socializing loss`);
     socializeLoss(token, deficit);
     return;
   }
@@ -691,12 +959,15 @@ async function executeADL(
   // 穿仓的是多头，需要从空头盈利队列减仓
   // 穿仓的是空头，需要从多头盈利队列减仓
   const targetQueue = bankruptPosition.isLong ? queue.shortQueue : queue.longQueue;
+  const queueType = bankruptPosition.isLong ? "SHORT (profit)" : "LONG (profit)";
 
   if (targetQueue.length === 0) {
-    console.log(`[ADL] No profitable positions to ADL against, socializing loss: $${Number(deficit) / 1e6}`);
+    console.log(`[ADL] No ${queueType} positions to ADL against, socializing loss: Ξ${Number(deficit) / 1e18}`);
     socializeLoss(token, deficit);
     return;
   }
+
+  console.log(`[ADL] Found ${targetQueue.length} ${queueType} positions for ADL`);
 
   let remainingDeficit = deficit;
   const adlTargets: { position: Position; amount: bigint }[] = [];
@@ -715,7 +986,7 @@ async function executeADL(
     adlTargets.push({ position: pos, amount: adlAmount });
     remainingDeficit -= adlAmount;
 
-    console.log(`[ADL] Target: ${pos.trader.slice(0, 10)} ${pos.isLong ? 'LONG' : 'SHORT'} deduct=$${Number(adlAmount) / 1e6}`);
+    console.log(`[ADL] Target: ${pos.trader.slice(0, 10)} ${pos.isLong ? 'LONG' : 'SHORT'} deduct=$${Number(adlAmount) / 1e18}`);
   }
 
   // 执行 ADL: 从对手方仓位中扣除金额
@@ -742,8 +1013,11 @@ async function executeADL(
         if (refund > 0n) {
           adjustUserBalance(normalizedTrader, refund, "ADL_CLOSE_REFUND");
         }
+        // Mode 2: ADL 的链下调整 = 退款 - 原始保证金 (损失部分)
+        const adlAdjustment = refund - BigInt(position.collateral);
+        addMode2Adjustment(normalizedTrader, adlAdjustment, "ADL_CLOSE");
 
-        console.log(`[ADL] Position ${position.pairId} fully closed, refund: $${Number(refund) / 1e6}`);
+        console.log(`[ADL] Position ${position.pairId} fully closed, refund: $${Number(refund) / 1e18}`);
       } else {
         // 部分平仓 - 减少仓位大小和抵押品
         const ratioMultiplier = BigInt(Math.floor((1 - adlRatio) * 1e6));
@@ -757,6 +1031,49 @@ async function executeADL(
         console.log(`[ADL] Position ${position.pairId} reduced by ${(adlRatio * 100).toFixed(2)}%`);
       }
 
+      // ✅ 记录 ADL 成交到 userTrades
+      const adlTrade: TradeRecord = {
+        id: `adl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        orderId: `adl-${position.pairId}`,
+        pairId: position.pairId,
+        token: position.token,
+        trader: position.trader,
+        isLong: position.isLong,
+        isMaker: false,
+        size: (adlRatio >= 0.99 ? BigInt(position.size) : (BigInt(position.size) * BigInt(Math.floor(adlRatio * 1e6)) / 1000000n)).toString(),
+        price: currentPrice.toString(),
+        fee: "0",
+        realizedPnL: (-amount).toString(),
+        timestamp: Date.now(),
+        type: "adl",
+      };
+      const adlTraderTrades = userTrades.get(normalizedTrader) || [];
+      adlTraderTrades.push(adlTrade);
+      userTrades.set(normalizedTrader, adlTraderTrades);
+      TradeRepo.create({
+        orderId: adlTrade.orderId, pairId: adlTrade.pairId,
+        token: token, trader: normalizedTrader,
+        isLong: adlTrade.isLong, isMaker: false,
+        size: adlTrade.size, price: adlTrade.price,
+        fee: "0", realizedPnL: adlTrade.realizedPnL,
+        timestamp: adlTrade.timestamp, type: "adl",
+      }).catch(e => console.error("[DB] Failed to save ADL trade:", e));
+
+      // ✅ 记录 ADL 账单 (穿仓补偿)
+      RedisSettlementLogRepo.create({
+        userAddress: normalizedTrader,
+        type: "SETTLE_PNL",
+        amount: (-amount).toString(),
+        balanceBefore: "0", balanceAfter: "0",
+        onChainStatus: "CONFIRMED",
+        proofData: JSON.stringify({
+          token: position.token, pairId: position.pairId,
+          isLong: position.isLong, adlRatio: adlRatio.toFixed(4),
+          deductAmount: amount.toString(), closeType: "adl",
+        }),
+        positionId: position.pairId, orderId: adlTrade.orderId, txHash: null,
+      }).catch(e => console.error("[ADL] Failed to log ADL bill:", e));
+
       // 广播 ADL 事件
       broadcastADLEvent(position, amount, currentPrice);
     } catch (e) {
@@ -764,9 +1081,53 @@ async function executeADL(
     }
   }
 
+  // ============================================================
+  // 链上 ADL 同步 (best-effort, 不阻塞链下流程)
+  // ============================================================
+  if (adlTargets.length > 0 && MATCHER_PRIVATE_KEY && LIQUIDATION_ADDRESS_LOCAL) {
+    (async () => {
+      try {
+        const sortedUsers = adlTargets.map(t => t.position.trader as Address);
+        // targetSide: true=减少多头, false=减少空头
+        // 穿仓的是多头 → 减仓空头盈利方 → targetSide=false
+        // 穿仓的是空头 → 减仓多头盈利方 → targetSide=true
+        const targetSide = !bankruptPosition.isLong;
+
+        const adlAccount = privateKeyToAccount(MATCHER_PRIVATE_KEY);
+        const adlWalletClient = createWalletClient({
+          account: adlAccount,
+          chain: baseSepolia,
+          transport: http(RPC_URL),
+        });
+
+        const tx = await adlWalletClient.writeContract({
+          address: LIQUIDATION_ADDRESS_LOCAL,
+          abi: [{
+            name: "executeADLWithSortedUsers",
+            type: "function",
+            stateMutability: "nonpayable",
+            inputs: [
+              { name: "sortedUsers", type: "address[]" },
+              { name: "targetSide", type: "bool" },
+              { name: "targetAmount", type: "uint256" },
+            ],
+            outputs: [],
+          }] as const,
+          functionName: "executeADLWithSortedUsers",
+          args: [sortedUsers, targetSide, deficit],
+        });
+        console.log(`[ADL] On-chain ADL sync submitted: ${tx}`);
+      } catch (e: any) {
+        const msg = e?.shortMessage || e?.message || String(e);
+        console.error(`[ADL] On-chain ADL sync failed (off-chain already executed): ${msg.slice(0, 100)}`);
+        // Non-fatal: off-chain state is already correct
+      }
+    })();
+  }
+
   // 如果还有剩余亏损无法通过 ADL 覆盖，则社会化损失
   if (remainingDeficit > 0n) {
-    console.log(`[ADL] Remaining deficit after ADL: $${Number(remainingDeficit) / 1e6}, socializing`);
+    console.log(`[ADL] Remaining deficit after ADL: $${Number(remainingDeficit) / 1e18}, socializing`);
     socializeLoss(token, remainingDeficit);
   }
 }
@@ -795,7 +1156,7 @@ function socializeLoss(token: Address, deficit: bigint): void {
   }
 
   if (profitablePositions.length === 0 || totalProfit <= 0n) {
-    console.log(`[SocializeLoss] No profitable positions, loss absorbed: $${Number(deficit) / 1e6}`);
+    console.log(`[SocializeLoss] No profitable positions, loss absorbed: $${Number(deficit) / 1e18}`);
     // 无法分摊，系统承担损失
     return;
   }
@@ -809,10 +1170,10 @@ function socializeLoss(token: Address, deficit: bigint): void {
     const newPnL = pnl - share;
     pos.unrealizedPnL = newPnL.toString();
 
-    console.log(`[SocializeLoss] ${pos.trader.slice(0, 10)} share: -$${Number(share) / 1e6}`);
+    console.log(`[SocializeLoss] ${pos.trader.slice(0, 10)} share: -$${Number(share) / 1e18}`);
   }
 
-  console.log(`[SocializeLoss] Deficit $${Number(deficit) / 1e6} socialized across ${profitablePositions.length} positions`);
+  console.log(`[SocializeLoss] Deficit $${Number(deficit) / 1e18} socialized across ${profitablePositions.length} positions`);
 }
 
 /**
@@ -838,23 +1199,158 @@ function broadcastADLEvent(position: Position, amount: bigint, price: bigint): v
 }
 
 // ============================================================
-// 100ms Risk Engine - Meme Perp 核心
+// Event-Driven Risk Engine - Meme Perp 核心
+// 架构参考: Hyperliquid / dYdX / Binance
+//
+// 核心原则:
+// 1. 价格变化时立即检查受影响仓位 (事件驱动, <10ms)
+// 2. 1s 周期兜底检查防止遗漏 (安全网)
 // ============================================================
 
 let riskEngineInterval: NodeJS.Timeout | null = null;
-const RISK_ENGINE_INTERVAL_MS = 100; // 100ms
-const REDIS_SYNC_CYCLES = 10; // 每 10 个周期 (1秒) 同步到 Redis
+const RISK_ENGINE_INTERVAL_MS = 1000; // 改为 1秒兜底检查
+const REDIS_SYNC_CYCLES = 1; // 每个周期同步到 Redis
 let riskEngineCycleCount = 0;
+let lendingLiqCheckCounter = 0; // 借贷清算检查计数器 (每50个风控周期 ≈ 5秒)
+
+// 事件驱动强平统计
+let eventDrivenLiquidations = 0;
+let lastEventDrivenCheck = 0;
 
 /**
- * 启动 100ms Risk Engine
+ * 事件驱动强平检查 (价格变化时触发)
+ *
+ * 当任意 token 价格变化超过 0.1% 时，立即检查该 token 的所有仓位
+ * 延迟: <10ms (vs 原100ms轮询)
+ *
+ * 参考 Hyperliquid: "When the mark price changes, check positions in real-time"
+ */
+function onPriceChange(token: Address, oldPrice: bigint, newPrice: bigint): void {
+  const startTime = Date.now();
+  const normalizedToken = token.toLowerCase() as Address;
+
+  // 计算价格变化幅度
+  const priceDelta = oldPrice > 0n
+    ? Number((newPrice > oldPrice ? newPrice - oldPrice : oldPrice - newPrice) * 10000n / oldPrice)
+    : 0;
+
+  let checkedCount = 0;
+  let liquidatedCount = 0;
+  const urgentLiquidations: Array<{
+    position: Position;
+    marginRatio: number;
+    urgency: number;
+  }> = [];
+
+  // 只检查该 token 的仓位
+  for (const [trader, positions] of userPositions.entries()) {
+    for (const pos of positions) {
+      if (pos.token.toLowerCase() !== normalizedToken) continue;
+      checkedCount++;
+
+      const entryPrice = BigInt(pos.entryPrice);
+      if (entryPrice <= 0n) continue;
+
+      // 计算 UPNL
+      const upnl = calculateUnrealizedPnL(
+        BigInt(pos.size),
+        entryPrice,
+        newPrice,
+        pos.isLong
+      );
+
+      // 计算当前保证金
+      const currentMargin = BigInt(pos.collateral) + upnl;
+
+      // 动态 MMR
+      // ⚠️ size 是 ETH 名义价值 (1e18 精度)，直接就是 positionValue
+      const positionValue = BigInt(pos.size);
+      const leverage = BigInt(pos.leverage) * 10000n;
+      const initialMarginRate = 10000n * 10000n / leverage;
+      const baseMmr = 200n;
+      const maxMmr = initialMarginRate / 2n;
+      const mmr = Number(baseMmr < maxMmr ? baseMmr : maxMmr);
+
+      // 计算维持保证金
+      const maintenanceMargin = (positionValue * BigInt(mmr)) / 10000n;
+
+      // 计算保证金率
+      const marginRatio = currentMargin > 0n
+        ? Number((maintenanceMargin * 10000n) / currentMargin)
+        : 10000;
+
+      // 检测是否需要立即强平
+      if (marginRatio >= 10000) {
+        const urgency = Math.max(0, Math.min(100, Math.floor((marginRatio - 10000) / 100)));
+
+        // 更新仓位状态
+        pos.markPrice = newPrice.toString();
+        pos.unrealizedPnL = upnl.toString();
+        pos.margin = currentMargin.toString();
+        pos.marginRatio = marginRatio.toString();
+        pos.isLiquidatable = true;
+
+        if (pos.riskLevel !== "critical") {
+          pos.riskLevel = "critical";
+          sendRiskAlert(
+            pos.trader,
+            "liquidation_warning",
+            "danger",
+            `⚡ 实时强平预警: Position ${pos.pairId.slice(0, 8)} marginRatio=${(marginRatio / 100).toFixed(2)}%`,
+            pos.pairId
+          );
+        }
+
+        urgentLiquidations.push({ position: pos, marginRatio, urgency });
+        liquidatedCount++;
+      }
+    }
+  }
+
+  // 立即处理紧急强平
+  if (urgentLiquidations.length > 0) {
+    urgentLiquidations.sort((a, b) => b.marginRatio - a.marginRatio);
+
+    // 同步添加到全局队列并处理
+    for (const item of urgentLiquidations) {
+      liquidationQueue.push(item);
+    }
+
+    // 异步执行强平 (不阻塞价格更新)
+    setImmediate(() => {
+      processLiquidations();
+    });
+  }
+
+  const elapsed = Date.now() - startTime;
+  lastEventDrivenCheck = startTime;
+  eventDrivenLiquidations += liquidatedCount;
+
+  // 只在有强平或检查时间过长时打印日志
+  if (liquidatedCount > 0 || elapsed > 10) {
+    console.log(
+      `[EventDriven] Token ${normalizedToken.slice(0, 8)} price ${priceDelta}bp: ` +
+      `checked=${checkedCount} liquidated=${liquidatedCount} elapsed=${elapsed}ms`
+    );
+  }
+}
+
+/**
+ * 启动 Risk Engine
+ * - 注册事件驱动回调 (实时强平)
+ * - 启动 1s 兜底检查 (安全网)
  */
 function startRiskEngine(): void {
   if (riskEngineInterval) {
     clearInterval(riskEngineInterval);
   }
 
-  console.log(`[RiskEngine] Starting 100ms risk engine...`);
+  // 注册事件驱动强平回调
+  registerPriceChangeCallback(onPriceChange);
+  console.log(`[RiskEngine] 🚀 Event-driven liquidation enabled (Hyperliquid-style)`);
+
+  // 启动 1s 兜底检查 (安全网)
+  console.log(`[RiskEngine] Starting ${RISK_ENGINE_INTERVAL_MS}ms safety-net check...`);
 
   riskEngineInterval = setInterval(() => {
     runRiskCheck();
@@ -930,7 +1426,8 @@ function runRiskCheck(): void {
       pos.margin = currentMargin.toString();
 
       // 动态 MMR (根据杠杆调整)
-      const positionValue = (BigInt(pos.size) * currentPrice) / (10n ** 24n);
+      // ⚠️ size 是 ETH 名义价值 (1e18 精度)
+      const positionValue = BigInt(pos.size);
       // MMR = min(2%, 初始保证金率 * 50%)
       // 这样确保 MMR < 初始保证金率，强平价才会在正确的一侧
       const leverage = BigInt(pos.leverage) * 10000n; // 转换为 1e4 精度
@@ -1047,6 +1544,33 @@ function runRiskCheck(): void {
   // 处理强平 (直接强平，无缓冲)
   processLiquidations();
 
+  // 借贷清算检测 (每 50 个风控周期 = ~5秒检查一次)
+  lendingLiqCheckCounter++;
+  if (lendingLiqCheckCounter >= 50) {
+    lendingLiqCheckCounter = 0;
+    // 异步检测，不阻塞风控循环
+    (async () => {
+      try {
+        for (const token of SUPPORTED_TOKENS) {
+          const candidates = await detectLendingLiquidations(token);
+          if (candidates.length > 0) {
+            updateLendingLiquidationQueue(candidates);
+            const processed = await processLendingLiquidations();
+            if (processed > 0) {
+              // 广播借贷清算事件
+              broadcast("lending_liquidation", {
+                token,
+                liquidationsProcessed: processed,
+              });
+            }
+          }
+        }
+      } catch (e) {
+        console.error("[LendingLiq] Detection error:", e);
+      }
+    })();
+  }
+
   // 处理 TP/SL 触发队列 (P2)
   processTPSLTriggerQueue();
 
@@ -1081,8 +1605,9 @@ function syncPositionRisksToRedis(): void {
 
   for (const [trader, positions] of userPositions.entries()) {
     for (const pos of positions) {
-      // 只同步有 Redis ID 的仓位
-      if (!pos.pairId || pos.pairId.length < 30) continue;
+      // 只同步有 Redis UUID 的仓位 (UUID 格式: 8-4-4-4-12，总长 36)
+      // 排除初始 pairId 格式 "${token}_${trader}_${timestamp}" (含 0x 和下划线)
+      if (!pos.pairId || pos.pairId.includes("0x") || pos.pairId.length < 30) continue;
 
       updates.push({
         id: pos.pairId,
@@ -1151,24 +1676,25 @@ async function processLiquidations(): Promise<void> {
       }
     }
 
-    // 使用标准 PnL 计算函数 (已处理精度转换: 1e18 * 1e12 / 1e24 = 1e6)
+    // 使用标准 PnL 计算函数 (ETH 本位精度: 1e18 * 1e18 / 1e18 = 1e18)
     const pnl = calculateUnrealizedPnL(size, entryPrice, currentPrice, pos.isLong);
 
     const currentMargin = collateral + pnl;
 
     // ========== 安全检查 3: PnL 合理性 ==========
     // PnL 不应该超过仓位价值的 10 倍 (防止计算错误)
-    const positionValue = (size * currentPrice) / (10n ** 24n);
+    // size 已经是 ETH 名义价值 (1e18 精度)，不需要再乘价格
+    const positionValue = size;
     const maxReasonablePnL = positionValue * 10n;
     const absPnl = pnl < 0n ? -pnl : pnl;
 
     if (absPnl > maxReasonablePnL && maxReasonablePnL > 0n) {
-      console.log(`[Liquidation] SKIPPED: PnL unreasonably large ($${Number(pnl) / 1e6}), max expected: $${Number(maxReasonablePnL) / 1e6}`);
+      console.log(`[Liquidation] SKIPPED: PnL unreasonably large ($${Number(pnl) / 1e18}), max expected: $${Number(maxReasonablePnL) / 1e18}`);
       console.log(`[Liquidation]   size=${size}, entryPrice=${entryPrice}, currentPrice=${currentPrice}`);
       continue;
     }
 
-    console.log(`[Liquidation] Position details: collateral=$${Number(collateral) / 1e6}, pnl=$${Number(pnl) / 1e6}, currentMargin=$${Number(currentMargin) / 1e6}`);
+    console.log(`[Liquidation] Position details: collateral=$${Number(collateral) / 1e18}, pnl=$${Number(pnl) / 1e18}, currentMargin=$${Number(currentMargin) / 1e18}`);
 
     let liquidationPenalty = 0n;
     let insuranceFundPayout = 0n;
@@ -1177,7 +1703,7 @@ async function processLiquidations(): Promise<void> {
     if (currentMargin < 0n) {
       // ========== 穿仓处理 (Bankruptcy) ==========
       const deficit = -currentMargin;
-      console.log(`[Liquidation] BANKRUPTCY! Deficit: $${Number(deficit) / 1e6}`);
+      console.log(`[Liquidation] BANKRUPTCY! Deficit: $${Number(deficit) / 1e18}`);
 
       // 1. 先尝试用保险基金覆盖
       const tokenFund = getTokenInsuranceFund(normalizedToken);
@@ -1186,18 +1712,18 @@ async function processLiquidations(): Promise<void> {
       if (tokenFund.balance >= deficit) {
         // 代币保险基金足够
         insuranceFundPayout = payFromInsuranceFund(deficit, normalizedToken);
-        console.log(`[Liquidation] Deficit covered by token insurance fund: $${Number(insuranceFundPayout) / 1e6}`);
+        console.log(`[Liquidation] Deficit covered by token insurance fund: $${Number(insuranceFundPayout) / 1e18}`);
       } else if (tokenFund.balance + globalFundAvailable >= deficit) {
         // 代币 + 全局保险基金
         const fromToken = payFromInsuranceFund(tokenFund.balance, normalizedToken);
         const fromGlobal = payFromInsuranceFund(deficit - fromToken);
         insuranceFundPayout = fromToken + fromGlobal;
-        console.log(`[Liquidation] Deficit covered by insurance funds: token=$${Number(fromToken) / 1e6}, global=$${Number(fromGlobal) / 1e6}`);
+        console.log(`[Liquidation] Deficit covered by insurance funds: token=$${Number(fromToken) / 1e18}, global=$${Number(fromGlobal) / 1e18}`);
       } else {
         // 2. 保险基金不足，触发 ADL
         const partialCoverage = payFromInsuranceFund(tokenFund.balance, normalizedToken) + payFromInsuranceFund(globalFundAvailable);
         const remainingDeficit = deficit - partialCoverage;
-        console.log(`[Liquidation] Insurance fund insufficient! Covered: $${Number(partialCoverage) / 1e6}, remaining deficit: $${Number(remainingDeficit) / 1e6}`);
+        console.log(`[Liquidation] Insurance fund insufficient! Covered: $${Number(partialCoverage) / 1e18}, remaining deficit: $${Number(remainingDeficit) / 1e18}`);
 
         // 执行 ADL (自动减仓)
         await executeADL(pos, remainingDeficit);
@@ -1205,21 +1731,22 @@ async function processLiquidations(): Promise<void> {
       }
     } else {
       // ========== 正常强平处理 ==========
-      // 清算罚金 = 剩余保证金的一部分 (30% 给保险基金)
-      liquidationPenalty = currentMargin * 30n / 100n;
-      refundToTrader = currentMargin - liquidationPenalty;
+      // 爆仓剩余保证金 100% 进保险基金，不退还交易者
+      // 这是平台收入来源之一，激励用户控制风险
+      liquidationPenalty = currentMargin;  // 100% 给保险基金
+      refundToTrader = 0n;  // 不退还
 
       // 注入保险基金
       contributeToInsuranceFund(liquidationPenalty, normalizedToken);
-
-      // 退还剩余保证金给交易者
-      if (refundToTrader > 0n) {
-        adjustUserBalance(normalizedTrader, refundToTrader, "LIQUIDATION_REFUND");
-        console.log(`[Liquidation] Refund to trader: $${Number(refundToTrader) / 1e6}, penalty to insurance: $${Number(liquidationPenalty) / 1e6}`);
-      }
+      console.log(`[Liquidation] All remaining margin to insurance: $${Number(liquidationPenalty) / 1e18}`);
     }
 
     // ========== 关闭仓位 ==========
+    // Mode 2: 强平链下调整 = -(保证金) 即交易者损失全部保证金
+    // (保证金已经在开仓时从 chainAvailable 中扣除了，但仓位关闭后 positionMargin 减少
+    //  所以需要对应减少 adjustment，否则 effective 会虚高)
+    addMode2Adjustment(normalizedTrader, -collateral, "LIQUIDATION_LOSS");
+
     // 1. 从用户仓位列表中移除
     const positions = userPositions.get(normalizedTrader) || [];
     const updatedPositions = positions.filter(p => p.pairId !== pos.pairId);
@@ -1229,7 +1756,11 @@ async function processLiquidations(): Promise<void> {
     // 2. 移除相关的 TP/SL 订单
     tpslOrders.delete(pos.pairId);
 
-    // 3. 记录强平到交易历史
+    // 3. 同步删除 Redis 中的仓位 (Bug fix: 强平后必须清理 Redis)
+    deletePositionFromRedis(pos.pairId).catch(e =>
+      console.error("[Redis] Failed to delete liquidated position:", e));
+
+    // 4. 记录强平到交易历史
     const liquidationTrade: TradeRecord = {
       id: `liq-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       orderId: `liquidation-${pos.pairId}`,
@@ -1250,19 +1781,54 @@ async function processLiquidations(): Promise<void> {
     traderTrades.push(liquidationTrade);
     userTrades.set(normalizedTrader, traderTrades);
 
-    // 4. 调用链上强平 (TODO: 实际合约调用)
-    if (submitter) {
-      try {
-        console.log(`[Liquidation] Submitted to chain: pairId=${pos.pairId}`);
-      } catch (e) {
-        console.error(`[Liquidation] Chain submission failed for ${pos.pairId}:`, e);
-      }
+    // Save liquidation trade to Redis
+    TradeRepo.create({
+      orderId: liquidationTrade.orderId,
+      pairId: liquidationTrade.pairId,
+      token: normalizedToken,
+      trader: normalizedTrader,
+      isLong: liquidationTrade.isLong,
+      isMaker: false,
+      size: liquidationTrade.size,
+      price: liquidationTrade.price,
+      fee: liquidationTrade.fee,
+      realizedPnL: liquidationTrade.realizedPnL,
+      timestamp: liquidationTrade.timestamp,
+      type: "liquidation",
+    }).catch(e => console.error(`[DB] Failed to save liquidation trade:`, e));
+
+    // ✅ 记录 LIQUIDATION 账单
+    try {
+      const liqLoss = -(collateral + pnl < 0n ? collateral : collateral + pnl);
+      await RedisSettlementLogRepo.create({
+        userAddress: normalizedTrader,
+        type: "LIQUIDATION",
+        amount: pnl.toString(),
+        balanceBefore: collateral.toString(),
+        balanceAfter: "0",
+        onChainStatus: "CONFIRMED",
+        proofData: JSON.stringify({
+          token: pos.token, pairId: pos.pairId, isLong: pos.isLong,
+          entryPrice: pos.entryPrice, liquidationPrice: currentPrice.toString(),
+          size: pos.size, penalty: liquidationPenalty.toString(),
+        }),
+        positionId: pos.pairId, orderId: liquidationTrade.orderId, txHash: null,
+      });
+    } catch (billErr) {
+      console.error("[Liquidation] Failed to log liquidation bill:", billErr);
     }
 
-    // 5. 广播强平事件
+    // 5. 调用链上强平 (TODO: 实际合约调用 - 目前仅链下执行)
+    // 链上强平功能待实现，当前版本在链下完成强平处理
+
+    // 6. 广播强平事件
     broadcastLiquidationEvent(pos);
 
-    console.log(`[Liquidation] SUCCESS: ${pos.trader.slice(0, 10)} ${pos.isLong ? 'LONG' : 'SHORT'} position liquidated at price $${Number(currentPrice) / 1e6}`);
+    // 7. 广播仓位和余额更新 (确保前端即时反映强平后状态)
+    broadcastPositionUpdate(normalizedTrader, normalizedToken);
+    broadcastBalanceUpdate(normalizedTrader);
+
+    console.log(`[Liquidation] SUCCESS: ${pos.trader.slice(0, 10)} ${pos.isLong ? 'LONG' : 'SHORT'} position liquidated at price $${Number(currentPrice) / 1e18}`);
   }
 }
 
@@ -1300,7 +1866,7 @@ function broadcastLiquidationEvent(position: Position): void {
  * 2. 强平收益的一部分注入保险基金
  */
 interface InsuranceFund {
-  balance: bigint;                    // 当前余额 (1e6 USD)
+  balance: bigint;                    // 当前余额 (1e18 ETH)
   totalContributions: bigint;         // 累计注入 (来自清算收益、手续费)
   totalPayouts: bigint;               // 累计支出 (弥补穿仓)
   lastUpdated: number;
@@ -1345,12 +1911,12 @@ function contributeToInsuranceFund(amount: bigint, token?: Address): void {
     fund.balance += amount;
     fund.totalContributions += amount;
     fund.lastUpdated = Date.now();
-    console.log(`[InsuranceFund] Token ${token.slice(0, 10)} contribution: +$${Number(amount) / 1e6}, balance: $${Number(fund.balance) / 1e6}`);
+    console.log(`[InsuranceFund] Token ${token.slice(0, 10)} contribution: +$${Number(amount) / 1e18}, balance: $${Number(fund.balance) / 1e18}`);
   } else {
     insuranceFund.balance += amount;
     insuranceFund.totalContributions += amount;
     insuranceFund.lastUpdated = Date.now();
-    console.log(`[InsuranceFund] Global contribution: +$${Number(amount) / 1e6}, balance: $${Number(insuranceFund.balance) / 1e6}`);
+    console.log(`[InsuranceFund] Global contribution: +$${Number(amount) / 1e18}, balance: $${Number(insuranceFund.balance) / 1e18}`);
   }
 }
 
@@ -1367,14 +1933,14 @@ function payFromInsuranceFund(amount: bigint, token?: Address): bigint {
     fund.balance -= actualPayout;
     fund.totalPayouts += actualPayout;
     fund.lastUpdated = Date.now();
-    console.log(`[InsuranceFund] Token ${token.slice(0, 10)} payout: -$${Number(actualPayout) / 1e6}, balance: $${Number(fund.balance) / 1e6}`);
+    console.log(`[InsuranceFund] Token ${token.slice(0, 10)} payout: -$${Number(actualPayout) / 1e18}, balance: $${Number(fund.balance) / 1e18}`);
     return actualPayout;
   } else {
     const actualPayout = amount > insuranceFund.balance ? insuranceFund.balance : amount;
     insuranceFund.balance -= actualPayout;
     insuranceFund.totalPayouts += actualPayout;
     insuranceFund.lastUpdated = Date.now();
-    console.log(`[InsuranceFund] Global payout: -$${Number(actualPayout) / 1e6}, balance: $${Number(insuranceFund.balance) / 1e6}`);
+    console.log(`[InsuranceFund] Global payout: -$${Number(actualPayout) / 1e18}, balance: $${Number(insuranceFund.balance) / 1e18}`);
     return actualPayout;
   }
 }
@@ -1446,7 +2012,7 @@ interface FundingPayment {
   isLong: boolean;
   positionSize: string;
   fundingRate: string;            // 费率 (basis points)
-  fundingAmount: string;          // 支付金额 (1e6 USD)
+  fundingAmount: string;          // 支付金额 (1e18 ETH)
   isPayer: boolean;               // true = 付款方, false = 收款方
   timestamp: number;
 }
@@ -1514,9 +2080,16 @@ function updateVolatility(token: Address, currentPrice: number): void {
  * 计算动态资金费率
  *
  * 动态费率 = 基础费率 × (1 + 波动率调整) × (1 + 不平衡调整)
+ * 使用 EWMA 平滑避免费率频繁跳动
  *
  * 基础费率来自引擎的 calculateFundingRate
  */
+
+// EWMA 平滑因子: 0.1 = 新值占 10%, 旧值占 90% (防止跳动)
+const FUNDING_RATE_EWMA_ALPHA = 0.1;
+// 存储上一次平滑后的费率 (Number 精度, 用于 EWMA 计算)
+const smoothedFundingRates = new Map<Address, number>();
+
 function calculateDynamicFundingRate(token: Address): bigint {
   const normalizedToken = token.toLowerCase() as Address;
   const config = getTokenFundingConfig(normalizedToken);
@@ -1543,17 +2116,31 @@ function calculateDynamicFundingRate(token: Address): bigint {
   // 不平衡调整 (不平衡越大，费率越高)
   const imbalanceAdjustment = 1 + (imbalanceRatio * config.imbalanceMultiplier / 100);
 
-  // 计算最终费率
-  let dynamicRate = BigInt(Math.floor(Number(baseRate) * volatilityAdjustment * imbalanceAdjustment));
+  // 计算原始费率
+  let rawRate = Math.floor(Number(baseRate) * volatilityAdjustment * imbalanceAdjustment);
 
   // 限制最大费率
-  const maxRateBigInt = BigInt(config.maxRate);
-  if (dynamicRate > maxRateBigInt) dynamicRate = maxRateBigInt;
-  if (dynamicRate < -maxRateBigInt) dynamicRate = -maxRateBigInt;
+  const maxRate = config.maxRate;
+  if (rawRate > maxRate) rawRate = maxRate;
+  if (rawRate < -maxRate) rawRate = -maxRate;
 
+  // EWMA 平滑: smoothed = alpha * newValue + (1 - alpha) * oldSmoothed
+  // 这样每次更新只变化 10%, 前端显示不会频繁跳动
+  const prevSmoothed = smoothedFundingRates.get(normalizedToken);
+  let smoothed: number;
+  if (prevSmoothed === undefined) {
+    // 首次计算，直接使用原始值
+    smoothed = rawRate;
+  } else {
+    smoothed = FUNDING_RATE_EWMA_ALPHA * rawRate + (1 - FUNDING_RATE_EWMA_ALPHA) * prevSmoothed;
+  }
+  smoothedFundingRates.set(normalizedToken, smoothed);
+
+  // 转为整数 bigint 存储
+  const dynamicRate = BigInt(Math.round(smoothed));
   currentFundingRates.set(normalizedToken, dynamicRate);
 
-  console.log(`[DynamicFunding] Token ${token.slice(0, 10)}: base=${baseRate}bp vol=${volatility.toFixed(2)}% imbal=${imbalanceRatio.toFixed(2)}% final=${dynamicRate}bp`);
+  console.log(`[DynamicFunding] Token ${token.slice(0, 10)}: base=${baseRate}bp vol=${volatility.toFixed(2)}% imbal=${imbalanceRatio.toFixed(2)}% raw=${rawRate}bp smoothed=${smoothed.toFixed(2)}bp`);
 
   return dynamicRate;
 }
@@ -1613,8 +2200,9 @@ function getDynamicFundingInterval(token: Address): number {
 /**
  * 执行资金费结算
  *
- * 正费率: 多头付给空头
- * 负费率: 空头付给多头
+ * 平台模式: 所有持仓者按费率缴纳资金费，全部收归保险基金
+ * 正费率: 多头缴纳
+ * 负费率: 空头缴纳
  */
 async function settleFunding(token: Address): Promise<void> {
   const normalizedToken = token.toLowerCase() as Address;
@@ -1630,6 +2218,7 @@ async function settleFunding(token: Address): Promise<void> {
   const payments: FundingPayment[] = [];
   let totalLongPayment = 0n;
   let totalShortPayment = 0n;
+  let totalCollected = 0n; // 保险基金收取的总资金费
 
   // 遍历所有仓位，计算资金费
   for (const [trader, positions] of userPositions.entries()) {
@@ -1640,14 +2229,18 @@ async function settleFunding(token: Address): Promise<void> {
       const currentPrice = BigInt(pos.markPrice);
 
       // 计算仓位价值 (USD)
-      const positionValue = (positionSize * currentPrice) / (10n ** 24n);
+      // positionSize 已经是 ETH 名义价值 (1e18 精度)
+      const positionValue = positionSize;
 
-      // 计算资金费金额 = 仓位价值 × 费率 / 10000
+      // 计算资金费金额 = 仓位价值 × |费率| / 10000
       const fundingAmount = (positionValue * (rate >= 0n ? rate : -rate)) / 10000n;
 
-      // 正费率: 多头付给空头
-      // 负费率: 空头付给多头
+      // 平台模式: 正费率多头缴纳，负费率空头缴纳
+      // 非缴纳方不收不付
       const isPayer = (rate > 0n && pos.isLong) || (rate < 0n && !pos.isLong);
+
+      // 非缴纳方跳过 — 不给对手方返还
+      if (!isPayer) continue;
 
       const payment: FundingPayment = {
         pairId: pos.pairId,
@@ -1656,24 +2249,65 @@ async function settleFunding(token: Address): Promise<void> {
         isLong: pos.isLong,
         positionSize: pos.size,
         fundingRate: rate.toString(),
-        fundingAmount: (isPayer ? -fundingAmount : fundingAmount).toString(),
-        isPayer,
+        fundingAmount: (-fundingAmount).toString(), // 缴纳方始终为负
+        isPayer: true,
         timestamp: Date.now(),
       };
 
       payments.push(payment);
 
-      // 更新仓位的累计资金费
+      // 更新仓位的累计资金费（始终为负，因为只有缴纳方）
       const currentFundingFee = BigInt(pos.fundingFee || "0");
-      pos.fundingFee = (currentFundingFee + (isPayer ? -fundingAmount : fundingAmount)).toString();
+      pos.fundingFee = (currentFundingFee - fundingAmount).toString();
 
-      // 统计总支付/收取
+      // ✅ 写入账单记录 (Redis)，让前端"账单"Tab能显示资金费收支
+      const traderAddr = pos.trader.toLowerCase() as Address;
+      const balance = getUserBalance(traderAddr);
+      const signedAmount = -fundingAmount; // 缴纳方始终扣除
+      const balanceBefore = balance.totalBalance;
+      // 资金费直接从余额中扣除
+      balance.totalBalance += signedAmount;
+      balance.availableBalance += signedAmount;
+      // Mode 2: 资金费链下调整
+      addMode2Adjustment(traderAddr, signedAmount, "FUNDING_FEE");
+      const balanceAfter = balance.totalBalance;
+      try {
+        await RedisSettlementLogRepo.create({
+          userAddress: traderAddr,
+          type: "FUNDING_FEE",
+          amount: signedAmount.toString(),
+          balanceBefore: balanceBefore.toString(),
+          balanceAfter: balanceAfter.toString(),
+          onChainStatus: "CONFIRMED",
+          proofData: JSON.stringify({
+            token: pos.token,
+            rate: rate.toString(),
+            isLong: pos.isLong,
+            positionSize: pos.size,
+            pairId: pos.pairId,
+          }),
+          positionId: pos.pairId,
+          orderId: null,
+          txHash: null,
+        });
+      } catch (billErr) {
+        console.error("[DynamicFunding] Failed to log funding bill:", billErr);
+      }
+
+      // 统计
+      totalCollected += fundingAmount;
       if (pos.isLong) {
-        totalLongPayment += isPayer ? -fundingAmount : fundingAmount;
+        totalLongPayment -= fundingAmount;
       } else {
-        totalShortPayment += isPayer ? -fundingAmount : fundingAmount;
+        totalShortPayment -= fundingAmount;
       }
     }
+  }
+
+  // ✅ 资金费全部注入保险基金
+  if (totalCollected > 0n) {
+    contributeToInsuranceFund(totalCollected, normalizedToken);
+    console.log(`[DynamicFunding] Insurance fund received: Ξ${Number(totalCollected) / 1e18} from funding fees`);
   }
 
   // 保存支付记录
@@ -2032,7 +2666,8 @@ async function processTPSLTriggerQueue(): Promise<void> {
       );
 
       // 计算平仓手续费 (0.05%)
-      const positionValue = (currentSize * currentPrice) / (10n ** 24n);
+      // currentSize 已经是 ETH 名义价值 (1e18 精度)
+      const positionValue = currentSize;
       const closeFee = (positionValue * 5n) / 10000n;
 
       // 更新订单状态
@@ -2043,6 +2678,7 @@ async function processTPSLTriggerQueue(): Promise<void> {
 
       // 从用户仓位列表中移除
       const normalizedTrader = position.trader.toLowerCase() as Address;
+      const normalizedToken = position.token.toLowerCase() as Address;
       const positions = userPositions.get(normalizedTrader) || [];
       const updatedPositions = positions.filter(p => p.pairId !== order.pairId);
       userPositions.set(normalizedTrader, updatedPositions);
@@ -2050,10 +2686,75 @@ async function processTPSLTriggerQueue(): Promise<void> {
       // 移除 TP/SL 订单
       tpslOrders.delete(order.pairId);
 
+      // ✅ 模式 2: 平仓收益加入用户余额
+      const returnAmount = BigInt(position.collateral) + pnl - closeFee;
+      if (returnAmount > 0n) {
+        adjustUserBalance(normalizedTrader, returnAmount, "TPSL_CLOSE");
+      }
+      // Mode 2: TP/SL 链下调整 = PnL - 手续费
+      const tpslPnlMinusFee = pnl - closeFee;
+      addMode2Adjustment(normalizedTrader, tpslPnlMinusFee, "TPSL_CLOSE");
+      // ✅ TP/SL 手续费转入平台钱包
+      if (closeFee > 0n) {
+        addMode2Adjustment(FEE_RECEIVER_ADDRESS, closeFee, "PLATFORM_FEE");
+        console.log(`[Fee] TP/SL close fee Ξ${Number(closeFee) / 1e18} → platform wallet`);
+      }
+      broadcastBalanceUpdate(normalizedTrader);
+
+      // ✅ 记录 TP/SL 平仓成交到 userTrades
+      const tpslTrade: TradeRecord = {
+        id: `tpsl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        orderId: `tpsl-${order.pairId}`,
+        pairId: order.pairId,
+        token: position.token,
+        trader: position.trader,
+        isLong: position.isLong,
+        isMaker: false,
+        size: position.size,
+        price: currentPrice.toString(),
+        fee: closeFee.toString(),
+        realizedPnL: pnl.toString(),
+        timestamp: Date.now(),
+        type: "close",
+      };
+      const tpslTraderTrades = userTrades.get(normalizedTrader) || [];
+      tpslTraderTrades.push(tpslTrade);
+      userTrades.set(normalizedTrader, tpslTraderTrades);
+      TradeRepo.create({
+        orderId: tpslTrade.orderId, pairId: tpslTrade.pairId,
+        token: normalizedToken, trader: normalizedTrader,
+        isLong: tpslTrade.isLong, isMaker: false,
+        size: tpslTrade.size, price: tpslTrade.price,
+        fee: tpslTrade.fee, realizedPnL: tpslTrade.realizedPnL,
+        timestamp: tpslTrade.timestamp, type: "close",
+      }).catch(e => console.error("[DB] Failed to save TP/SL trade:", e));
+
+      // ✅ 记录 SETTLE_PNL 账单
+      RedisSettlementLogRepo.create({
+        userAddress: normalizedTrader,
+        type: "SETTLE_PNL",
+        amount: pnl.toString(),
+        balanceBefore: "0", balanceAfter: returnAmount.toString(),
+        onChainStatus: "CONFIRMED",
+        proofData: JSON.stringify({
+          token: position.token, pairId: order.pairId,
+          isLong: position.isLong, triggerType,
+          entryPrice: position.entryPrice, exitPrice: currentPrice.toString(),
+          size: position.size, closeFee: closeFee.toString(),
+          closeType: triggerType === "tp" ? "take_profit" : "stop_loss",
+        }),
+        positionId: order.pairId, orderId: tpslTrade.orderId, txHash: null,
+      }).catch(e => console.error("[TP/SL] Failed to log settle PnL bill:", e));
+
+      // 同步删除 Redis 中的仓位
+      deletePositionFromRedis(order.pairId).catch(e =>
+        console.error("[Redis] Failed to delete TP/SL closed position:", e));
+
       // 广播执行事件
       broadcastTPSLExecuted(position, triggerType, currentPrice, pnl, closeFee);
+      broadcastPositionUpdate(normalizedTrader, normalizedToken);
 
-      console.log(`[TP/SL] ✅ Executed ${triggerType.toUpperCase()}: ${order.pairId} PnL=$${Number(pnl) / 1e6}`);
+      console.log(`[TP/SL] ✅ Executed ${triggerType.toUpperCase()}: ${order.pairId} PnL=$${Number(pnl) / 1e18}`);
 
     } catch (e) {
       console.error(`[TP/SL] Execution failed: ${order.pairId}`, e);
@@ -2199,9 +2900,9 @@ function broadcastRiskData(): void {
       totalPayouts: insuranceFund.totalPayouts.toString(),
       lastUpdated: insuranceFund.lastUpdated,
       display: {
-        balance: (Number(insuranceFund.balance) / 1e6).toFixed(2),
-        totalContributions: (Number(insuranceFund.totalContributions) / 1e6).toFixed(2),
-        totalPayouts: (Number(insuranceFund.totalPayouts) / 1e6).toFixed(2),
+        balance: (Number(insuranceFund.balance) / 1e18).toFixed(2),
+        totalContributions: (Number(insuranceFund.totalContributions) / 1e18).toFixed(2),
+        totalPayouts: (Number(insuranceFund.totalPayouts) / 1e18).toFixed(2),
       },
     };
 
@@ -2243,10 +2944,19 @@ function broadcastRiskData(): void {
 }
 
 /**
- * 广播强平热力图数据
+ * 广播强平热力图数据 (节流: 每 2 秒一次)
  */
 function broadcastLiquidationMap(token: Address): void {
   const normalizedToken = token.toLowerCase() as Address;
+
+  // Throttle: only broadcast every 2 seconds per token
+  const now = Date.now();
+  const lastBroadcast = lastLiquidationMapBroadcast.get(normalizedToken) || 0;
+  if (now - lastBroadcast < LIQUIDATION_MAP_BROADCAST_INTERVAL_MS) {
+    return;
+  }
+  lastLiquidationMapBroadcast.set(normalizedToken, now);
+
   const positions = Array.from(userPositions.values()).flat().filter(
     p => p.token.toLowerCase() === normalizedToken
   );
@@ -2369,8 +3079,8 @@ const REFERRAL_CONFIG = {
   level1Rate: 3000,  // 30% (basis points)
   // 二级返佣: 邀请人的邀请人获得 10%
   level2Rate: 1000,  // 10% (basis points)
-  // 最低提现金额 (USDT, 1e6)
-  minWithdrawAmount: 10n * 10n ** 6n,  // $10
+  // 最低提现金额 (ETH, 1e18)
+  minWithdrawAmount: 10n ** 16n,  // 0.01 ETH (~$25)
   // 邀请码长度
   codeLength: 8,
 };
@@ -2621,7 +3331,7 @@ function processTradeCommission(
 
       referee.totalCommissionGenerated += level1Commission;
 
-      console.log(`[Referral] L1 commission: ${level1Referrer.address.slice(0, 10)} earned $${Number(level1Commission) / 1e6} from ${normalizedTrader.slice(0, 10)}`);
+      console.log(`[Referral] L1 commission: ${level1Referrer.address.slice(0, 10)} earned $${Number(level1Commission) / 1e18} from ${normalizedTrader.slice(0, 10)}`);
 
       broadcastCommissionEarned(level1Referrer.address, level1Commission, 1, normalizedTrader);
     }
@@ -2657,7 +3367,7 @@ function processTradeCommission(
 
         referee.totalCommissionGenerated += level2Commission;
 
-        console.log(`[Referral] L2 commission: ${level2Referrer.address.slice(0, 10)} earned $${Number(level2Commission) / 1e6} from ${normalizedTrader.slice(0, 10)}`);
+        console.log(`[Referral] L2 commission: ${level2Referrer.address.slice(0, 10)} earned $${Number(level2Commission) / 1e18} from ${normalizedTrader.slice(0, 10)}`);
 
         broadcastCommissionEarned(level2Referrer.address, level2Commission, 2, normalizedTrader);
       }
@@ -2697,7 +3407,7 @@ function withdrawCommission(
   if (withdrawAmount < REFERRAL_CONFIG.minWithdrawAmount) {
     return {
       success: false,
-      error: `Minimum withdrawal amount is $${Number(REFERRAL_CONFIG.minWithdrawAmount) / 1e6}`
+      error: `Minimum withdrawal amount is $${Number(REFERRAL_CONFIG.minWithdrawAmount) / 1e18}`
     };
   }
 
@@ -2708,7 +3418,7 @@ function withdrawCommission(
 
   // TODO: 实际转账逻辑 (调用合约或更新用户余额)
 
-  console.log(`[Referral] Withdrawal: ${normalizedAddress.slice(0, 10)} withdrew $${Number(withdrawAmount) / 1e6}`);
+  console.log(`[Referral] Withdrawal: ${normalizedAddress.slice(0, 10)} withdrew $${Number(withdrawAmount) / 1e18}`);
 
   broadcastCommissionWithdrawn(normalizedAddress, withdrawAmount);
 
@@ -2801,7 +3511,70 @@ function broadcastCommissionEarned(referrer: Address, amount: bigint, level: num
     amount: amount.toString(),
     level,
     from,
-    display: `$${(Number(amount) / 1e6).toFixed(4)}`,
+    display: `$${(Number(amount) / 1e18).toFixed(4)}`,
+  });
+}
+
+async function handleGetTicker(instId: string): Promise<Response> {
+  const token = instId.split("-")[0] as Address;
+  const orderBook = engine.getOrderBook(token);
+  const depth = orderBook.getDepth(1);
+  const currentPrice = orderBook.getCurrentPrice();
+
+  const trades = engine.getRecentTrades(token, 1);
+  const lastTrade = trades[0];
+
+  const bestBid = depth.longs.length > 0 ? depth.longs[0].price : currentPrice;
+  const bestAsk = depth.shorts.length > 0 ? depth.shorts[0].price : currentPrice;
+  const bestBidSz = depth.longs.length > 0 ? depth.longs[0].totalSize : 0n;
+  const bestAskSz = depth.shorts.length > 0 ? depth.shorts[0].totalSize : 0n;
+
+  return new Response(JSON.stringify({
+    code: "0",
+    msg: "success",
+    data: [{
+      instId,
+      last: currentPrice.toString(),
+      lastSz: lastTrade?.size?.toString() || "0",
+      askPx: bestAsk.toString(),
+      askSz: bestAskSz.toString(),
+      bidPx: bestBid.toString(),
+      bidSz: bestBidSz.toString(),
+      open24h: currentPrice.toString(),
+      high24h: currentPrice.toString(),
+      low24h: currentPrice.toString(),
+      volCcy24h: "0",
+      vol24h: "0",
+      ts: Date.now(),
+    }],
+  }), {
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+    },
+  });
+}
+
+async function handleGetMarketTrades(instId: string, limit: number): Promise<Response> {
+  const token = instId.split("-")[0] as Address;
+  const trades = engine.getRecentTrades(token, limit);
+
+  return new Response(JSON.stringify({
+    code: "0",
+    msg: "success",
+    data: trades.map((trade) => ({
+      instId,
+      tradeId: trade.id,
+      px: trade.price.toString(),
+      sz: trade.size.toString(),
+      side: trade.side,
+      ts: trade.timestamp,
+    })),
+  }), {
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+    },
   });
 }
 
@@ -2809,7 +3582,7 @@ function broadcastCommissionWithdrawn(referrer: Address, amount: bigint): void {
   broadcast("commission_withdrawn", {
     referrer,
     amount: amount.toString(),
-    display: `$${(Number(amount) / 1e6).toFixed(2)}`,
+    display: `$${(Number(amount) / 1e18).toFixed(2)}`,
   });
 }
 
@@ -2818,14 +3591,48 @@ function broadcastCommissionWithdrawn(referrer: Address, amount: bigint): void {
 // ============================================================
 
 interface UserBalance {
-  totalBalance: bigint;      // 总余额 (充值金额), 1e6 精度
-  usedMargin: bigint;        // 已使用保证金 (所有仓位占用), 1e6 精度
-  availableBalance: bigint;  // 可用余额 = totalBalance - usedMargin, 1e6 精度
-  unrealizedPnL: bigint;     // 所有仓位的未实现盈亏, 1e6 精度
-  frozenMargin: bigint;      // 冻结保证金 (挂单占用), 1e6 精度
+  totalBalance: bigint;          // 总余额 = wallet + settlement + positionMargin, 1e18 精度
+  usedMargin: bigint;            // 已使用保证金 (活跃仓位占用), 1e18 精度
+  availableBalance: bigint;      // 可用余额 = settlementAvailable - pendingLocked - usedMargin (不含钱包!), 1e18 精度
+  unrealizedPnL: bigint;         // 所有仓位的未实现盈亏, 1e18 精度
+  frozenMargin: bigint;          // 冻结保证金 (挂单占用), 1e18 精度
+  walletBalance: bigint;         // 派生钱包总余额 (native + WETH), 1e18 精度
+  nativeEthBalance: bigint;      // 派生钱包 native ETH 余额 (用于 depositETH), 1e18 精度
+  wethBalance: bigint;           // 派生钱包 WETH 余额 (用于 approve+deposit), 1e18 精度
+  settlementAvailable: bigint;   // Settlement 合约 available 余额, 1e18 精度
+  settlementLocked: bigint;      // Settlement 合约仓位锁定 (Mode2: 由后端管理), 1e18 精度
 }
 
 const userBalances = new Map<Address, UserBalance>();
+
+/**
+ * Mode 2: 累计链下盈亏调整 (PnL from closes, funding fees, ADL, etc.)
+ *
+ * 因为 Mode 2 不在链上执行平仓/结算，链上 Settlement 余额不会变化。
+ * 此 Map 记录每个用户的累计链下调整金额，在读取余额时加到 chainAvailable 上。
+ *
+ * 增加场景：平仓盈利、ADL 退款
+ * 减少场景：平仓亏损、资金费扣除
+ * 重置场景：提现时（提现会先从链上扣，此时链下调整也需要相应减少）
+ */
+const mode2PnLAdjustments = new Map<Address, bigint>();
+
+function getMode2Adjustment(trader: Address): bigint {
+  return mode2PnLAdjustments.get(trader.toLowerCase() as Address) || 0n;
+}
+
+function addMode2Adjustment(trader: Address, amount: bigint, reason: string): void {
+  const normalized = trader.toLowerCase() as Address;
+  const current = mode2PnLAdjustments.get(normalized) || 0n;
+  const updated = current + amount;
+  mode2PnLAdjustments.set(normalized, updated);
+  const sign = amount >= 0n ? "+" : "";
+  console.log(`[Mode2Adj] ${reason}: ${normalized.slice(0, 10)} ${sign}Ξ${Number(amount) / 1e18}, cumulative=Ξ${Number(updated) / 1e18}`);
+  // 持久化到 Redis (异步，不阻塞)
+  Mode2AdjustmentRepo.save(normalized, updated).catch(e =>
+    console.error(`[Mode2Adj] Failed to persist: ${e}`)
+  );
+}
 
 /**
  * 获取用户余额，如果不存在则创建默认余额
@@ -2840,6 +3647,11 @@ function getUserBalance(trader: Address): UserBalance {
       availableBalance: 0n,
       unrealizedPnL: 0n,
       frozenMargin: 0n,
+      walletBalance: 0n,
+      nativeEthBalance: 0n,
+      wethBalance: 0n,
+      settlementAvailable: 0n,
+      settlementLocked: 0n,
     };
     userBalances.set(normalizedTrader, balance);
   }
@@ -2853,7 +3665,7 @@ function deposit(trader: Address, amount: bigint): void {
   const balance = getUserBalance(trader);
   balance.totalBalance += amount;
   balance.availableBalance += amount;
-  console.log(`[Balance] Deposit: ${trader.slice(0, 10)} +$${Number(amount) / 1e6}, total: $${Number(balance.totalBalance) / 1e6}`);
+  console.log(`[Balance] Deposit: ${trader.slice(0, 10)} +$${Number(amount) / 1e18}, total: $${Number(balance.totalBalance) / 1e18}`);
 }
 
 /**
@@ -2867,7 +3679,7 @@ function withdraw(trader: Address, amount: bigint): boolean {
   }
   balance.totalBalance -= amount;
   balance.availableBalance -= amount;
-  console.log(`[Balance] Withdraw: ${trader.slice(0, 10)} -$${Number(amount) / 1e6}, total: $${Number(balance.totalBalance) / 1e6}`);
+  console.log(`[Balance] Withdraw: ${trader.slice(0, 10)} -$${Number(amount) / 1e18}, total: $${Number(balance.totalBalance) / 1e18}`);
   return true;
 }
 
@@ -2886,7 +3698,7 @@ function adjustUserBalance(trader: Address, amount: bigint, reason: string): voi
   if (balance.availableBalance < 0n) balance.availableBalance = 0n;
 
   const sign = amount >= 0n ? "+" : "";
-  console.log(`[Balance] Adjust (${reason}): ${trader.slice(0, 10)} ${sign}$${Number(amount) / 1e6}, total: $${Number(balance.totalBalance) / 1e6}`);
+  console.log(`[Balance] Adjust (${reason}): ${trader.slice(0, 10)} ${sign}$${Number(amount) / 1e18}, total: $${Number(balance.totalBalance) / 1e18}`);
 }
 
 /**
@@ -2895,12 +3707,12 @@ function adjustUserBalance(trader: Address, amount: bigint, reason: string): voi
 function lockMargin(trader: Address, margin: bigint): boolean {
   const balance = getUserBalance(trader);
   if (balance.availableBalance < margin) {
-    console.log(`[Balance] Lock margin failed: ${trader.slice(0, 10)} needs $${Number(margin) / 1e6}, available: $${Number(balance.availableBalance) / 1e6}`);
+    console.log(`[Balance] Lock margin failed: ${trader.slice(0, 10)} needs $${Number(margin) / 1e18}, available: $${Number(balance.availableBalance) / 1e18}`);
     return false;
   }
   balance.usedMargin += margin;
   balance.availableBalance -= margin;
-  console.log(`[Balance] Locked margin: ${trader.slice(0, 10)} $${Number(margin) / 1e6}, used: $${Number(balance.usedMargin) / 1e6}, available: $${Number(balance.availableBalance) / 1e6}`);
+  console.log(`[Balance] Locked margin: ${trader.slice(0, 10)} $${Number(margin) / 1e18}, used: $${Number(balance.usedMargin) / 1e18}, available: $${Number(balance.availableBalance) / 1e18}`);
   return true;
 }
 
@@ -2919,7 +3731,7 @@ function releaseMargin(trader: Address, margin: bigint, realizedPnL: bigint): vo
     // 如果亏损，总余额减少
     balance.totalBalance += realizedPnL; // realizedPnL 是负数
   }
-  console.log(`[Balance] Released margin: ${trader.slice(0, 10)} $${Number(margin) / 1e6}, PnL: $${Number(realizedPnL) / 1e6}, available: $${Number(balance.availableBalance) / 1e6}`);
+  console.log(`[Balance] Released margin: ${trader.slice(0, 10)} $${Number(margin) / 1e18}, PnL: $${Number(realizedPnL) / 1e18}, available: $${Number(balance.availableBalance) / 1e18}`);
 }
 
 // ============================================================
@@ -2941,21 +3753,25 @@ const orderMarginInfos = new Map<string, OrderMarginInfo>();
 
 /**
  * 计算订单所需的保证金和手续费
- * @param size 仓位大小 (1e18 精度)
- * @param price 价格 (1e12 精度)
+ *
+ * ✅ 修复：size 现在是 ETH 名义价值 (1e18 精度)，与合约保持一致
+ * 合约计算: collateral = size * LEVERAGE_PRECISION / leverage
+ *
+ * @param size ETH 名义价值 (1e18 精度, 如 $500 = 500_000_000)
+ * @param _price 价格 (不再使用，保留参数兼容性)
  * @param leverage 杠杆 (1e4 精度, 如 10x = 100000)
- * @returns { margin, fee, total } 都是 1e6 USD 精度
+ * @returns { margin, fee, total } 都是 1e18 ETH 精度
  */
-function calculateOrderCost(size: bigint, price: bigint, leverage: bigint): { margin: bigint; fee: bigint; total: bigint } {
-  // 仓位价值 = size * price / 1e24 (转为 1e6 USD 精度)
-  const positionValue = (size * price) / (10n ** 24n);
+function calculateOrderCost(size: bigint, _price: bigint, leverage: bigint): { margin: bigint; fee: bigint; total: bigint } {
+  // size 已经是 ETH 名义价值 (1e18 精度)
+  // 与合约 Settlement.sol 第 524 行保持一致:
+  // collateral = (matchSize * LEVERAGE_PRECISION) / leverage
 
-  // 保证金 = 仓位价值 / 杠杆倍数
-  // leverage 是 1e4 精度, 所以 margin = positionValue * 10000 / leverage
-  const margin = (positionValue * 10000n) / leverage;
+  // 保证金 = size * 10000 / leverage
+  const margin = (size * 10000n) / leverage;
 
-  // 手续费 = 仓位价值 * 0.05%
-  const fee = (positionValue * ORDER_FEE_RATE) / 10000n;
+  // 手续费 = size * 0.05% (ORDER_FEE_RATE = 5)
+  const fee = (size * ORDER_FEE_RATE) / 10000n;
 
   // 总计 = 保证金 + 手续费
   const total = margin + fee;
@@ -2963,125 +3779,430 @@ function calculateOrderCost(size: bigint, price: bigint, leverage: bigint): { ma
   return { margin, fee, total };
 }
 
-// 记录每个用户的链上余额基准值（用于计算调整量）
-const userChainBalanceBase = new Map<Address, bigint>();
-
 /**
- * 从链上同步用户 USDT 余额到内存
+ * [Mode 2] 同步用户余额
  *
- * 逻辑：
- * - chainBalance: 链上 USDT 余额
- * - baseBalance: 上次同步时的链上余额
- * - adjustment: 后端的扣款/退款记录
- * - availableBalance = chainBalance + (adjustment from base)
+ * Mode 2 变更:
+ * - 仍读取 Settlement 合约的 available 余额 (资金托管)
+ * - 忽略 chainLocked (Mode 2 无链上仓位)
+ * - 仓位保证金从后端内存计算
+ * - 挂单预留从 orderMarginInfos 计算
+ *
+ * 公式:
+ *   availableBalance = walletWETH + settlementAvailable - pendingOrdersLocked - positionMargin
+ *   totalBalance     = walletWETH + settlementAvailable + positionMargin
  */
 async function syncUserBalanceFromChain(trader: Address): Promise<void> {
   const normalizedTrader = trader.toLowerCase() as Address;
   const balance = getUserBalance(normalizedTrader);
-  const TEST_BALANCE = 1000000n * 1000000n; // $1,000,000 USDT - 仅作为回退
 
   try {
-    const USDT_ADDRESS = process.env.USDT_ADDRESS as Address;
-    if (!USDT_ADDRESS) {
-      console.warn("[Balance] USDT_ADDRESS not configured");
-      return;
+    const publicClient = createPublicClient({
+      chain: baseSepolia,
+      transport: http(RPC_URL),
+    });
+
+    // 1. 读取派生钱包余额 (ETH 本位: native ETH + WETH)
+    let walletEthBalance = 0n;
+
+    // 1a. 读取 native ETH 余额
+    const nativeEthBalance = await publicClient.getBalance({
+      address: normalizedTrader,
+    });
+
+    // 1b. 读取 WETH 余额
+    let wethBalance = 0n;
+    const WETH_ADDRESS = process.env.WETH_ADDRESS as Address;
+    if (WETH_ADDRESS) {
+      wethBalance = await publicClient.readContract({
+        address: WETH_ADDRESS,
+        abi: ERC20_ABI,
+        functionName: "balanceOf",
+        args: [normalizedTrader],
+      }) as bigint;
     }
+
+    // 合并: native ETH + WETH（预留少量 native ETH 作为 gas）
+    const gasReserve = 500000000000000n; // 0.0005 ETH gas 预留
+    const usableNativeEth = nativeEthBalance > gasReserve ? nativeEthBalance - gasReserve : 0n;
+    walletEthBalance = usableNativeEth + wethBalance;
+
+    // 2. 读取 Settlement 合约可用余额 (资金托管)
+    //
+    // ⚠️ 精度转换: Settlement 合约内部使用 STANDARD_DECIMALS=6 (USDT 精度)
+    //    getUserBalance 返回的是 6 位精度值
+    //    后端统一使用 18 位精度 (ETH)，需要乘以 10^12 转换
+    //
+    const SETTLEMENT_TO_ETH_FACTOR = 10n ** 12n; // 6位精度 → 18位精度
+    let chainAvailable = 0n;
+    if (SETTLEMENT_ADDRESS) {
+      try {
+        const [available] = await publicClient.readContract({
+          address: SETTLEMENT_ADDRESS,
+          abi: SETTLEMENT_ABI,
+          functionName: "getUserBalance",
+          args: [normalizedTrader],
+        }) as [bigint, bigint];
+        // 从 6 位精度转换为 18 位精度
+        chainAvailable = available * SETTLEMENT_TO_ETH_FACTOR;
+      } catch {
+        // Settlement 读取失败，忽略
+      }
+    }
+
+    // 3. 计算仓位保证金 (从后端内存，Mode 2 核心变更)
+    const positions = userPositions.get(normalizedTrader) || [];
+    let positionMargin = 0n;
+    for (const pos of positions) {
+      positionMargin += BigInt(pos.collateral || "0");
+    }
+
+    // 4. 计算挂单预留 (从 orderMarginInfos)
+    const pendingLocked = getPendingOrdersLocked(normalizedTrader);
+
+    // 5. 余额计算 (ETH 本位)
+    //
+    // ⚠️ 安全关键: availableBalance 只计算 Settlement 中的可用金额
+    //    walletBalance 是"可以存入"的金额，但不能直接用于交易
+    //    只有存入 Settlement 合约后才算真正可用
+    //
+    // Mode 2: 加入链下盈亏调整
+    const mode2Adj = getMode2Adjustment(normalizedTrader);
+    const effectiveAvailable = chainAvailable + mode2Adj;
+
+    balance.walletBalance = walletEthBalance;  // 派生钱包总余额 (native + WETH)
+    balance.nativeEthBalance = nativeEthBalance;  // 分开记录 native ETH
+    balance.wethBalance = wethBalance;            // 分开记录 WETH
+    balance.settlementAvailable = chainAvailable;  // Settlement 合约 available (链上原始值)
+    balance.settlementLocked = 0n; // Mode 2: 链上锁仓由后端管理
+    balance.usedMargin = positionMargin; // 从后端内存计算
+
+    // totalBalance = 所有资产 (钱包 + 有效可用(链上+链下调整) + 仓位保证金)
+    balance.totalBalance = walletEthBalance + effectiveAvailable + positionMargin;
+
+    // availableBalance = 有效可用(链上+链下调整) - 挂单预留 - 仓位保证金
+    // ★ 不再包含 walletBalance，因为钱包里的钱没有存入合约，用户可以随时转走
+    // ★ autoDepositIfNeeded 会在下单时自动将钱包 ETH 存入 Settlement
+    let available = effectiveAvailable - pendingLocked - positionMargin;
+    if (available < 0n) available = 0n;
+    balance.availableBalance = available;
+
+    console.log(`[Balance] ${normalizedTrader.slice(0, 10)} wallet=Ξ${Number(walletEthBalance) / 1e18}, settlement=Ξ${Number(chainAvailable) / 1e18}, mode2Adj=Ξ${Number(mode2Adj) / 1e18}, effective=Ξ${Number(effectiveAvailable) / 1e18}, positionMargin=Ξ${Number(positionMargin) / 1e18}, pendingOrders=Ξ${Number(pendingLocked) / 1e18}, available=Ξ${Number(available) / 1e18}`);
+  } catch (e) {
+    console.warn(`[Balance] Failed to sync balance: ${e}`);
+  }
+}
+
+/**
+ * 计算用户挂单锁定总额 (内存中的 orderMarginInfos)
+ * 用于从链上 Settlement available 中扣除已被挂单预留的金额
+ */
+function getPendingOrdersLocked(trader: Address): bigint {
+  const normalizedTrader = trader.toLowerCase() as Address;
+  let locked = 0n;
+  const userOrders = engine.getUserOrders(normalizedTrader);
+  for (const order of userOrders) {
+    if (order.status === "PENDING" || order.status === "PARTIALLY_FILLED") {
+      const marginInfo = orderMarginInfos.get(order.id);
+      if (marginInfo) {
+        const unfilledRatio = marginInfo.totalSize > 0n
+          ? ((marginInfo.totalSize - marginInfo.settledSize) * 10000n) / marginInfo.totalSize
+          : 10000n;
+        locked += (marginInfo.totalDeducted * unfilledRatio) / 10000n;
+      }
+    }
+  }
+  return locked;
+}
+
+/**
+ * 下单时扣除保证金和手续费 (内存记账)
+ *
+ * 调用前: autoDepositIfNeeded 已确保 Settlement 有足够资金
+ * 此函数: 1) sync 链上余额  2) 检查 availableBalance  3) 记录 orderMarginInfos
+ *
+ * availableBalance 的本地扣减是防止连续下单之间的双花（下次 sync 会从链上+orderMarginInfos 重新算）
+ * totalBalance 不变 — 资金只是从"可用"变"预留"，没有消失
+ */
+async function deductOrderAmount(trader: Address, orderId: string, size: bigint, price: bigint, leverage: bigint): Promise<boolean> {
+  // ⚠️ 注意: autoDepositIfNeeded 已经在调用此函数前同步了链上余额
+  // 这里只做内存余额检查，不再重复同步 (避免两次链上读取)
+  // 如果直接调用此函数 (绕过 autoDepositIfNeeded)，需要先手动调用 syncUserBalanceFromChain
+
+  const balance = getUserBalance(trader);
+  const { margin, fee, total } = calculateOrderCost(size, price, leverage);
+
+  if (balance.availableBalance < total) {
+    console.log(`[Balance] Deduct failed: ${trader.slice(0, 10)} available $${Number(balance.availableBalance) / 1e18} < required $${Number(total) / 1e18} (margin=$${Number(margin) / 1e18} + fee=$${Number(fee) / 1e18})`);
+    return false;
+  }
+
+  // 本地扣减 (防止连续下单双花，下次 sync 会重新算)
+  balance.availableBalance -= total;
+  // 注意: 不改 totalBalance — 资金从可用→预留，总资产不变
+
+  // 记录订单保证金信息 (getPendingOrdersLocked 会读取这个)
+  orderMarginInfos.set(orderId, {
+    margin,
+    fee,
+    totalDeducted: total,
+    totalSize: size,
+    settledSize: 0n,
+  });
+
+  // 持久化到 Redis (重启后可恢复)
+  OrderMarginRepo.save(orderId, {
+    margin: margin.toString(),
+    fee: fee.toString(),
+    totalDeducted: total.toString(),
+    totalSize: size.toString(),
+    settledSize: "0",
+    trader: trader.toLowerCase(),
+  }).catch(e => console.error(`[Balance] Failed to persist margin info for ${orderId}:`, e));
+
+  console.log(`[Balance] Deducted: ${trader.slice(0, 10)} -$${Number(total) / 1e18} (margin=$${Number(margin) / 1e18} + fee=$${Number(fee) / 1e18}), remaining: $${Number(balance.availableBalance) / 1e18}`);
+  return true;
+}
+
+// ============================================================
+// ERC20 最小 ABI (用于 approve + balanceOf)
+// ============================================================
+
+const ERC20_ABI = [
+  {
+    inputs: [{ name: "account", type: "address" }],
+    name: "balanceOf",
+    outputs: [{ type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "approve",
+    outputs: [{ type: "bool" }],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "transfer",
+    outputs: [{ type: "bool" }],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+] as const;
+
+/**
+ * 检查用户余额是否足够下单，不足时自动从派生钱包存入 Settlement
+ *
+ * 安全模型:
+ * - 只有 Settlement 合约中的 available 余额才能用于交易
+ * - 派生钱包中的 ETH 必须先存入 Settlement 才算可用
+ * - 存入后 Settlement 合约持有真实资产，用户无法随意提走
+ *
+ * 流程:
+ * 1. 同步链上余额 (Settlement.available + 派生钱包 ETH)
+ * 2. 检查 Settlement available - 已锁定 >= 所需金额
+ * 3. 如果不够，从派生钱包自动存入差额到 Settlement (链上交易)
+ * 4. 存入成功后重新同步余额
+ */
+async function autoDepositIfNeeded(trader: Address, requiredAmount: bigint): Promise<void> {
+  // 1. 先从链上同步最新余额 (包含 mode2 PnL 调整)
+  await syncUserBalanceFromChain(trader);
+
+  const balance = getUserBalance(trader);
+  const mode2Adj = getMode2Adjustment(trader);
+
+  // 2. 计算可用于下单的金额
+  //    syncUserBalanceFromChain 已经将 availableBalance 设为:
+  //    (chainAvailable + mode2Adj) - pendingLocked - positionMargin
+  //    直接使用 availableBalance 即可
+  const settlementUsable = balance.availableBalance;
+
+  if (settlementUsable >= requiredAmount) {
+    console.log(`[Deposit] ${trader.slice(0, 10)} 余额充足: Ξ${Number(settlementUsable) / 1e18} >= 需要 Ξ${Number(requiredAmount) / 1e18} (mode2Adj=Ξ${Number(mode2Adj) / 1e18})`);
+    return;
+  }
+
+  // 3. Settlement (+mode2调整) 不够，需要从派生钱包补充
+  const shortfall = requiredAmount - settlementUsable;
+
+  // gas 预留: depositETH() 大约消耗 50000-80000 gas
+  // Base Sepolia gas price ~0.01 gwei, 保守估计 0.002 ETH
+  const gasReserve = 2000000000000000n; // 0.002 ETH gas 预留
+
+  // 钱包可存入金额 = 钱包余额 - gas 预留
+  const walletAvailable = balance.walletBalance > gasReserve
+    ? balance.walletBalance - gasReserve
+    : 0n;
+
+  if (walletAvailable < shortfall) {
+    // 钱包余额也不够
+    const totalAvailable = settlementUsable + walletAvailable;
+    const pendingLocked = getPendingOrdersLocked(trader);
+    const details = `钱包: Ξ${Number(balance.walletBalance) / 1e18}, Settlement+调整 可用: Ξ${Number(settlementUsable) / 1e18}, mode2Adj: Ξ${Number(mode2Adj) / 1e18}, 仓位占用: Ξ${Number(balance.usedMargin) / 1e18}, 挂单占用: Ξ${Number(pendingLocked) / 1e18}`;
+    throw new Error(`余额不足: 需要 Ξ${Number(requiredAmount) / 1e18}，可用 Ξ${Number(totalAvailable) / 1e18}。[${details}] 请先存入资金。`);
+  }
+
+  // 4. 计算存入策略: 优先用 WETH (approve+deposit)，不够再用 native ETH (depositETH)
+  //
+  // 为什么 WETH 优先?
+  // - depositETH() 需要发送 native ETH 作为 msg.value，同时还需要 native ETH 支付 gas
+  // - 如果 native ETH 不多，value + gas 容易超出余额
+  // - WETH 是 ERC20，approve+deposit 只需要 gas (native ETH)，value 从 WETH 余额出
+  //
+  const WETH_ADDRESS = (process.env.WETH_ADDRESS || "0x4200000000000000000000000000000000000006") as Address;
+
+  console.log(`[Deposit] ${trader.slice(0, 10)} 需要存入 Ξ${Number(shortfall) / 1e18} 到 Settlement (native=Ξ${Number(balance.nativeEthBalance) / 1e18}, weth=Ξ${Number(balance.wethBalance) / 1e18})`);
+
+  if (!SETTLEMENT_ADDRESS) {
+    throw new Error("Settlement 合约地址未配置");
+  }
+
+  try {
+    // 获取派生钱包的 session 私钥
+    const sessionId = await getActiveSessionForDerived(trader);
+    if (!sessionId) {
+      throw new Error("无法获取交易授权，请重新登录");
+    }
+
+    const signingKey = await getSigningKey(sessionId);
+    if (!signingKey) {
+      throw new Error("交易授权已过期，请重新登录");
+    }
+
+    // 创建钱包客户端
+    const account = privateKeyToAccount(signingKey);
+    const walletClient = createWalletClient({
+      account,
+      chain: baseSepolia,
+      transport: http(RPC_URL),
+    });
 
     const publicClient = createPublicClient({
       chain: baseSepolia,
       transport: http(RPC_URL),
     });
 
-    // 读取链上 USDT 余额
-    const chainBalance = await publicClient.readContract({
-      address: USDT_ADDRESS,
-      abi: [
-        {
-          inputs: [{ name: "account", type: "address" }],
-          name: "balanceOf",
-          outputs: [{ type: "uint256" }],
-          stateMutability: "view",
-          type: "function",
-        },
-      ],
-      functionName: "balanceOf",
-      args: [normalizedTrader],
-    }) as bigint;
+    // 策略: WETH 够就全用 WETH，不够再混合使用
+    const wethAvailable = balance.wethBalance;
+    const nativeAvailable = balance.nativeEthBalance > gasReserve
+      ? balance.nativeEthBalance - gasReserve
+      : 0n;
 
-    // 获取上次同步的基准值
-    const prevBase = userChainBalanceBase.get(normalizedTrader) || 0n;
+    let wethDepositAmount = 0n;
+    let nativeDepositAmount = 0n;
 
-    if (prevBase === 0n) {
-      // 首次同步：直接设置为链上余额
-      balance.totalBalance = chainBalance;
-      balance.availableBalance = chainBalance;
-      userChainBalanceBase.set(normalizedTrader, chainBalance);
-      console.log(`[Balance] Initial sync: ${normalizedTrader.slice(0, 10)} has $${Number(chainBalance) / 1e6} USDT`);
+    if (wethAvailable >= shortfall) {
+      // WETH 够用，全部用 WETH
+      wethDepositAmount = shortfall;
+    } else if (wethAvailable > 0n) {
+      // WETH 不够，混合: WETH 全部 + native ETH 补差
+      wethDepositAmount = wethAvailable;
+      nativeDepositAmount = shortfall - wethAvailable;
     } else {
-      // 非首次同步：只处理链上余额变化（如用户转入/转出 USDT）
-      const chainDiff = chainBalance - prevBase;
-      if (chainDiff !== 0n) {
-        balance.totalBalance += chainDiff;
-        balance.availableBalance += chainDiff;
-        userChainBalanceBase.set(normalizedTrader, chainBalance);
-        console.log(`[Balance] Chain change: ${normalizedTrader.slice(0, 10)} diff=$${Number(chainDiff) / 1e6}, new total=$${Number(balance.totalBalance) / 1e6}`);
+      // 没有 WETH，全部用 native ETH
+      nativeDepositAmount = shortfall;
+    }
+
+    // === Step A: 用 WETH 存入 (approve + deposit) ===
+    if (wethDepositAmount > 0n) {
+      console.log(`[Deposit] ${trader.slice(0, 10)} 用 WETH 存入 Ξ${Number(wethDepositAmount) / 1e18}`);
+
+      // A1. Approve Settlement 使用 WETH
+      const approveTx = await walletClient.writeContract({
+        address: WETH_ADDRESS,
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [SETTLEMENT_ADDRESS, wethDepositAmount],
+      });
+      console.log(`[Deposit] approve tx: ${approveTx}`);
+
+      const approveReceipt = await publicClient.waitForTransactionReceipt({
+        hash: approveTx,
+        confirmations: 1,
+        timeout: 30_000,
+      });
+      if (approveReceipt.status === "reverted") {
+        throw new Error(`WETH approve 失败, tx: ${approveTx}`);
       }
+
+      // A2. 调用 Settlement.deposit(weth, amount)
+      const depositTx = await walletClient.writeContract({
+        address: SETTLEMENT_ADDRESS,
+        abi: SETTLEMENT_ABI,
+        functionName: "deposit",
+        args: [WETH_ADDRESS, wethDepositAmount],
+      });
+      console.log(`[Deposit] deposit(WETH) tx: ${depositTx}`);
+
+      const depositReceipt = await publicClient.waitForTransactionReceipt({
+        hash: depositTx,
+        confirmations: 1,
+        timeout: 30_000,
+      });
+      if (depositReceipt.status === "reverted") {
+        throw new Error(`WETH deposit 失败, tx: ${depositTx}`);
+      }
+
+      console.log(`[Deposit] ✅ WETH 存入成功: Ξ${Number(wethDepositAmount) / 1e18}, gas: ${depositReceipt.gasUsed}`);
     }
-  } catch (e) {
-    console.warn(`[Balance] Failed to sync balance from chain: ${e}`);
-    // 测试模式：同步失败时才给予测试余额（作为回退）
-    if (SKIP_SIGNATURE_VERIFY && balance.totalBalance === 0n) {
-      balance.totalBalance = TEST_BALANCE;
-      balance.availableBalance = TEST_BALANCE;
-      console.log(`[Balance] TEST MODE (fallback): Initialized ${normalizedTrader.slice(0, 10)} with $${Number(TEST_BALANCE) / 1e6} USDT`);
+
+    // === Step B: 用 native ETH 存入 (depositETH) ===
+    if (nativeDepositAmount > 0n) {
+      console.log(`[Deposit] ${trader.slice(0, 10)} 用 native ETH 存入 Ξ${Number(nativeDepositAmount) / 1e18}`);
+
+      const txHash = await walletClient.writeContract({
+        address: SETTLEMENT_ADDRESS,
+        abi: SETTLEMENT_ABI as any,
+        functionName: "depositETH",
+        args: [],
+        value: nativeDepositAmount,
+      } as any);
+
+      console.log(`[Deposit] depositETH tx: ${txHash}`);
+
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: txHash,
+        confirmations: 1,
+        timeout: 30_000,
+      });
+
+      if (receipt.status === "reverted") {
+        throw new Error(`depositETH 失败, tx: ${txHash}`);
+      }
+
+      console.log(`[Deposit] ✅ native ETH 存入成功: Ξ${Number(nativeDepositAmount) / 1e18}, gas: ${receipt.gasUsed}`);
     }
+
+    console.log(`[Deposit] ✅ ${trader.slice(0, 10)} 总共存入 Ξ${Number(wethDepositAmount + nativeDepositAmount) / 1e18} (WETH: Ξ${Number(wethDepositAmount) / 1e18}, ETH: Ξ${Number(nativeDepositAmount) / 1e18})`);
+
+    // 5. 存入成功，重新同步余额
+    await syncUserBalanceFromChain(trader);
+
+  } catch (e: any) {
+    console.error(`[Deposit] ❌ ${trader.slice(0, 10)} 存入失败:`, e.message || e);
+    throw new Error(`保证金存入 Settlement 失败: ${e.message || "未知错误"}。请确保派生钱包有足够的 ETH/WETH。`);
   }
-}
-
-/**
- * 下单时扣除保证金和手续费
- * @returns true 如果扣款成功, false 如果余额不足
- */
-async function deductOrderAmount(trader: Address, orderId: string, size: bigint, price: bigint, leverage: bigint): Promise<boolean> {
-  // 先从链上同步余额
-  await syncUserBalanceFromChain(trader);
-
-  const balance = getUserBalance(trader);
-  const { margin, fee, total } = calculateOrderCost(size, price, leverage);
-
-  // 检查余额
-  if (balance.availableBalance < total) {
-    console.log(`[Balance] Deduct failed: ${trader.slice(0, 10)} needs $${Number(total) / 1e6} (margin=$${Number(margin) / 1e6} + fee=$${Number(fee) / 1e6}), available: $${Number(balance.availableBalance) / 1e6}`);
-    return false;
-  }
-
-  // 扣除金额
-  balance.availableBalance -= total;
-  balance.totalBalance -= total;
-
-  // 记录订单的保证金信息 (用于撤单退款和部分成交结算)
-  orderMarginInfos.set(orderId, {
-    margin,
-    fee,
-    totalDeducted: total,
-    totalSize: size,      // 记录订单总大小
-    settledSize: 0n,      // 已结算大小初始为0
-  });
-
-  console.log(`[Balance] Deducted: ${trader.slice(0, 10)} -$${Number(total) / 1e6} (margin=$${Number(margin) / 1e6} + fee=$${Number(fee) / 1e6}), remaining: $${Number(balance.availableBalance) / 1e6}`);
-  return true;
 }
 
 /**
  * 撤单时退还保证金和手续费 (仅退还未成交部分)
+ * @returns 退还金额 (1e18 ETHT 精度), 0n 表示无需退款
  */
-function refundOrderAmount(trader: Address, orderId: string): void {
+function refundOrderAmount(trader: Address, orderId: string): bigint {
   const balance = getUserBalance(trader);
   const marginInfo = orderMarginInfos.get(orderId);
 
   if (!marginInfo) {
     console.log(`[Balance] Refund skipped: no margin info for order ${orderId}`);
-    return;
+    return 0n;
   }
 
   // 计算未结算比例
@@ -3094,22 +4215,42 @@ function refundOrderAmount(trader: Address, orderId: string): void {
   const refundFee = (marginInfo.fee * unfilledRatio) / 10000n;
   const refundTotal = refundMargin + refundFee;
 
+  // 本地退还 (下次 sync 会从链上+orderMarginInfos 重新算)
   balance.availableBalance += refundTotal;
-  balance.totalBalance += refundTotal;
+  // 注意: 不改 totalBalance — 资金从预留→可用，总资产不变
 
-  // 删除记录
+  // 删除记录 (getPendingOrdersLocked 不再计入此订单)
   orderMarginInfos.delete(orderId);
+  OrderMarginRepo.delete(orderId).catch(e => console.error(`[Balance] Failed to delete margin info from Redis for ${orderId}:`, e));
 
-  console.log(`[Balance] Refunded: ${trader.slice(0, 10)} +$${Number(refundTotal) / 1e6} (unfilled ${Number(unfilledRatio) / 100}%), balance: $${Number(balance.availableBalance) / 1e6}`);
+  console.log(`[Balance] Refunded: ${trader.slice(0, 10)} +$${Number(refundTotal) / 1e18} (unfilled ${Number(unfilledRatio) / 100}%), balance: $${Number(balance.availableBalance) / 1e18}`);
+  return refundTotal;
+}
+
+/**
+ * [Mode 2] 撤单时更新内存余额
+ *
+ * Mode 2 变更:
+ * - 不再调用链上 Settlement.withdraw()
+ * - 直接更新内存余额 (refundOrderAmount 已经做了)
+ * - 用户提现时通过 Merkle 证明从 SettlementV2 提取
+ */
+async function withdrawFromSettlement(trader: Address, amount: bigint): Promise<void> {
+  if (amount <= 0n) return;
+
+  // Mode 2: 只记录日志，不做链上操作
+  // 余额已在 refundOrderAmount 中更新到内存
+  console.log(`[Mode2] ${trader.slice(0, 10)} refund $${Number(amount) / 1e18} (off-chain only)`);
 }
 
 /**
  * 订单成交时处理保证金 (支持部分成交)
  * - 按成交比例将保证金转为仓位保证金 (usedMargin)
- * - 手续费按比例收取
+ * - 手续费按 Maker/Taker 角色收取 (Maker 0.02%, Taker 0.05%)
  * @param filledSize 本次成交大小
+ * @param isMaker true = 挂单方 (Maker, 费率更低)
  */
-function settleOrderMargin(trader: Address, orderId: string, filledSize: bigint): void {
+function settleOrderMargin(trader: Address, orderId: string, filledSize: bigint, isMaker: boolean = false): void {
   const balance = getUserBalance(trader);
   const marginInfo = orderMarginInfos.get(orderId);
 
@@ -3125,7 +4266,37 @@ function settleOrderMargin(trader: Address, orderId: string, filledSize: bigint)
 
   // 按比例结算保证金
   const settleMargin = (marginInfo.margin * fillRatio) / 10000n;
+  // 预扣的手续费 (按 Taker 费率 0.05%)
+  const preDeductedFee = (marginInfo.fee * fillRatio) / 10000n;
+
+  // 实际手续费: Maker 0.02%, Taker 0.05%
+  const TAKER_FEE_RATE = 5n;
+  const MAKER_FEE_RATE = 2n;
+  const actualFeeRate = isMaker ? MAKER_FEE_RATE : TAKER_FEE_RATE;
+  const actualFee = (filledSize * actualFeeRate) / 10000n;
+
   balance.usedMargin += settleMargin;
+
+  // Mode 2: 开仓手续费是消耗品 — 从 chainAvailable 中"扣除"
+  // 当 orderMarginInfos 删除后，pendingOrdersLocked 减少了 margin+fee，
+  // 但 positionMargin 只增加 margin，所以 fee 部分会虚增 available
+  // 需要通过 mode2Adj -= fee 来抵消
+  if (actualFee > 0n) {
+    addMode2Adjustment(trader, -actualFee, "OPEN_FEE");
+    // ✅ 手续费转入平台钱包
+    addMode2Adjustment(FEE_RECEIVER_ADDRESS, actualFee, "PLATFORM_FEE");
+    console.log(`[Fee] Open fee Ξ${Number(actualFee) / 1e18} (${isMaker ? "Maker 0.02%" : "Taker 0.05%"}) → platform wallet`);
+  }
+
+  // Maker 退还多扣的手续费差额 (预扣 Taker 0.05% - 实际 Maker 0.02% = 0.03%)
+  if (isMaker && preDeductedFee > actualFee) {
+    const refund = preDeductedFee - actualFee;
+    balance.availableBalance += refund;
+    // mode2Adj 只扣了 actualFee，而预扣里包含了 preDeductedFee
+    // 差额 refund 需要补回 mode2Adj (因为 pendingOrdersLocked 仍按原额释放)
+    addMode2Adjustment(trader, refund, "MAKER_FEE_REFUND");
+    console.log(`[Fee] Maker fee refund Ξ${Number(refund) / 1e18} → ${trader.slice(0, 10)}`);
+  }
 
   // 更新已结算大小
   marginInfo.settledSize += filledSize;
@@ -3133,9 +4304,11 @@ function settleOrderMargin(trader: Address, orderId: string, filledSize: bigint)
   // 如果完全成交，删除记录
   if (marginInfo.settledSize >= marginInfo.totalSize) {
     orderMarginInfos.delete(orderId);
-    console.log(`[Balance] Fully settled: ${trader.slice(0, 10)} margin=$${Number(marginInfo.margin) / 1e6} → usedMargin`);
+    OrderMarginRepo.delete(orderId).catch(e => console.error(`[Balance] Failed to delete settled margin from Redis:`, e));
+    console.log(`[Balance] Fully settled: ${trader.slice(0, 10)} margin=$${Number(marginInfo.margin) / 1e18} → usedMargin`);
   } else {
-    console.log(`[Balance] Partial settle: ${trader.slice(0, 10)} +$${Number(settleMargin) / 1e6} (${Number(marginInfo.settledSize)}/${Number(marginInfo.totalSize)} filled)`);
+    OrderMarginRepo.updateSettledSize(orderId, marginInfo.settledSize).catch(e => console.error(`[Balance] Failed to update settledSize in Redis:`, e));
+    console.log(`[Balance] Partial settle: ${trader.slice(0, 10)} +$${Number(settleMargin) / 1e18} (${Number(marginInfo.settledSize)}/${Number(marginInfo.totalSize)} filled)`);
   }
 }
 
@@ -3208,6 +4381,9 @@ async function syncSupportedTokens(): Promise<void> {
     if (SUPPORTED_TOKENS.length > 0) {
       console.log(`[Sync] Tokens: ${SUPPORTED_TOKENS.map(t => t.slice(0, 10)).join(", ")}`);
     }
+
+    // 检测已毕业的代币，注册其 Uniswap V2 Pair 地址
+    await detectGraduatedTokens();
   } catch (e) {
     console.error("[Sync] Failed to load supported tokens:", e);
   }
@@ -3225,195 +4401,102 @@ function addSupportedToken(token: Address): void {
 }
 
 /**
- * 从链上 Settlement 合约同步所有活跃仓位
- * 解决 P003: 持仓数据来源混乱问题
+ * 注册毕业代币 - 记录其 Uniswap V2 Pair 地址用于价格读取
+ *
+ * 当代币从 bonding curve 毕业到 Uniswap V2 后:
+ * 1. TokenFactory.getCurrentPrice() 返回冻结的旧价格 (因为 reserve 没有归零)
+ * 2. 真实市场价格在 Uniswap V2 Pair 上
+ * 3. 需要从 Pair.getReserves() 读取真实价格
+ *
+ * @param token - 代币地址
+ * @param pairAddress - Uniswap V2 Pair 地址
+ */
+async function registerGraduatedToken(token: Address, pairAddress: Address): Promise<void> {
+  const normalizedToken = token.toLowerCase();
+  const normalizedPair = pairAddress.toLowerCase() as Address;
+
+  // 判断 WETH 是 token0 还是 token1
+  // Uniswap V2 中 token0 < token1 (按地址排序)
+  const isWethToken0 = WETH_ADDRESS.toLowerCase() < normalizedToken;
+
+  graduatedTokens.set(normalizedToken, {
+    pairAddress: normalizedPair,
+    isWethToken0,
+  });
+
+  console.log(`[Graduation] ✅ Registered graduated token: ${normalizedToken.slice(0, 10)}`);
+  console.log(`[Graduation]    Pair: ${normalizedPair.slice(0, 10)}, WETH is token${isWethToken0 ? '0' : '1'}`);
+}
+
+/**
+ * 检测已毕业的代币并注册其 Pair 地址
+ * 在启动时调用，处理服务器重启期间发生的毕业事件
+ */
+async function detectGraduatedTokens(): Promise<void> {
+  if (SUPPORTED_TOKENS.length === 0) return;
+
+  const publicClient = createPublicClient({
+    chain: baseSepolia,
+    transport: http(RPC_URL),
+  });
+
+  console.log(`[Graduation] Checking ${SUPPORTED_TOKENS.length} tokens for graduation status...`);
+
+  for (const token of SUPPORTED_TOKENS) {
+    try {
+      // 读取 PoolState 检查 isGraduated
+      const poolState = await publicClient.readContract({
+        address: TOKEN_FACTORY_ADDRESS,
+        abi: TOKEN_FACTORY_ABI,
+        functionName: "getPoolState",
+        args: [token],
+      }) as {
+        realETHReserve: bigint;
+        realTokenReserve: bigint;
+        soldTokens: bigint;
+        isGraduated: boolean;
+        isActive: boolean;
+        creator: string;
+        createdAt: bigint;
+        metadataURI: string;
+        graduationFailed: boolean;
+        graduationAttempts: number;
+        perpEnabled: boolean;
+      };
+
+      if (poolState.isGraduated) {
+        // 通过 Uniswap V2 Factory 查找 Pair 地址
+        const pairAddress = await publicClient.readContract({
+          address: UNISWAP_V2_FACTORY_ADDRESS,
+          abi: UNISWAP_V2_FACTORY_ABI,
+          functionName: "getPair",
+          args: [token, WETH_ADDRESS],
+        }) as Address;
+
+        const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+        if (pairAddress && pairAddress.toLowerCase() !== ZERO_ADDRESS) {
+          await registerGraduatedToken(token, pairAddress);
+        } else {
+          console.warn(`[Graduation] ⚠️ Token ${token.slice(0, 10)} is graduated but no Pair found!`);
+        }
+      }
+    } catch (e: any) {
+      console.warn(`[Graduation] Error checking ${token.slice(0, 10)}:`, e?.message?.slice(0, 80));
+    }
+  }
+
+  console.log(`[Graduation] Found ${graduatedTokens.size} graduated tokens`);
+}
+
+/**
+ * [模式 2] 仓位只存后端 Redis，不再从链上同步
+ *
+ * 旧模式: 从链上 Settlement 同步所有 PairedPosition
+ * 新模式: 仓位 = Redis 唯一真理源，链上只做资金托管 + 快照存证
  */
 async function syncPositionsFromChain(): Promise<void> {
-  if (!SETTLEMENT_ADDRESS) {
-    console.log("[Sync] No Settlement address configured, skipping position sync");
-    return;
-  }
-
-  console.log("[Sync] Starting position sync from chain...");
-
-  try {
-    const publicClient = createPublicClient({
-      chain: baseSepolia,
-      transport: http(RPC_URL),
-    });
-
-    // 获取下一个 pairId（即当前最大 pairId + 1）
-    const nextPairId = await publicClient.readContract({
-      address: SETTLEMENT_ADDRESS,
-      abi: SETTLEMENT_ABI,
-      functionName: "nextPairId",
-    }) as bigint;
-
-    console.log(`[Sync] Total pairs on chain: ${nextPairId}`);
-
-    if (nextPairId === 0n) {
-      console.log("[Sync] No positions found on chain");
-      return;
-    }
-
-    let syncedCount = 0;
-    let activeCount = 0;
-
-    // 遍历所有仓位
-    for (let pairId = 0n; pairId < nextPairId; pairId++) {
-      try {
-        const position = await publicClient.readContract({
-          address: SETTLEMENT_ADDRESS,
-          abi: SETTLEMENT_ABI,
-          functionName: "getPairedPosition",
-          args: [pairId],
-        }) as any;
-
-        // status: 0 = Active, 1 = Closed, 2 = Liquidated
-        if (position.status !== 0) {
-          continue; // 跳过非活跃仓位
-        }
-
-        // 跳过空仓位（size 为 0 或地址为零地址的仓位）
-        const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-        if (
-          BigInt(position.size) === 0n ||
-          position.longTrader === ZERO_ADDRESS ||
-          position.shortTrader === ZERO_ADDRESS ||
-          position.token === ZERO_ADDRESS
-        ) {
-          continue; // 跳过空/无效仓位
-        }
-
-        activeCount++;
-
-        // 计算清算价格
-        const entryPrice = BigInt(position.entryPrice);
-        const longLeverage = BigInt(position.longLeverage);
-        const shortLeverage = BigInt(position.shortLeverage);
-
-        // leverage 存储为基点 (1x = 10000, 10x = 100000)
-        // calculateLiquidationPrice 期望精度是 1e4，直接传入
-        const longLiqPrice = longLeverage > 0n ? calculateLiquidationPrice(entryPrice, longLeverage, true) : 0n;
-        const shortLiqPrice = shortLeverage > 0n ? calculateLiquidationPrice(entryPrice, shortLeverage, false) : 0n;
-
-        const now = Date.now();
-        const entryPriceStr = position.entryPrice.toString();
-
-        // 计算盈亏平衡价格 (含0.05%手续费)
-        const feeRate = 0.0005;
-        const breakEvenLong = entryPrice + BigInt(Math.floor(Number(entryPrice) * feeRate));
-        const breakEvenShort = entryPrice - BigInt(Math.floor(Number(entryPrice) * feeRate));
-
-        // 计算维持保证金 (0.5% of position value)
-        const mmrRate = 0.005;
-        const positionValue = BigInt(position.size) * entryPrice / (10n ** 18n);
-        const maintenanceMargin = positionValue * BigInt(Math.floor(mmrRate * 10000)) / 10000n;
-
-        // 创建 Long 方仓位 (行业标准字段)
-        const longPosition: Position = {
-          // 基本标识
-          pairId: pairId.toString(),
-          trader: position.longTrader as Address,
-          token: position.token as Address,
-
-          // 仓位参数
-          isLong: true,
-          size: position.size.toString(),
-          entryPrice: entryPriceStr,
-          leverage: (longLeverage / 10000n).toString(),
-
-          // 价格信息
-          markPrice: entryPriceStr, // 初始化为开仓价，后续更新
-          liquidationPrice: longLiqPrice.toString(),
-          breakEvenPrice: breakEvenLong.toString(),
-
-          // 保证金信息
-          collateral: position.longCollateral.toString(),
-          margin: position.longCollateral.toString(),
-          marginRatio: "10000", // 初始化为 100%
-          maintenanceMargin: maintenanceMargin.toString(),
-
-          // 盈亏信息
-          unrealizedPnL: "0",
-          realizedPnL: "0",
-          roe: "0",
-          fundingFee: "0",
-
-          // 止盈止损
-          takeProfitPrice: null,
-          stopLossPrice: null,
-
-          // 系统信息
-          counterparty: position.shortTrader as Address,
-          createdAt: Number(position.openTime) * 1000,
-          updatedAt: now,
-
-          // 风险指标
-          adlRanking: 3, // 默认中等
-          riskLevel: "medium",
-        };
-
-        // 创建 Short 方仓位 (行业标准字段)
-        const shortPosition: Position = {
-          // 基本标识
-          pairId: pairId.toString(),
-          trader: position.shortTrader as Address,
-          token: position.token as Address,
-
-          // 仓位参数
-          isLong: false,
-          size: position.size.toString(),
-          entryPrice: entryPriceStr,
-          leverage: (shortLeverage / 10000n).toString(),
-
-          // 价格信息
-          markPrice: entryPriceStr,
-          liquidationPrice: shortLiqPrice.toString(),
-          breakEvenPrice: breakEvenShort.toString(),
-
-          // 保证金信息
-          collateral: position.shortCollateral.toString(),
-          margin: position.shortCollateral.toString(),
-          marginRatio: "10000",
-          maintenanceMargin: maintenanceMargin.toString(),
-
-          // 盈亏信息
-          unrealizedPnL: "0",
-          realizedPnL: "0",
-          roe: "0",
-          fundingFee: "0",
-
-          // 止盈止损
-          takeProfitPrice: null,
-          stopLossPrice: null,
-
-          // 系统信息
-          counterparty: position.longTrader as Address,
-          createdAt: Number(position.openTime) * 1000,
-          updatedAt: now,
-
-          // 风险指标
-          adlRanking: 3,
-          riskLevel: "medium",
-        };
-
-        // 添加到 userPositions Map
-        addPositionToUser(longPosition);
-        addPositionToUser(shortPosition);
-        syncedCount += 2;
-
-      } catch (e) {
-        // 单个仓位读取失败，继续下一个
-        console.error(`[Sync] Failed to read pair ${pairId}:`, e);
-      }
-    }
-
-    console.log(`[Sync] Synced ${syncedCount} positions from ${activeCount} active pairs`);
-
-  } catch (e) {
-    console.error("[Sync] Failed to sync positions from chain:", e);
-  }
+  console.log("[Mode2] Position sync from chain is DISABLED");
+  console.log("[Mode2] Positions are stored in Redis only, chain is for fund custody + snapshot attestation");
 }
 
 /**
@@ -3465,10 +4548,11 @@ async function startEventWatching(): Promise<void> {
   }
 
   console.log("[Events] Starting event watching for Settlement contract:", SETTLEMENT_ADDRESS);
+  console.log("[Events] Using WebSocket endpoint:", WSS_URL);
 
   const publicClient = createPublicClient({
     chain: baseSepolia,
-    transport: http(RPC_URL),
+    transport: webSocket(WSS_URL),
   });
 
   // 监听 Deposited 事件 (用户直接充值)
@@ -3479,7 +4563,7 @@ async function startEventWatching(): Promise<void> {
     onLogs: (logs) => {
       for (const log of logs) {
         const { user, amount } = log.args as { user: Address; amount: bigint };
-        console.log(`[Events] Deposited: ${user.slice(0, 10)} +$${Number(amount) / 1e6}`);
+        console.log(`[Events] Deposited: ${user.slice(0, 10)} +$${Number(amount) / 1e18}`);
         // 通过 WebSocket 通知前端
         broadcastBalanceUpdate(user);
       }
@@ -3499,7 +4583,7 @@ async function startEventWatching(): Promise<void> {
           token: Address;
           amount: bigint;
         };
-        console.log(`[Events] DepositedFor: ${relayer.slice(0, 10)} → ${user.slice(0, 10)} +$${Number(amount) / 1e6}`);
+        console.log(`[Events] DepositedFor: ${relayer.slice(0, 10)} → ${user.slice(0, 10)} +$${Number(amount) / 1e18}`);
         // 通过 WebSocket 通知前端
         broadcastBalanceUpdate(user);
       }
@@ -3514,102 +4598,107 @@ async function startEventWatching(): Promise<void> {
     onLogs: (logs) => {
       for (const log of logs) {
         const { user, amount } = log.args as { user: Address; amount: bigint };
-        console.log(`[Events] Withdrawn: ${user.slice(0, 10)} -$${Number(amount) / 1e6}`);
+        console.log(`[Events] Withdrawn: ${user.slice(0, 10)} -$${Number(amount) / 1e18}`);
         broadcastBalanceUpdate(user);
       }
     },
   });
 
-  // 监听 PairOpened 事件 (新仓位开立)
+  // ============================================================
+  // 🔄 模式 2: 以下事件监听器已禁用
+  // - PairOpened, PairClosed, Liquidated 不再需要
+  // - 仓位只存后端 Redis，不从链上同步
+  // - 链上只做资金托管 + Merkle Root 快照存证
+  // ============================================================
+  console.log("[Events] Mode 2: PairOpened/PairClosed/Liquidated listeners DISABLED");
+  console.log("[Events] Mode 2: Positions are stored in Redis only");
+
+  // 监听 TokenFactory LiquidityMigrated 事件 (代币毕业到 Uniswap V2)
+  console.log("[Events] Starting TokenFactory LiquidityMigrated event watching:", TOKEN_FACTORY_ADDRESS);
   publicClient.watchContractEvent({
-    address: SETTLEMENT_ADDRESS,
-    abi: SETTLEMENT_ABI,
-    eventName: "PairOpened",
+    address: TOKEN_FACTORY_ADDRESS,
+    abi: TOKEN_FACTORY_ABI,
+    eventName: "LiquidityMigrated",
     onLogs: async (logs) => {
       for (const log of logs) {
-        const { pairId, longTrader, shortTrader, token, size, entryPrice } = log.args as {
-          pairId: bigint;
-          longTrader: Address;
-          shortTrader: Address;
-          token: Address;
-          size: bigint;
-          entryPrice: bigint;
+        const { tokenAddress, pairAddress, ethLiquidity, tokenLiquidity } = log.args as {
+          tokenAddress: Address;
+          pairAddress: Address;
+          ethLiquidity: bigint;
+          tokenLiquidity: bigint;
+          timestamp: bigint;
         };
-        console.log(`[Events] PairOpened: #${pairId} ${longTrader.slice(0, 10)} vs ${shortTrader.slice(0, 10)}`);
 
-        // 从链上读取完整仓位信息
+        console.log(`[Events] 🎓 LiquidityMigrated: ${tokenAddress.slice(0, 10)} → Pair ${pairAddress.slice(0, 10)}`);
+        console.log(`[Events]    ETH: ${Number(ethLiquidity) / 1e18}, Tokens: ${Number(tokenLiquidity) / 1e18}`);
+
+        // 注册毕业代币，切换价格源到 Uniswap V2 Pair
+        await registerGraduatedToken(tokenAddress, pairAddress);
+
+        console.log(`[Events] ✅ Price source switched to Uniswap V2 for ${tokenAddress.slice(0, 10)}`);
+        console.log(`[Events]    Perpetual trading will continue with DEX market price`);
+      }
+    },
+  });
+
+  // 监听 TokenFactory TokenCreated 事件 (新代币创建)
+  console.log("[Events] Starting TokenFactory TokenCreated event watching:", TOKEN_FACTORY_ADDRESS);
+  publicClient.watchContractEvent({
+    address: TOKEN_FACTORY_ADDRESS,
+    abi: TOKEN_FACTORY_ABI,
+    eventName: "TokenCreated",
+    onLogs: async (logs) => {
+      for (const log of logs) {
+        const { tokenAddress, creator, name, symbol } = log.args as {
+          tokenAddress: Address;
+          creator: Address;
+          name: string;
+          symbol: string;
+          uri: string;
+          totalSupply: bigint;
+        };
+
+        console.log(`[Events] TokenCreated: ${symbol} (${name}) at ${tokenAddress.slice(0, 10)} by ${creator.slice(0, 10)}`);
+
+        // 添加到支持的代币列表
+        addSupportedToken(tokenAddress);
+
+        // ✅ 创建初始 K 线数据 (Pump.fun 模式)
+        // 直接从合约读取价格，避免浮点数精度差异导致的虚假下跌
         try {
-          const position = await publicClient.readContract({
-            address: SETTLEMENT_ADDRESS,
-            abi: SETTLEMENT_ABI,
-            functionName: "getPairedPosition",
-            args: [pairId],
-          }) as any;
+          const { initializeTokenKline } = await import("../spot/spotHistory");
 
-          // 创建 Long 仓位
-          syncPositionFromChainData(pairId, position, true);
-          // 创建 Short 仓位
-          syncPositionFromChainData(pairId, position, false);
+          // 从合约读取当前价格 (与 syncSpotPrices 使用相同的方式)
+          const getCurrentPriceAbi = [{
+            inputs: [{ name: "token", type: "address" }],
+            name: "getCurrentPrice",
+            outputs: [{ type: "uint256" }],
+            stateMutability: "view",
+            type: "function",
+          }] as const;
 
-          // 通知前端
-          broadcastBalanceUpdate(longTrader);
-          broadcastBalanceUpdate(shortTrader);
-          broadcastPositionUpdate(longTrader, token);
-          broadcastPositionUpdate(shortTrader, token);
-        } catch (e) {
-          console.error(`[Events] Failed to sync position #${pairId}:`, e);
+          const priceWei = await publicClient.readContract({
+            address: TOKEN_FACTORY_ADDRESS,
+            abi: getCurrentPriceAbi,
+            functionName: "getCurrentPrice",
+            args: [tokenAddress],
+          });
+
+          // 转换为 ETH (与 syncSpotPrices 完全一致的计算方式)
+          const initialPriceEth = Number(priceWei) / 1e18;
+          const ethPriceUsd = currentEthPriceUsd || 2500;
+          const initialPriceUsd = initialPriceEth * ethPriceUsd;
+
+          await initializeTokenKline(
+            tokenAddress,
+            initialPriceEth.toString(),
+            initialPriceUsd.toString(),
+            Number(log.blockNumber || 0n)
+          );
+          console.log(`[Events] Initialized K-line for ${symbol}: ${initialPriceEth.toExponential(4)} ETH ($${initialPriceUsd.toExponential(4)})`);
+        } catch (initErr) {
+          console.warn("[Events] Failed to initialize K-line:", initErr);
         }
-      }
-    },
-  });
-
-  // 监听 PairClosed 事件 (仓位平仓)
-  publicClient.watchContractEvent({
-    address: SETTLEMENT_ADDRESS,
-    abi: SETTLEMENT_ABI,
-    eventName: "PairClosed",
-    onLogs: (logs) => {
-      for (const log of logs) {
-        const { pairId, exitPrice, longPnL, shortPnL } = log.args as {
-          pairId: bigint;
-          exitPrice: bigint;
-          longPnL: bigint;
-          shortPnL: bigint;
-        };
-        console.log(`[Events] PairClosed: #${pairId} longPnL=$${Number(longPnL) / 1e6} shortPnL=$${Number(shortPnL) / 1e6}`);
-
-        // 从后端仓位记录中移除
-        removePositionByPairId(pairId.toString());
-
-        // 刷新所有仓位
-        syncPositionsFromChain().catch((e) => {
-          console.error("[Events] Failed to sync after PairClosed:", e);
-        });
-      }
-    },
-  });
-
-  // 监听 Liquidated 事件 (强制平仓)
-  publicClient.watchContractEvent({
-    address: SETTLEMENT_ADDRESS,
-    abi: SETTLEMENT_ABI,
-    eventName: "Liquidated",
-    onLogs: (logs) => {
-      for (const log of logs) {
-        const { pairId, liquidatedTrader, liquidator, reward } = log.args as {
-          pairId: bigint;
-          liquidatedTrader: Address;
-          liquidator: Address;
-          reward: bigint;
-        };
-        console.log(`[Events] Liquidated: #${pairId} trader=${liquidatedTrader.slice(0, 10)} reward=$${Number(reward) / 1e6}`);
-
-        // 从后端仓位记录中移除
-        removePositionByPairId(pairId.toString());
-
-        // 通知前端
-        broadcastBalanceUpdate(liquidatedTrader);
-        broadcastBalanceUpdate(liquidator);
       }
     },
   });
@@ -3643,7 +4732,7 @@ async function startEventWatching(): Promise<void> {
 
         // 处理交易事件并存储
         try {
-          const { processTradeEvent } = await import("./modules/spotHistory");
+          const { processTradeEvent } = await import("../spot/spotHistory");
           await processTradeEvent(
             token,
             trader,
@@ -3658,6 +4747,27 @@ async function startEventWatching(): Promise<void> {
             ethPriceUsd
           );
 
+          // 计算交易后的正确价格 (合约发出的是交易前状态!)
+          // 买入: ETH进入池子，Token离开池子
+          // 卖出: Token进入池子，ETH离开池子
+          let afterVirtualEth: bigint;
+          let afterVirtualToken: bigint;
+
+          if (isBuy) {
+            afterVirtualEth = virtualEth + ethAmount;
+            afterVirtualToken = virtualToken - tokenAmount;
+          } else {
+            // 卖出时 ethAmount 是扣除手续费后的净值
+            const FEE_MULTIPLIER = 0.99;
+            const ethOutTotal = BigInt(Math.ceil(Number(ethAmount) / FEE_MULTIPLIER));
+            afterVirtualEth = virtualEth - ethOutTotal;
+            afterVirtualToken = virtualToken + tokenAmount;
+          }
+
+          const afterPrice = afterVirtualToken > 0n
+            ? Number(afterVirtualEth) / Number(afterVirtualToken)
+            : Number(virtualEth) / Number(virtualToken);
+
           // 广播给订阅了该代币的 WebSocket 客户端
           broadcastSpotTrade(token, {
             token,
@@ -3665,10 +4775,33 @@ async function startEventWatching(): Promise<void> {
             isBuy,
             ethAmount: ethAmount.toString(),
             tokenAmount: tokenAmount.toString(),
-            price: (Number(virtualEth) / Number(virtualToken)).toString(),
+            price: afterPrice.toString(),
             txHash: log.transactionHash,
             timestamp: Number(timestamp),
           });
+
+          // ✅ 广播 K线更新 (关键修复：让前端 K线实时更新)
+          try {
+            const { KlineRepo } = await import("../spot/spotHistory");
+            // 获取最新的 1m K线 (当前时间桶)
+            const currentMinute = Math.floor(Number(timestamp) / 60) * 60;
+            const klines = await KlineRepo.get(token, "1m", currentMinute, currentMinute);
+
+            if (klines.length > 0) {
+              const kline = klines[0];
+              broadcastKline(token, {
+                timestamp: kline.time * 1000, // 转换为毫秒
+                open: kline.open,
+                high: kline.high,
+                low: kline.low,
+                close: kline.close,
+                volume: kline.volume,
+              });
+              console.log(`[Events] Broadcasted kline update for ${token.slice(0, 10)}`);
+            }
+          } catch (klineErr) {
+            console.warn("[Events] Failed to broadcast kline:", klineErr);
+          }
         } catch (e) {
           console.error("[Events] Failed to process trade event:", e);
         }
@@ -3676,51 +4809,224 @@ async function startEventWatching(): Promise<void> {
     },
   });
 
+  // 监听 WETH ERC20 Transfer 事件 (用户转 WETH 到/从派生钱包)
+  const WETH_ADDRESS = process.env.WETH_ADDRESS as Address;
+  if (WETH_ADDRESS) {
+    console.log("[Events] Starting WETH Transfer event watching:", WETH_ADDRESS);
+    publicClient.watchContractEvent({
+      address: WETH_ADDRESS,
+      abi: [{
+        type: "event",
+        name: "Transfer",
+        inputs: [
+          { name: "from", type: "address", indexed: true },
+          { name: "to", type: "address", indexed: true },
+          { name: "value", type: "uint256", indexed: false },
+        ],
+      }],
+      eventName: "Transfer",
+      onLogs: async (logs) => {
+        for (const log of logs) {
+          const { from, to, value } = log.args as { from: Address; to: Address; value: bigint };
+          const normalizedTo = to.toLowerCase() as Address;
+          const normalizedFrom = from.toLowerCase() as Address;
+
+          // 转入派生钱包 → 同步余额 + 推送
+          if (getUserBalance(normalizedTo).totalBalance !== undefined) {
+            console.log(`[Events] WETH Transfer IN: ${from.slice(0, 10)} → ${to.slice(0, 10)}, +Ξ${Number(value) / 1e18}`);
+            await syncUserBalanceFromChain(normalizedTo);
+            broadcastBalanceUpdate(normalizedTo);
+          }
+
+          // 从派生钱包转出 → 同步余额 + 推送
+          if (getUserBalance(normalizedFrom).totalBalance !== undefined) {
+            console.log(`[Events] WETH Transfer OUT: ${from.slice(0, 10)} → ${to.slice(0, 10)}, -Ξ${Number(value) / 1e18}`);
+            await syncUserBalanceFromChain(normalizedFrom);
+            broadcastBalanceUpdate(normalizedFrom);
+          }
+        }
+      },
+    });
+  } else {
+    console.warn("[Events] WETH_ADDRESS not configured, skipping Transfer event watching");
+  }
+
   console.log("[Events] Event watching started successfully");
+
+  // ========================================
+  // 启动 HTTP 轮询式 Trade 事件监听 (WebSocket 的可靠备份)
+  // WebSocket watchContractEvent 可能会静默断开，轮询作为兜底
+  // ========================================
+  startTradeEventPoller().catch((e) => {
+    console.error("[TradePoller] Failed to start:", e);
+  });
 }
 
 /**
- * 从链上仓位数据同步到后端
+ * 基于 HTTP 轮询的 Trade 事件监听
+ *
+ * WebSocket 事件订阅容易静默断开（尤其是免费公共节点），
+ * 此轮询器使用 HTTP getLogs 定期扫描新区块，确保不漏掉任何交易。
+ *
+ * 工作方式:
+ * 1. 启动时从当前区块开始记录 lastScannedBlock
+ * 2. 每 15 秒轮询一次，获取 lastScannedBlock+1 到 latest 之间的 Trade 事件
+ * 3. 调用 processTradeEvent 存储（内部会自动去重）
  */
-function syncPositionFromChainData(pairId: bigint, chainPosition: any, isLong: boolean): void {
-  const trader = isLong ? chainPosition.longTrader : chainPosition.shortTrader;
-  const counterparty = isLong ? chainPosition.shortTrader : chainPosition.longTrader;
-  const collateral = isLong ? chainPosition.longCollateral : chainPosition.shortCollateral;
-  const leverage = isLong ? chainPosition.longLeverage : chainPosition.shortLeverage;
+let lastScannedBlock = 0n;
+const TRADE_POLL_INTERVAL_MS = 15_000; // 15 秒轮询一次
 
-  const entryPrice = BigInt(chainPosition.entryPrice);
-  const liquidationPrice = calculateLiquidationPrice(entryPrice, BigInt(leverage), isLong);
+async function startTradeEventPoller(): Promise<void> {
+  const { createPublicClient, http, parseAbiItem } = await import("viem");
+  const { baseSepolia } = await import("viem/chains");
 
-  const position: Position = {
-    pairId: pairId.toString(),
-    trader: trader as Address,
-    token: chainPosition.token as Address,
-    isLong,
-    size: chainPosition.size.toString(),
-    entryPrice: chainPosition.entryPrice.toString(),
-    leverage: (BigInt(leverage) / 10000n).toString(),
-    markPrice: chainPosition.entryPrice.toString(),
-    liquidationPrice: liquidationPrice.toString(),
-    breakEvenPrice: chainPosition.entryPrice.toString(),
-    collateral: collateral.toString(),
-    margin: collateral.toString(),
-    marginRatio: "10000",
-    maintenanceMargin: "0",
-    unrealizedPnL: "0",
-    realizedPnL: "0",
-    roe: "0",
-    fundingFee: "0",
-    takeProfitPrice: null,
-    stopLossPrice: null,
-    counterparty: counterparty as Address,
-    createdAt: Number(chainPosition.openTime) * 1000,
-    updatedAt: Date.now(),
-    adlRanking: 3,
-    riskLevel: "low",
-  };
+  // 使用 publicnode.com 的 HTTP RPC（无 getLogs 区块范围限制）
+  const POLL_RPC_URL = "https://base-sepolia-rpc.publicnode.com";
 
-  addPositionToUser(position);
+  const pollClient = createPublicClient({
+    chain: baseSepolia,
+    transport: http(POLL_RPC_URL),
+  });
+
+  const TRADE_EVENT_ABI = parseAbiItem(
+    "event Trade(address indexed token, address indexed trader, bool isBuy, uint256 ethAmount, uint256 tokenAmount, uint256 virtualEth, uint256 virtualToken, uint256 timestamp)"
+  );
+
+  // 获取当前区块作为起始点
+  const currentBlock = await pollClient.getBlockNumber();
+  lastScannedBlock = currentBlock;
+  console.log(`[TradePoller] Started at block ${currentBlock}, polling every ${TRADE_POLL_INTERVAL_MS / 1000}s`);
+
+  // 启动前先回填：扫描最近 1000 个区块以捕获启动期间遗漏的事件
+  try {
+    const backfillFrom = currentBlock > 1000n ? currentBlock - 1000n : 0n;
+    console.log(`[TradePoller] Backfilling from block ${backfillFrom} to ${currentBlock}...`);
+    await pollTradeEvents(pollClient, TRADE_EVENT_ABI, backfillFrom, currentBlock);
+  } catch (e: any) {
+    console.error(`[TradePoller] Backfill failed:`, e.message);
+  }
+
+  // 定期轮询新事件
+  setInterval(async () => {
+    try {
+      const latestBlock = await pollClient.getBlockNumber();
+      if (latestBlock <= lastScannedBlock) return; // 没有新区块
+
+      const fromBlock = lastScannedBlock + 1n;
+      const toBlock = latestBlock;
+
+      await pollTradeEvents(pollClient, TRADE_EVENT_ABI, fromBlock, toBlock);
+      lastScannedBlock = toBlock;
+    } catch (e: any) {
+      console.error(`[TradePoller] Poll error:`, e.message);
+      // 不更新 lastScannedBlock，下次重试
+    }
+  }, TRADE_POLL_INTERVAL_MS);
 }
+
+/**
+ * 轮询指定区块范围内的 Trade 事件并处理
+ */
+async function pollTradeEvents(
+  client: any,
+  eventAbi: any,
+  fromBlock: bigint,
+  toBlock: bigint
+): Promise<void> {
+  const BATCH_SIZE = 2000n;
+  let totalProcessed = 0;
+
+  for (let start = fromBlock; start <= toBlock; start += BATCH_SIZE) {
+    const end = start + BATCH_SIZE > toBlock ? toBlock : start + BATCH_SIZE;
+
+    const logs = await client.getLogs({
+      address: TOKEN_FACTORY_ADDRESS,
+      event: eventAbi,
+      fromBlock: start,
+      toBlock: end,
+    });
+
+    if (logs.length === 0) continue;
+
+    for (const log of logs) {
+      const args = log.args as {
+        token: Address;
+        trader: Address;
+        isBuy: boolean;
+        ethAmount: bigint;
+        tokenAmount: bigint;
+        virtualEth: bigint;
+        virtualToken: bigint;
+        timestamp: bigint;
+      };
+
+      try {
+        const { processTradeEvent } = await import("../spot/spotHistory");
+        const ethPriceUsd = currentEthPriceUsd || 2500;
+
+        // processTradeEvent 内部会检查 exists() 自动去重
+        await processTradeEvent(
+          args.token,
+          args.trader,
+          args.isBuy,
+          args.ethAmount,
+          args.tokenAmount,
+          args.virtualEth,
+          args.virtualToken,
+          args.timestamp,
+          log.transactionHash as Hex,
+          log.blockNumber ?? 0n,
+          ethPriceUsd
+        );
+        totalProcessed++;
+
+        // 确保代币在支持列表中
+        addSupportedToken(args.token);
+
+        // 广播给 WebSocket 客户端
+        let afterVirtualEth: bigint;
+        let afterVirtualToken: bigint;
+        if (args.isBuy) {
+          afterVirtualEth = args.virtualEth + args.ethAmount;
+          afterVirtualToken = args.virtualToken - args.tokenAmount;
+        } else {
+          const FEE_MULTIPLIER = 0.99;
+          const ethOutTotal = BigInt(Math.ceil(Number(args.ethAmount) / FEE_MULTIPLIER));
+          afterVirtualEth = args.virtualEth - ethOutTotal;
+          afterVirtualToken = args.virtualToken + args.tokenAmount;
+        }
+        const afterPrice = afterVirtualToken > 0n
+          ? Number(afterVirtualEth) / Number(afterVirtualToken)
+          : Number(args.virtualEth) / Number(args.virtualToken);
+
+        broadcastSpotTrade(args.token, {
+          token: args.token,
+          trader: args.trader,
+          isBuy: args.isBuy,
+          ethAmount: args.ethAmount.toString(),
+          tokenAmount: args.tokenAmount.toString(),
+          price: afterPrice.toString(),
+          txHash: log.transactionHash,
+          timestamp: Number(args.timestamp),
+        });
+      } catch (tradeErr: any) {
+        console.error(`[TradePoller] Failed to process trade ${log.transactionHash?.slice(0, 10)}:`, tradeErr.message);
+      }
+    }
+  }
+
+  if (totalProcessed > 0) {
+    console.log(`[TradePoller] Processed ${totalProcessed} trades from blocks ${fromBlock}-${toBlock}`);
+  }
+}
+
+/**
+ * [模式 2] 此函数已弃用
+ *
+ * 旧模式: 从链上 PairOpened 事件同步仓位
+ * 新模式: 仓位完全在后端管理，由 addPositionToUser() 在撮合时创建
+ */
+// function syncPositionFromChainData() - DEPRECATED in Mode 2
 
 /**
  * 根据 pairId 移除仓位
@@ -3744,10 +5050,21 @@ function removePositionByPairId(pairId: string): void {
  * 广播余额更新到前端
  */
 function broadcastBalanceUpdate(user: Address): void {
+  const normalizedUser = user.toLowerCase();
+  const balance = getUserBalance(normalizedUser as Address);
   const message = JSON.stringify({
-    type: "balance_update",
-    user: user.toLowerCase(),
-    timestamp: Date.now(),
+    type: "balance",
+    data: {
+      trader: normalizedUser,
+      totalBalance: balance.totalBalance.toString(),
+      availableBalance: balance.availableBalance.toString(),
+      usedMargin: (balance.usedMargin || 0n).toString(),
+      unrealizedPnL: (balance.unrealizedPnL || 0n).toString(),
+      walletBalance: (balance.walletBalance || 0n).toString(),
+      settlementAvailable: (balance.settlementAvailable || 0n).toString(),
+      settlementLocked: (balance.settlementLocked || 0n).toString(),
+    },
+    timestamp: Math.floor(Date.now() / 1000),
   });
 
   for (const [client, subscriptions] of wsClients.entries()) {
@@ -3759,19 +5076,70 @@ function broadcastBalanceUpdate(user: Address): void {
 
 /**
  * 广播仓位更新到前端
+ * 1. 发送 "positions" 通知 (触发前端 HTTP refetch, 兼容旧逻辑)
+ * 2. 立即推送 "position_risks" 完整仓位数据 (实时更新, 无需等 500ms 周期)
  */
 function broadcastPositionUpdate(user: Address, token: Address): void {
   const normalizedToken = token.toLowerCase() as Address;
-  const message = JSON.stringify({
-    type: "position_update",
-    user: user.toLowerCase(),
+  const normalizedUser = user.toLowerCase() as Address;
+
+  // 1. 通知所有订阅该 token 的客户端 (触发 HTTP refetch)
+  const notification = JSON.stringify({
+    type: "positions",
+    user: normalizedUser,
     token: normalizedToken,
     timestamp: Date.now(),
   });
 
   for (const [client, subscriptions] of wsClients.entries()) {
     if (client.readyState === WebSocket.OPEN && subscriptions.has(normalizedToken)) {
-      client.send(message);
+      client.send(notification);
+    }
+  }
+
+  // 2. 立即推送该用户的完整仓位数据 (position_risks)
+  // 不等待 broadcastRiskData 的 500ms 周期，确保仓位变更即时反映
+  broadcastUserPositionRisks(normalizedUser);
+}
+
+/**
+ * 向指定用户推送其完整仓位风险数据
+ * 通过 wsTraderClients (subscribe_risk 订阅) 发送
+ */
+function broadcastUserPositionRisks(trader: Address): void {
+  const wsSet = wsTraderClients.get(trader);
+  if (!wsSet || wsSet.size === 0) return;
+
+  const positions = userPositions.get(trader) || [];
+  const positionRisks = positions.map(pos => ({
+    pairId: pos.pairId,
+    trader: pos.trader,
+    token: pos.token,
+    isLong: pos.isLong,
+    size: pos.size,
+    entryPrice: pos.entryPrice,
+    leverage: pos.leverage,
+    marginRatio: pos.marginRatio || "10000",
+    mmr: pos.mmr || "200",
+    roe: pos.roe || "0",
+    liquidationPrice: pos.liquidationPrice || "0",
+    markPrice: pos.markPrice || "0",
+    unrealizedPnL: pos.unrealizedPnL || "0",
+    collateral: pos.collateral,
+    adlScore: parseFloat(pos.adlScore || "0"),
+    adlRanking: pos.adlRanking || 1,
+    riskLevel: pos.riskLevel || "low",
+  }));
+
+  const message = JSON.stringify({
+    type: "position_risks",
+    positions: positionRisks,
+    timestamp: Date.now(),
+  });
+
+  for (const ws of wsSet) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(message);
     }
   }
 }
@@ -3794,6 +5162,33 @@ function broadcastSpotTrade(token: Address, trade: {
     type: "spot_trade",
     token: normalizedToken,
     ...trade,
+  });
+
+  for (const [client, subscriptions] of wsClients.entries()) {
+    if (client.readyState === WebSocket.OPEN && subscriptions.has(normalizedToken)) {
+      client.send(message);
+    }
+  }
+}
+
+/**
+ * 广播 K线更新到前端
+ */
+function broadcastKline(token: Address, kline: {
+  timestamp: number;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+}): void {
+  const normalizedToken = token.toLowerCase() as Address;
+  // 统一消息格式: 与 handlers.ts 的 broadcastKline 保持一致
+  // 前端 useWebSocketKlines 读取 message.data.xxx
+  const message = JSON.stringify({
+    type: "kline",
+    data: { token: normalizedToken, ...kline },
+    timestamp: Date.now(),
   });
 
   for (const [client, subscriptions] of wsClients.entries()) {
@@ -3846,7 +5241,8 @@ function createOrUpdatePosition(
   size: bigint,
   entryPrice: bigint,
   leverage: bigint,
-  counterparty: Address
+  counterparty: Address,
+  orderId: string
 ): void {
   const normalizedTrader = trader.toLowerCase() as Address;
   const normalizedToken = token.toLowerCase() as Address;
@@ -3857,19 +5253,20 @@ function createOrUpdatePosition(
 
   // 计算保证金 (参考 GMX/Binance)
   // 精度说明:
-  //   - size: 1e18 精度 (代币数量)
-  //   - entryPrice: 1e12 精度 (USD价格，来自订单簿 currentPrice)
+  //   - size: 1e18 精度 (ETH 名义价值)
+  //   - entryPrice: 1e18 精度 (ETH/token 价格，来自 Bonding Curve)
   //   - leverage: 1e4 精度 (10x = 100000)
-  //   - collateral 输出: 1e6 精度 (USD)
+  //   - collateral 输出: 1e18 精度 (ETH)
   //
-  // 仓位价值 = size * entryPrice / (1e18 * 1e12) * 1e6 = size * entryPrice / 1e24
-  const positionValue = (size * entryPrice) / (10n ** 24n); // USD, 1e6 精度
-  console.log(`[Position] positionValue (1e6 USD) = ${positionValue} ($${Number(positionValue) / 1e6})`);
+  // ⚠️ 重要：前端传的 size 已经是 ETH 名义价值 (1e18 精度)
+  // 例如：0.2 ETH 仓位 → size = 200000000000000000 (0.2 * 1e18)
+  const positionValue = size; // size 本身就是 ETH 名义价值 (1e18 精度)
+  console.log(`[Position] positionValue (1e18 ETH) = ${positionValue} ($${Number(positionValue) / 1e18})`);
 
   // 保证金 = 仓位价值 / 杠杆倍数
   // 因为 leverage 是 1e4 精度, 所以: collateral = positionValue * 1e4 / leverage
-  const collateral = (positionValue * 10000n) / leverage; // USD, 1e6 精度
-  console.log(`[Position] collateral (1e6 USD) = ${collateral}, in USD = $${Number(collateral) / 1e6}`)
+  const collateral = (positionValue * 10000n) / leverage; // USD, 1e18 精度
+  console.log(`[Position] collateral (1e18 ETH) = ${collateral}, in USD = $${Number(collateral) / 1e18}`)
 
   // 注意: 保证金已在下单时扣除 (deductOrderAmount)，并在成交时结算 (settleOrderMargin)
   // 这里不再调用 lockMargin，避免重复扣款
@@ -3894,7 +5291,7 @@ function createOrUpdatePosition(
   // 计算开仓手续费 (0.05% of position value)
   // 行业标准: 刚开仓时价格没变，未实现盈亏 = -手续费
   const feeRate = 5n; // 0.05% = 5 / 10000
-  const openFee = (positionValue * feeRate) / 10000n; // USD, 1e6 精度
+  const openFee = (positionValue * feeRate) / 10000n; // USD, 1e18 精度
 
   // 盈亏平衡价格 = 开仓价 ± 手续费对应的价格变动
   const breakEvenPrice = isLong
@@ -3902,7 +5299,7 @@ function createOrUpdatePosition(
     : entryPrice - (entryPrice * feeRate) / 10000n;
 
   // 计算维持保证金 (使用动态 MMR)
-  const maintenanceMargin = (positionValue * effectiveMmr) / 10000n; // USD, 1e6 精度
+  const maintenanceMargin = (positionValue * effectiveMmr) / 10000n; // USD, 1e18 精度
 
   console.log(`[Position] leverage=${Number(leverage)/10000}x, initialMarginRate=${Number(initialMarginRateBp)/100}%, effectiveMmr=${Number(effectiveMmr)/100}%`);
 
@@ -3916,8 +5313,8 @@ function createOrUpdatePosition(
     ? (maintenanceMargin * 10000n) / equity
     : 10000n;
 
-  console.log(`[Position] openFee: $${Number(openFee) / 1e6}, initialPnL: $${Number(initialPnL) / 1e6}`);
-  console.log(`[Position] equity: $${Number(equity) / 1e6}, marginRatio: ${Number(initialMarginRatio) / 100}%`);
+  console.log(`[Position] openFee: $${Number(openFee) / 1e18}, initialPnL: $${Number(initialPnL) / 1e18}`);
+  console.log(`[Position] equity: $${Number(equity) / 1e18}, marginRatio: ${Number(initialMarginRatio) / 100}%`);
 
   const position: Position = {
     // 基本标识
@@ -3946,12 +5343,16 @@ function createOrUpdatePosition(
     // 盈亏信息 (初始为 -手续费)
     unrealizedPnL: initialPnL.toString(),
     realizedPnL: "0",
-    roe: ((initialPnL * 10000n) / collateral).toString(), // ROE% = PnL / 保证金 * 100
+    roe: collateral > 0n ? ((initialPnL * 10000n) / collateral).toString() : "0", // ROE% = PnL / 保证金 * 100
     fundingFee: "0",
 
     // 止盈止损
     takeProfitPrice: null,
     stopLossPrice: null,
+
+    // 关联订单
+    orderId,
+    orderIds: [orderId],
 
     // 系统信息
     counterparty,
@@ -3990,6 +5391,7 @@ function createOrUpdatePosition(
       collateral: newCollateral.toString(),
       liquidationPrice: newLiquidationPrice.toString(),
       marginRatio: ((newCollateral * 10000n) / newSize).toString(),
+      orderIds: [...(existing.orderIds || []), orderId],
       updatedAt: Date.now(),
     };
     positions[existingIndex] = updatedPosition;
@@ -4003,10 +5405,16 @@ function createOrUpdatePosition(
     }
 
     console.log(`[Position] ${isLong ? "Long" : "Short"} increased: ${trader.slice(0, 10)} size=${newSize} liq=${newLiquidationPrice}`);
+
+    // ✅ 广播仓位更新到前端
+    broadcastPositionUpdate(normalizedTrader, normalizedToken);
   } else {
     // 新开仓位 - 使用 addPositionToUser 来同步保存到 Redis
     addPositionToUser(position);
     console.log(`[Position] ${isLong ? "Long" : "Short"} opened: ${trader.slice(0, 10)} size=${size} liq=${liquidationPrice}`);
+
+    // ✅ 广播仓位更新到前端
+    broadcastPositionUpdate(normalizedTrader, normalizedToken);
   }
 }
 
@@ -4156,7 +5564,9 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
     // ============================================================
     // 扣除保证金 + 手续费 (下单时立即扣除)
     // ============================================================
-    // 对于市价单，使用当前价格计算；对于限价单，使用订单价格
+    // 对于市价单，使用当前价格计算并加 2% 缓冲（防止价格波动导致保证金不足）
+    // ✅ 修复：size 现在是 ETH 名义价值，不再需要 price 计算保证金
+    // 但仍需要 price 用于撮合和存储订单
     const orderBook = engine.getOrderBook(token as Address);
     let priceForCalc = priceBigInt > 0n ? priceBigInt : orderBook.getCurrentPrice();
 
@@ -4177,20 +5587,66 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
       return errorResponse("Cannot determine order price for margin calculation. No price data available.");
     }
 
-    // 生成临时订单ID用于记录保证金信息
-    const tempOrderId = `order_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    // ============================================================
+    // 保证金存入 Settlement + 内部扣款 (加锁防竞争)
+    // ============================================================
+    //
+    // 架构: 下单时必须把 margin+fee 存入 Settlement 合约 (链上托管)
+    //   1. autoDepositIfNeeded: 从派生钱包 → Settlement (链上)
+    //   2. deductOrderAmount: 内存记账 (防连续下单双花)
+    // 如果链上存入失败 → 拒单，不进撮合引擎
+    //
+    // ★ 分布式锁: 防止同一用户并发下单导致双花
+    //
+    const { total: requiredAmount } = calculateOrderCost(sizeBigInt, priceForCalc, leverageBigInt);
+    const normalizedTraderForLock = (trader as string).toLowerCase();
 
-    // 扣款 (会先从链上同步余额)
-    const deductSuccess = await deductOrderAmount(
-      trader as Address,
-      tempOrderId,
-      sizeBigInt,
-      priceForCalc,
-      leverageBigInt
-    );
+    // 生成临时订单ID (在锁外生成，确保时间戳唯一)
+    const traderSuffix = (trader as string).slice(-2).toUpperCase();
+    const now = new Date();
+    const tempOrderId = `${traderSuffix}${now.getFullYear()}${(now.getMonth()+1).toString().padStart(2,"0")}${now.getDate().toString().padStart(2,"0")}${now.getHours().toString().padStart(2,"0")}${now.getMinutes().toString().padStart(2,"0")}${now.getSeconds().toString().padStart(2,"0")}TMP`;
 
-    if (!deductSuccess) {
-      return errorResponse("Insufficient balance for margin and fee");
+    // 使用分布式锁保护 autoDeposit + deduct 原子操作
+    // TTL 30秒 (足够完成链上交易)，失败重试3次
+    let depositAndDeductResult: { success: boolean; error?: string };
+    try {
+      depositAndDeductResult = await withLock(
+        `balance:${normalizedTraderForLock}`,
+        30000,
+        async () => {
+          // 1. 链上存入保证金
+          try {
+            await autoDepositIfNeeded(trader as Address, requiredAmount);
+          } catch (e: any) {
+            console.error(`[API] Auto-deposit failed for ${(trader as string).slice(0, 10)}: ${e.message}`);
+            return { success: false, error: `保证金存入失败: ${e.message}` };
+          }
+
+          // 2. 内部账本扣款
+          const deductSuccess = await deductOrderAmount(
+            trader as Address,
+            tempOrderId,
+            sizeBigInt,
+            priceForCalc,
+            leverageBigInt
+          );
+
+          if (!deductSuccess) {
+            return { success: false, error: "余额不足，请确保派生钱包有足够的 ETH/WETH" };
+          }
+
+          return { success: true };
+        },
+        3,
+        200
+      );
+    } catch (lockError: any) {
+      console.error(`[API] Lock acquisition failed for ${(trader as string).slice(0, 10)}: ${lockError.message}`);
+      return errorResponse("系统繁忙，请稍后重试");
+    }
+
+    if (!depositAndDeductResult.success) {
+      return errorResponse(depositAndDeductResult.error || "保证金处理失败");
     }
 
     // Submit to matching engine with P3 options
@@ -4235,6 +5691,9 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
       orderMarginInfos.set(order.id, marginInfo);
     }
 
+    // 市价单没有对手方时保持 PENDING 状态，加入订单簿，让用户在"当前委托"中看到
+    // 用户可以自己决定是否撤销，撤销时会退还保证金
+
     // Update nonce - 基于提交的nonce更新
     if (nonceBigInt >= getUserNonce(trader)) {
       userNonces.set(trader.toLowerCase() as Address, nonceBigInt + 1n);
@@ -4246,9 +5705,9 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
     // 💾 保存订单到数据库 (Redis)
     // ============================================================
     try {
-      // 生成交易对符号 (格式: TOKEN-USDT)
+      // 生成交易对符号 (格式: TOKEN-ETH)
       const tokenSymbol = token.slice(0, 10).toUpperCase(); // 简化处理
-      const symbol = `${tokenSymbol}-USDT`;
+      const symbol = `${tokenSymbol}-ETH`;
 
       // 映射 OrderType 枚举到字符串
       let orderTypeStr: "LIMIT" | "MARKET" | "STOP_LOSS" | "TAKE_PROFIT" | "TRAILING_STOP";
@@ -4313,7 +5772,29 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
     // Broadcast orderbook update via WebSocket
     broadcastOrderBook(token.toLowerCase() as Address);
 
-    // Broadcast trades via WebSocket and create positions
+    // 推送订单状态更新给交易者
+    broadcastOrderUpdate(order);
+
+    // ============================================================
+    // 🔄 模式 2: 链下执行，仓位只存后端
+    // - 不再实时上链结算
+    // - 仓位存 Redis，定时快照上链 Merkle Root
+    // - 提现时验证 Merkle 证明
+    // ============================================================
+    if (matches.length > 0) {
+      // 从引擎中移除已匹配的订单
+      engine.removePendingMatches(matches);
+
+      // 记录匹配 (用于后续快照)
+      for (const match of matches) {
+        const matchId = `${match.longOrder.id}_${match.shortOrder.id}`;
+        submittedMatches.set(matchId, match);
+      }
+
+      console.log(`[Match] ✅ ${matches.length} matches processed (off-chain mode)`);
+    }
+
+    // Broadcast trades via WebSocket and create positions (只有链上结算成功后才执行)
     for (const match of matches) {
       const trade: Trade = {
         id: `trade_${Date.now()}_${Math.random().toString(36).slice(2)}`,
@@ -4327,7 +5808,7 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
       };
       broadcastTrade(trade);
 
-      // 创建/更新持仓记录
+      // 创建/更新持仓记录 (关联订单号便于排查)
       createOrUpdatePosition(
         match.longOrder.trader,
         token as Address,
@@ -4335,7 +5816,8 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
         match.matchSize,
         match.matchPrice,
         match.longOrder.leverage,
-        match.shortOrder.trader
+        match.shortOrder.trader,
+        match.longOrder.id
       );
       createOrUpdatePosition(
         match.shortOrder.trader,
@@ -4344,29 +5826,40 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
         match.matchSize,
         match.matchPrice,
         match.shortOrder.leverage,
-        match.longOrder.trader
+        match.longOrder.trader,
+        match.shortOrder.id
       );
 
       // ============================================================
       // 成交后结算保证金 (从已扣除 → 已用保证金)
       // ============================================================
-      // 结算多头订单的保证金 (按成交大小比例)
-      settleOrderMargin(match.longOrder.trader, match.longOrder.id, match.matchSize);
+      // 结算多头订单的保证金 (按成交大小比例, 区分 Maker/Taker)
+      // Maker/Taker 判定: 先进入订单簿的 = Maker
+      const longIsMakerSettle = match.longOrder.createdAt < match.shortOrder.createdAt;
+      settleOrderMargin(match.longOrder.trader, match.longOrder.id, match.matchSize, longIsMakerSettle);
       // 结算空头订单的保证金 (按成交大小比例)
-      settleOrderMargin(match.shortOrder.trader, match.shortOrder.id, match.matchSize);
+      settleOrderMargin(match.shortOrder.trader, match.shortOrder.id, match.matchSize, !longIsMakerSettle);
 
       // ============================================================
-      // P5: 处理推荐返佣
+      // P5: 处理推荐返佣 + Maker/Taker 差异费率
       // ============================================================
-      // 计算交易手续费 (0.05% of notional value)
-      const tradeValue = (match.matchSize * match.matchPrice) / (10n ** 24n); // 1e6 精度
-      const tradeFee = (tradeValue * 5n) / 10000n; // 0.05%
+      // matchSize 已经是 ETH 名义价值 (1e18 精度)
+      const tradeValue = match.matchSize;
+      // Maker/Taker 判定: incoming order = Taker, 订单簿中的 = Maker
+      // incoming order 就是当前提交的 order，另一方是订单簿中已有的
+      const longIsMaker = match.longOrder.createdAt < match.shortOrder.createdAt;
+      const TAKER_FEE_RATE = 5n; // 0.05%
+      const MAKER_FEE_RATE = 2n; // 0.02%
+      const longFeeRate = longIsMaker ? MAKER_FEE_RATE : TAKER_FEE_RATE;
+      const shortFeeRate = longIsMaker ? TAKER_FEE_RATE : MAKER_FEE_RATE;
+      const longFee = (tradeValue * longFeeRate) / 10000n;
+      const shortFee = (tradeValue * shortFeeRate) / 10000n;
 
       // 处理多头交易者的返佣
       processTradeCommission(
         match.longOrder.trader,
         trade.id,
-        tradeFee,
+        longFee,
         tradeValue
       );
 
@@ -4374,10 +5867,61 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
       processTradeCommission(
         match.shortOrder.trader,
         trade.id,
-        tradeFee,
+        shortFee,
         tradeValue
       );
+
+      // ============================================================
+      // 保存用户成交记录 (双边: 多头 + 空头，含各自手续费)
+      // ============================================================
+      const pairId = `pair_${trade.id}`;
+      const saveTradeRecord = (trader: Address, orderId: string, isLong: boolean, isMaker: boolean, fee: bigint) => {
+        const record: TradeRecord = {
+          id: `${trade.id}_${isLong ? "long" : "short"}`,
+          orderId,
+          pairId,
+          token: token as string,
+          trader: trader as string,
+          isLong,
+          isMaker,
+          size: match.matchSize.toString(),
+          price: match.matchPrice.toString(),
+          fee: fee.toString(),
+          realizedPnL: "0",
+          timestamp: match.timestamp,
+          type: "open",
+        };
+        // Save to in-memory map
+        const normalizedTrader = trader.toLowerCase() as Address;
+        const traderTrades = userTrades.get(normalizedTrader) || [];
+        traderTrades.push(record);
+        userTrades.set(normalizedTrader, traderTrades);
+        // Save to Redis (fire-and-forget)
+        TradeRepo.create({
+          orderId: record.orderId,
+          pairId: record.pairId,
+          token: token.toLowerCase() as Address,
+          trader: normalizedTrader,
+          isLong: record.isLong,
+          isMaker: record.isMaker,
+          size: record.size,
+          price: record.price,
+          fee: record.fee,
+          realizedPnL: record.realizedPnL,
+          timestamp: record.timestamp,
+          type: "open",
+        }).catch(e => console.error(`[DB] Failed to save trade record:`, e));
+      };
+      saveTradeRecord(match.longOrder.trader, match.longOrder.id, true, longIsMaker, longFee);
+      saveTradeRecord(match.shortOrder.trader, match.shortOrder.id, false, !longIsMaker, shortFee);
     }
+
+    // ============================================================
+    // 推送余额更新到前端 (下单扣款后实时通知)
+    // ============================================================
+    const normalizedTraderAddr = (trader as string).toLowerCase() as Address;
+    await syncUserBalanceFromChain(normalizedTraderAddr);
+    broadcastBalanceUpdate(normalizedTraderAddr);
 
     return jsonResponse({
       success: true,
@@ -4397,7 +5941,40 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
 }
 
 async function handleGetNonce(trader: string): Promise<Response> {
-  const nonce = getUserNonce(trader as Address);
+  const normalizedTrader = trader.toLowerCase() as Address;
+
+  // 从链上读取 nonce (source of truth)
+  if (SETTLEMENT_ADDRESS) {
+    try {
+      const publicClient = createPublicClient({
+        chain: baseSepolia,
+        transport: http(RPC_URL),
+      });
+      const chainNonce = await publicClient.readContract({
+        address: SETTLEMENT_ADDRESS,
+        abi: [{ inputs: [{ name: "", type: "address" }], name: "nonces", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" }],
+        functionName: "nonces",
+        args: [normalizedTrader],
+      }) as bigint;
+
+      // 取链上 nonce 和内存 nonce 的较大值
+      // (内存 nonce 可能因为刚提交的订单而更高，但链上还没确认)
+      const memoryNonce = getUserNonce(normalizedTrader);
+      const effectiveNonce = chainNonce > memoryNonce ? chainNonce : memoryNonce;
+
+      // 同步内存
+      if (effectiveNonce > memoryNonce) {
+        userNonces.set(normalizedTrader, effectiveNonce);
+      }
+
+      return jsonResponse({ nonce: effectiveNonce.toString() });
+    } catch (e) {
+      console.warn(`[Nonce] Failed to read chain nonce for ${normalizedTrader}:`, e);
+    }
+  }
+
+  // fallback: 内存 nonce
+  const nonce = getUserNonce(normalizedTrader);
   return jsonResponse({ nonce: nonce.toString() });
 }
 
@@ -4850,10 +6427,10 @@ async function handleGetMetaTxNonce(user: Address): Promise<Response> {
 }
 
 /**
- * Get user's Settlement balance
+ * Get user's Settlement balance (Relay API)
  * GET /api/v1/relay/balance/:address
  */
-async function handleGetUserBalance(user: Address): Promise<Response> {
+async function handleGetRelayUserBalance(user: Address): Promise<Response> {
   try {
     const { getUserBalance } = await import("./modules/relay");
     const balance = await getUserBalance(user);
@@ -5053,7 +6630,7 @@ async function handleGetTickers(): Promise<Response> {
         open24h = trades24h[trades24h.length - 1].price; // oldest trade
         for (const trade of trades24h) {
           vol24h += trade.size;
-          volCcy24h += (trade.price * trade.size) / BigInt(1e6);
+          volCcy24h += (trade.price * trade.size) / BigInt(1e18);
           if (trade.price > high24h) high24h = trade.price;
           if (trade.price < low24h) low24h = trade.price;
         }
@@ -5066,7 +6643,7 @@ async function handleGetTickers(): Promise<Response> {
       const bestAskSz = depth.shorts.length > 0 ? depth.shorts[0].totalSize : 0n;
 
       tickers.push({
-        instId: `${token}-USDT`,
+        instId: `${token}-ETH`,
         last: currentPrice.toString(),
         lastSz: "0",
         askPx: bestAsk.toString(),
@@ -5115,57 +6692,97 @@ async function handleGetTrades(token: string, url: URL): Promise<Response> {
 }
 
 async function handleGetUserOrders(trader: string): Promise<Response> {
+  const normalizedTrader = trader.toLowerCase() as Address;
   const orders = engine.getUserOrders(trader as Address);
 
-  // 返回完整的订单信息 (行业标准 - 参考 OKX/Binance)
-  return jsonResponse(
-    orders.map((o) => ({
-      // === 基本标识 ===
-      id: o.id,
-      clientOrderId: o.clientOrderId || null,
-      token: o.token,
+  // Map engine orders to response format
+  const orderList = orders.map((o) => ({
+    // === 基本标识 ===
+    id: o.id,
+    clientOrderId: o.clientOrderId || null,
+    token: o.token,
 
-      // === 订单参数 ===
-      isLong: o.isLong,
-      size: o.size.toString(),
-      leverage: o.leverage.toString(),
-      price: o.price.toString(),
-      orderType: o.orderType === 0 ? "MARKET" : "LIMIT",
-      timeInForce: o.timeInForce || "GTC",
-      reduceOnly: o.reduceOnly || false,
+    // === 订单参数 ===
+    isLong: o.isLong,
+    size: o.size.toString(),
+    leverage: o.leverage.toString(),
+    price: o.price.toString(),
+    orderType: o.orderType === 0 ? "MARKET" : "LIMIT",
+    timeInForce: o.timeInForce || "GTC",
+    reduceOnly: o.reduceOnly || false,
 
-      // === 成交信息 ===
-      status: o.status,
-      filledSize: o.filledSize.toString(),
-      avgFillPrice: (o.avgFillPrice || 0n).toString(),
-      totalFillValue: (o.totalFillValue || 0n).toString(),
+    // === 成交信息 ===
+    status: o.status,
+    filledSize: o.filledSize.toString(),
+    avgFillPrice: (o.avgFillPrice || 0n).toString(),
+    totalFillValue: (o.totalFillValue || 0n).toString(),
 
-      // === 费用信息 ===
-      fee: (o.fee || 0n).toString(),
-      feeCurrency: o.feeCurrency || "USDT",
+    // === 费用信息 ===
+    fee: (o.fee || 0n).toString(),
+    feeCurrency: o.feeCurrency || "ETH",
 
-      // === 保证金信息 ===
-      margin: (o.margin || 0n).toString(),
-      collateral: (o.collateral || 0n).toString(),
+    // === 保证金信息 ===
+    margin: (o.margin || 0n).toString(),
+    collateral: (o.collateral || 0n).toString(),
 
-      // === 止盈止损 ===
-      takeProfitPrice: o.takeProfitPrice ? o.takeProfitPrice.toString() : null,
-      stopLossPrice: o.stopLossPrice ? o.stopLossPrice.toString() : null,
+    // === 止盈止损 ===
+    takeProfitPrice: o.takeProfitPrice ? o.takeProfitPrice.toString() : null,
+    stopLossPrice: o.stopLossPrice ? o.stopLossPrice.toString() : null,
 
-      // === 时间戳 ===
-      createdAt: o.createdAt,
-      updatedAt: o.updatedAt || o.createdAt,
-      lastFillTime: o.lastFillTime || null,
+    // === 时间戳 ===
+    createdAt: o.createdAt,
+    updatedAt: o.updatedAt || o.createdAt,
+    lastFillTime: o.lastFillTime || null,
 
-      // === 来源 ===
-      source: o.source || "API",
+    // === 来源 ===
+    source: o.source || "API",
 
-      // === 最后成交明细 ===
-      lastFillPrice: o.lastFillPrice ? o.lastFillPrice.toString() : null,
-      lastFillSize: o.lastFillSize ? o.lastFillSize.toString() : null,
-      tradeId: o.tradeId || null,
-    }))
-  );
+    // === 最后成交明细 ===
+    lastFillPrice: o.lastFillPrice ? o.lastFillPrice.toString() : null,
+    lastFillSize: o.lastFillSize ? o.lastFillSize.toString() : null,
+    tradeId: o.tradeId || null,
+  }));
+
+  // Append liquidation/close events as synthetic orders in order history
+  const trades = userTrades.get(normalizedTrader) || [];
+  for (const t of trades) {
+    if (t.type === "liquidation" || t.type === "adl" || t.type === "close") {
+      orderList.push({
+        id: t.id,
+        clientOrderId: null,
+        token: t.token as Address,
+        isLong: t.isLong,
+        size: t.size,
+        leverage: "0",
+        price: t.price,
+        orderType: "MARKET",
+        timeInForce: "GTC",
+        reduceOnly: true,
+        status: t.type === "liquidation" ? "LIQUIDATED" : t.type === "adl" ? "ADL" : "CLOSED",
+        filledSize: t.size,
+        avgFillPrice: t.price,
+        totalFillValue: "0",
+        fee: t.fee,
+        feeCurrency: "ETH",
+        margin: "0",
+        collateral: "0",
+        takeProfitPrice: null,
+        stopLossPrice: null,
+        createdAt: t.timestamp,
+        updatedAt: t.timestamp,
+        lastFillTime: t.timestamp,
+        source: "API",
+        lastFillPrice: t.price,
+        lastFillSize: t.size,
+        tradeId: t.id,
+      });
+    }
+  }
+
+  // Sort by time descending (most recent first)
+  orderList.sort((a, b) => b.updatedAt - a.updatedAt);
+
+  return jsonResponse(orderList);
 }
 
 async function handleCancelOrder(req: Request, orderId: string): Promise<Response> {
@@ -5183,22 +6800,65 @@ async function handleCancelOrder(req: Request, orderId: string): Promise<Respons
       return errorResponse("Order not found");
     }
 
-    // TODO: Verify cancel signature
-    const success = engine.cancelOrder(orderId, trader as Address);
+    // ★ 分布式锁: 防止撤单与成交竞争 (使用订单锁而非用户锁)
+    const normalizedTrader = (trader as string).toLowerCase();
+    let cancelResult: { success: boolean; refundTotal: bigint };
+    try {
+      cancelResult = await withLock(
+        `order:${orderId}`,
+        5000,
+        async () => {
+          // 在锁内重新检查订单状态
+          const currentOrder = engine.getOrder(orderId);
+          if (!currentOrder || currentOrder.status === OrderStatus.CANCELLED || currentOrder.status === OrderStatus.FILLED) {
+            return { success: false, refundTotal: 0n };
+          }
 
-    if (!success) {
+          // TODO: Verify cancel signature
+          const success = engine.cancelOrder(orderId, trader as Address);
+          if (!success) {
+            return { success: false, refundTotal: 0n };
+          }
+
+          // 退款
+          const refundTotal = refundOrderAmount(trader as Address, orderId);
+          return { success: true, refundTotal };
+        },
+        3,
+        100
+      );
+    } catch (lockError: any) {
+      console.error(`[API] Cancel lock failed for ${orderId}: ${lockError.message}`);
+      return errorResponse("系统繁忙，请稍后重试");
+    }
+
+    if (!cancelResult.success) {
       return errorResponse("Order not found or cannot be cancelled");
     }
 
-    // ============================================================
-    // 撤单退款: 退还保证金 + 手续费
-    // ============================================================
-    refundOrderAmount(trader as Address, orderId);
+    const refundTotal = cancelResult.refundTotal;
 
-    console.log(`[API] Order cancelled: ${orderId}`);
+    console.log(`[API] Order cancelled: ${orderId}, refund: $${Number(refundTotal) / 1e18}`);
 
     // 广播订单簿更新
     broadcastOrderBook(order.token.toLowerCase() as Address);
+
+    // 推送订单状态更新 (设置状态为已取消)
+    order.status = OrderStatus.CANCELLED;
+    order.updatedAt = Date.now();
+    broadcastOrderUpdate(order);
+
+    // 持久化取消状态到 Redis（重启后不会复活已取消的订单）
+    OrderRepo.update(orderId, { status: OrderStatus.CANCELLED } as any)
+      .catch(e => console.error(`[CancelOrder] Failed to update Redis status for ${orderId}:`, e));
+
+    // 链上退款: 从 Settlement 提取保证金回派生钱包（异步，不阻塞响应）
+    if (refundTotal > 0n) {
+      withdrawFromSettlement(trader as Address, refundTotal)
+        .then(() => syncUserBalanceFromChain(trader as Address))
+        .then(() => broadcastBalanceUpdate(trader as Address))
+        .catch((e) => console.error(`[CancelOrder] Post-cancel settlement withdraw error:`, e));
+    }
 
     return jsonResponse({ success: true });
   } catch (e) {
@@ -5227,7 +6887,35 @@ async function handleGetUserPositions(trader: string): Promise<Response> {
  */
 async function handleGetUserTradesHistory(trader: string, limit: number = 100): Promise<Response> {
   const normalizedTrader = trader.toLowerCase() as Address;
-  const trades = userTrades.get(normalizedTrader) || [];
+
+  // Try in-memory first, then fall back to Redis
+  let trades: TradeRecord[] = userTrades.get(normalizedTrader) || [];
+
+  if (trades.length === 0) {
+    try {
+      const redisTrades = await TradeRepo.getByUser(normalizedTrader, limit);
+      if (redisTrades.length > 0) {
+        // Map PerpTrade → TradeRecord format
+        trades = redisTrades.map(t => ({
+          id: t.id,
+          orderId: t.orderId,
+          pairId: t.pairId,
+          token: t.token as string,
+          trader: t.trader as string,
+          isLong: t.isLong,
+          isMaker: t.isMaker,
+          size: t.size,
+          price: t.price,
+          fee: t.fee,
+          realizedPnL: t.realizedPnL,
+          timestamp: t.timestamp,
+          type: t.type as TradeRecord["type"],
+        }));
+      }
+    } catch (e) {
+      console.error("[API] Failed to read trades from Redis:", e);
+    }
+  }
 
   // 按时间倒序，最新的在前
   const sortedTrades = [...trades].sort((a, b) => b.timestamp - a.timestamp);
@@ -5241,96 +6929,119 @@ async function handleGetUserTradesHistory(trader: string, limit: number = 100): 
 }
 
 /**
- * 获取用户余额 (从链上读取 + 后端计算 UPNL)
+ * 获取用户余额 (Mode 2: 链上资金托管 + 后端仓位)
  * GET /api/user/:trader/balance
  *
  * 数据来源：
- * - available, locked: 从链上 Settlement 合约读取 (source of truth)
+ * - available: 从链上 Settlement 合约读取 (资金托管)
+ * - usedMargin: 从后端内存计算 (仓位保证金)
  * - unrealizedPnL: 后端实时计算 (基于当前价格)
+ *
+ * ⚠️ Mode 2: Settlement.locked 已废弃，仓位保证金从后端内存计算
  */
 async function handleGetUserBalance(trader: string): Promise<Response> {
   const normalizedTrader = trader.toLowerCase() as Address;
 
   // ========================================
-  // 1. 获取后端余额数据 (下单扣款/撤单退款都记录在这里)
-  // ========================================
-  const backendBalance = getUserBalance(normalizedTrader);
-
-  // 后端数据
-  let availableBalance = backendBalance.availableBalance;
-  let usedMargin = backendBalance.usedMargin;
-  let totalBalance = backendBalance.totalBalance;
-
-  // ========================================
-  // 2. 尝试从链上读取余额
+  // 1. 从链上读取资金托管余额 (ETH 本位)
   // ========================================
   let chainAvailable = 0n;
-  let chainLocked = 0n;
-  let walletUsdtBalance = 0n;
+  let walletEthBalance = 0n;
 
+  const publicClient = createPublicClient({
+    chain: baseSepolia,
+    transport: http(RPC_URL),
+  });
+
+  // ⚠️ Settlement 合约内部使用 6 位精度 (STANDARD_DECIMALS=6)
+  //    getUserBalance 返回 6 位精度值，需要转换为 18 位精度
+  const SETTLEMENT_TO_ETH_FACTOR = 10n ** 12n;
   try {
-    const publicClient = createPublicClient({
-      chain: baseSepolia,
-      transport: http(RPC_URL),
-    });
-
-    // 2a. 读取 Settlement 合约中的余额
     if (SETTLEMENT_ADDRESS) {
-      try {
-        const [available, locked] = await publicClient.readContract({
-          address: SETTLEMENT_ADDRESS,
-          abi: SETTLEMENT_ABI,
-          functionName: "getUserBalance",
-          args: [normalizedTrader],
-        }) as [bigint, bigint];
-        chainAvailable = available;
-        chainLocked = locked;
-      } catch (e) {
-        // Settlement 合约可能没有这个用户
-      }
-    }
-
-    // 2b. 读取钱包中的 USDT 余额 (用户可能还没存入 Settlement)
-    const USDT_ADDRESS = process.env.USDT_ADDRESS as Address;
-    if (USDT_ADDRESS) {
-      try {
-        walletUsdtBalance = await publicClient.readContract({
-          address: USDT_ADDRESS,
-          abi: [
-            {
-              inputs: [{ name: "account", type: "address" }],
-              name: "balanceOf",
-              outputs: [{ type: "uint256" }],
-              stateMutability: "view",
-              type: "function",
-            },
-          ],
-          functionName: "balanceOf",
-          args: [normalizedTrader],
-        }) as bigint;
-      } catch (e) {
-        // 读取 USDT 余额失败
-      }
-    }
-
-    // 如果链上有余额（Settlement 或钱包），更新数据
-    const totalChainBalance = chainAvailable + chainLocked + walletUsdtBalance;
-    if (totalChainBalance > 0n) {
-      console.log(`[Balance] Chain balance for ${normalizedTrader.slice(0, 10)}: settlement=$${Number(chainAvailable + chainLocked) / 1e6}, wallet=$${Number(walletUsdtBalance) / 1e6}`);
-      // 可用余额 = Settlement可用 + 钱包余额 + 后端调整
-      availableBalance = chainAvailable + walletUsdtBalance + backendBalance.availableBalance;
-      usedMargin = chainLocked + backendBalance.usedMargin;
-      totalBalance = totalChainBalance + backendBalance.totalBalance;
+      const [available, _locked] = await publicClient.readContract({
+        address: SETTLEMENT_ADDRESS,
+        abi: SETTLEMENT_ABI,
+        functionName: "getUserBalance",
+        args: [normalizedTrader],
+      }) as [bigint, bigint];
+      chainAvailable = available * SETTLEMENT_TO_ETH_FACTOR;
+      // Mode 2: _locked 被忽略，链上不再追踪仓位
     }
   } catch (e) {
-    console.error(`[Balance] Failed to fetch chain balance for ${normalizedTrader}:`, e);
-    // 链上读取失败时，继续使用后端数据
+    console.error(`[Balance] Failed to fetch Settlement balance for ${normalizedTrader}:`, e);
   }
+
+  // 读取原生 ETH 余额
+  let nativeEthBalance = 0n;
+  try {
+    nativeEthBalance = await publicClient.getBalance({ address: normalizedTrader });
+  } catch (e) {
+    console.warn(`[Balance] Failed to fetch native ETH balance for ${normalizedTrader}:`, e);
+  }
+
+  // 读取 WETH 余额
+  let wethBalance = 0n;
+  try {
+    const WETH_ADDRESS = process.env.WETH_ADDRESS as Address;
+    if (WETH_ADDRESS) {
+      wethBalance = await publicClient.readContract({
+        address: WETH_ADDRESS,
+        abi: ERC20_ABI,
+        functionName: "balanceOf",
+        args: [normalizedTrader],
+      }) as bigint;
+    }
+  } catch (e) {
+    console.warn(`[Balance] Failed to fetch wallet WETH balance for ${normalizedTrader}:`, e);
+  }
+
+  // 钱包 ETH 余额 = 原生 ETH + WETH
+  walletEthBalance = nativeEthBalance + wethBalance;
+
+  // ========================================
+  // 2. 计算挂单锁定金额 (内存中的 orderMarginInfos)
+  // ========================================
+  let pendingOrdersLocked = 0n;
+  const userOrders = engine.getUserOrders(normalizedTrader);
+  for (const order of userOrders) {
+    if (order.status === "PENDING" || order.status === "PARTIALLY_FILLED") {
+      const marginInfo = orderMarginInfos.get(order.id);
+      if (marginInfo) {
+        const unfilledRatio = marginInfo.totalSize > 0n
+          ? ((marginInfo.totalSize - marginInfo.settledSize) * 10000n) / marginInfo.totalSize
+          : 10000n;
+        pendingOrdersLocked += (marginInfo.totalDeducted * unfilledRatio) / 10000n;
+      }
+    }
+  }
+
+  // ========================================
+  // 2.5 Mode 2: 从后端内存计算仓位保证金
+  // ========================================
+  const positions = userPositions.get(normalizedTrader) || [];
+  let positionMargin = 0n;
+  for (const pos of positions) {
+    positionMargin += BigInt(pos.collateral || "0");
+  }
+
+  // ========================================
+  // 2.6 Mode 2: 加入链下盈亏调整
+  // ========================================
+  // Mode 2 平仓盈亏不上链，需要从内存补充
+  const mode2Adj = getMode2Adjustment(normalizedTrader);
+
+  // 有效可用 = 链上 available + 链下盈亏调整 - 挂单锁定 - 仓位保证金
+  // ⚠️ 安全: 不含 walletBalance，钱包里的钱必须存入 Settlement 才能交易
+  // walletBalance 单独展示为"可存入金额"
+  const effectiveAvailable = chainAvailable + mode2Adj;
+  let availableBalance = effectiveAvailable - pendingOrdersLocked - positionMargin;
+  if (availableBalance < 0n) availableBalance = 0n;
+  let usedMargin = positionMargin;
+  let totalBalance = effectiveAvailable + walletEthBalance + positionMargin;
 
   // ========================================
   // 3. 后端计算未实现盈亏 (基于实时价格)
   // ========================================
-  const positions = userPositions.get(normalizedTrader) || [];
   let totalPnL = 0n;
 
   for (const pos of positions) {
@@ -5356,6 +7067,12 @@ async function handleGetUserBalance(trader: string): Promise<Response> {
     availableBalance: availableBalance.toString(),
     usedMargin: usedMargin.toString(),
     frozenMargin: "0",
+    // 分项余额 (ETH 本位)
+    walletBalance: walletEthBalance.toString(),
+    settlementAvailable: chainAvailable.toString(),
+    settlementLocked: "0",  // Mode 2: 链上不再追踪仓位锁定
+    positionMargin: positionMargin.toString(),  // Mode 2: 从后端内存计算
+    pendingOrdersLocked: pendingOrdersLocked.toString(),
     // 后端计算数据
     unrealizedPnL: totalPnL.toString(),
     equity: equity.toString(),
@@ -5363,17 +7080,29 @@ async function handleGetUserBalance(trader: string): Promise<Response> {
     // 链上原始数据 (用于调试)
     chainData: {
       available: chainAvailable.toString(),
-      locked: chainLocked.toString(),
+      locked: "0",  // Mode 2: 链上 locked 已废弃
+      nativeEth: nativeEthBalance.toString(),
+      weth: wethBalance.toString(),
+      walletTotal: walletEthBalance.toString(),
+      mode2Adjustment: mode2Adj.toString(),
+      effectiveAvailable: effectiveAvailable.toString(),
     },
     // 数据来源标记
-    source: chainAvailable > 0n || chainLocked > 0n ? "chain+backend" : "backend",
+    source: chainAvailable > 0n || walletEthBalance > 0n ? "chain+backend" : "backend",
+    mode: "mode2",  // 标记当前运行模式
     // 人类可读格式
     display: {
-      totalBalance: `$${(Number(totalBalance) / 1e6).toFixed(2)}`,
-      availableBalance: `$${(Number(availableBalance) / 1e6).toFixed(2)}`,
-      usedMargin: `$${(Number(usedMargin) / 1e6).toFixed(2)}`,
-      unrealizedPnL: `$${(Number(totalPnL) / 1e6).toFixed(2)}`,
-      equity: `$${(Number(equity) / 1e6).toFixed(2)}`,
+      totalBalance: `Ξ${(Number(totalBalance) / 1e18).toFixed(6)}`,
+      availableBalance: `Ξ${(Number(availableBalance) / 1e18).toFixed(6)}`,
+      walletBalance: `Ξ${(Number(walletEthBalance) / 1e18).toFixed(6)}`,
+      settlementAvailable: `Ξ${(Number(chainAvailable) / 1e18).toFixed(6)}`,
+      mode2Adjustment: `Ξ${(Number(mode2Adj) / 1e18).toFixed(6)}`,
+      effectiveAvailable: `Ξ${(Number(effectiveAvailable) / 1e18).toFixed(6)}`,
+      positionMargin: `Ξ${(Number(positionMargin) / 1e18).toFixed(6)}`,
+      pendingOrdersLocked: `Ξ${(Number(pendingOrdersLocked) / 1e18).toFixed(6)}`,
+      usedMargin: `Ξ${(Number(usedMargin) / 1e18).toFixed(6)}`,
+      unrealizedPnL: `Ξ${(Number(totalPnL) / 1e18).toFixed(6)}`,
+      equity: `Ξ${(Number(equity) / 1e18).toFixed(6)}`,
     }
   });
 }
@@ -5381,7 +7110,7 @@ async function handleGetUserBalance(trader: string): Promise<Response> {
 /**
  * 充值 (测试用)
  * POST /api/user/:trader/deposit
- * Body: { amount: "1000000000" } // 1e6 精度, 1000 USD
+ * Body: { amount: "1000000000000000000" } // 1e18 精度, 1 ETH
  */
 async function handleDeposit(req: Request, trader: string): Promise<Response> {
   try {
@@ -5403,7 +7132,7 @@ async function handleDeposit(req: Request, trader: string): Promise<Response> {
     const balance = getUserBalance(normalizedTrader);
     return jsonResponse({
       success: true,
-      message: `Deposited $${Number(amountBigInt) / 1e6}`,
+      message: `Deposited $${Number(amountBigInt) / 1e18}`,
       balance: {
         totalBalance: balance.totalBalance.toString(),
         availableBalance: balance.availableBalance.toString(),
@@ -5417,7 +7146,7 @@ async function handleDeposit(req: Request, trader: string): Promise<Response> {
 /**
  * 提现
  * POST /api/user/:trader/withdraw
- * Body: { amount: "1000000000" } // 1e6 精度
+ * Body: { amount: "1000000000000000000" } // 1e18 精度, 1 ETH
  */
 async function handleWithdraw(req: Request, trader: string): Promise<Response> {
   try {
@@ -5443,7 +7172,7 @@ async function handleWithdraw(req: Request, trader: string): Promise<Response> {
     const balance = getUserBalance(normalizedTrader);
     return jsonResponse({
       success: true,
-      message: `Withdrew $${Number(amountBigInt) / 1e6}`,
+      message: `Withdrew $${Number(amountBigInt) / 1e18}`,
       balance: {
         totalBalance: balance.totalBalance.toString(),
         availableBalance: balance.availableBalance.toString(),
@@ -5518,26 +7247,22 @@ async function handleClosePair(req: Request, pairId: string): Promise<Response> 
     const releasedCollateral = (totalCollateral * sizeToClose) / currentSize;
 
     // 计算平仓手续费 (0.05%)
-    const positionValue = (sizeToClose * currentPrice) / (10n ** 24n);
+    // sizeToClose 已经是 ETH 名义价值 (1e18 精度)
+    const positionValue = sizeToClose;
     const closeFee = (positionValue * 5n) / 10000n;
 
     // 实际返还金额 = 释放保证金 + PnL - 手续费
     const returnAmount = releasedCollateral + closePnL - closeFee;
 
-    console.log(`[Close] PnL=$${Number(closePnL) / 1e6} collateral=$${Number(releasedCollateral) / 1e6} fee=$${Number(closeFee) / 1e6} return=$${Number(returnAmount) / 1e6}`);
+    console.log(`[Close] PnL=$${Number(closePnL) / 1e18} collateral=$${Number(releasedCollateral) / 1e18} fee=$${Number(closeFee) / 1e18} return=$${Number(returnAmount) / 1e18}`);
 
     if (isFullClose) {
-      // 全部平仓 - 提交到链上
-      if (submitter) {
-        try {
-          // 调用链上 closePair
-          const hash = await submitter.closePair(BigInt(pairId), currentPrice);
-          console.log(`[Close] Submitted to chain: ${hash}`);
-        } catch (e) {
-          console.error(`[Close] Chain submission failed:`, e);
-          // 继续处理，后端先更新
-        }
-      }
+      // ============================================================
+      // 🔄 模式 2: 全部平仓 - 纯链下执行
+      // - 不调用链上 closePair
+      // - 直接更新后端余额 (returnAmount 加入 available)
+      // - 用户后续可通过 Merkle 证明提取资金
+      // ============================================================
 
       // 从用户仓位列表中移除
       const updatedPositions = positions.filter(p => p.pairId !== pairId);
@@ -5548,8 +7273,92 @@ async function handleClosePair(req: Request, pairId: string): Promise<Response> 
         console.error("[Redis] Failed to delete closed position:", err);
       });
 
+      // ✅ 模式 2: 平仓收益记入链下调整 (HTTP API 读取时会加上)
+      // returnAmount = releasedCollateral + closePnL - closeFee
+      // 链下调整 = closePnL - closeFee (保证金部分是从仓位释放，不属于链下增量)
+      const pnlMinusFee = closePnL - closeFee;
+      addMode2Adjustment(normalizedTrader, pnlMinusFee, "CLOSE_PNL");
+      // ✅ 平仓手续费转入平台钱包
+      if (closeFee > 0n) {
+        addMode2Adjustment(FEE_RECEIVER_ADDRESS, closeFee, "PLATFORM_FEE");
+        console.log(`[Fee] Close fee Ξ${Number(closeFee) / 1e18} → platform wallet`);
+      }
+
+      // 同步更新内存余额 (用于 WS 广播)
+      if (returnAmount > 0n) {
+        const balance = getUserBalance(normalizedTrader);
+        balance.availableBalance += returnAmount;
+        balance.totalBalance = balance.availableBalance + (balance.usedMargin || 0n);
+        console.log(`[Close] Mode 2: Added Ξ${Number(returnAmount) / 1e18} to ${normalizedTrader.slice(0, 10)} available balance`);
+      } else if (returnAmount < 0n) {
+        // 亏损情况: 从 available 中扣除
+        const balance = getUserBalance(normalizedTrader);
+        const loss = -returnAmount;
+        if (balance.availableBalance >= loss) {
+          balance.availableBalance -= loss;
+          balance.totalBalance = balance.availableBalance + (balance.usedMargin || 0n);
+          console.log(`[Close] Mode 2: Deducted Ξ${Number(loss) / 1e18} loss from ${normalizedTrader.slice(0, 10)}`);
+        }
+      }
+
+      // 广播余额更新
+      broadcastBalanceUpdate(normalizedTrader);
+
       // 广播平仓事件
       broadcastPositionClosed(position, currentPrice, closePnL);
+      // ✅ 修复：也发送 positions 消息触发前端刷新仓位列表
+      broadcastPositionUpdate(normalizedTrader, token);
+
+      // ✅ 记录平仓成交到 userTrades (用于成交记录 + 历史委托)
+      const closeTrade: TradeRecord = {
+        id: `close-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        orderId: `close-${pairId}`,
+        pairId,
+        token: position.token,
+        trader: position.trader,
+        isLong: position.isLong,
+        isMaker: false,
+        size: sizeToClose.toString(),
+        price: currentPrice.toString(),
+        fee: closeFee.toString(),
+        realizedPnL: closePnL.toString(),
+        timestamp: Date.now(),
+        type: "close",
+      };
+      const traderTrades = userTrades.get(normalizedTrader) || [];
+      traderTrades.push(closeTrade);
+      userTrades.set(normalizedTrader, traderTrades);
+      // 持久化到 Redis
+      TradeRepo.create({
+        orderId: closeTrade.orderId, pairId: closeTrade.pairId,
+        token: token, trader: normalizedTrader,
+        isLong: closeTrade.isLong, isMaker: false,
+        size: closeTrade.size, price: closeTrade.price,
+        fee: closeTrade.fee, realizedPnL: closeTrade.realizedPnL,
+        timestamp: closeTrade.timestamp, type: "close",
+      }).catch(e => console.error("[DB] Failed to save close trade:", e));
+
+      // ✅ 记录 SETTLE_PNL 账单
+      const balance = getUserBalance(normalizedTrader);
+      try {
+        await RedisSettlementLogRepo.create({
+          userAddress: normalizedTrader,
+          type: "SETTLE_PNL",
+          amount: closePnL.toString(),
+          balanceBefore: (balance.totalBalance - returnAmount).toString(),
+          balanceAfter: balance.totalBalance.toString(),
+          onChainStatus: "CONFIRMED",
+          proofData: JSON.stringify({
+            token: position.token, pairId, isLong: position.isLong,
+            entryPrice: position.entryPrice, exitPrice: currentPrice.toString(),
+            size: sizeToClose.toString(), closeFee: closeFee.toString(),
+            closeType: "manual",
+          }),
+          positionId: pairId, orderId: closeTrade.orderId, txHash: null,
+        });
+      } catch (billErr) {
+        console.error("[Close] Failed to log settle PnL bill:", billErr);
+      }
 
       return jsonResponse({
         success: true,
@@ -5581,6 +7390,82 @@ async function handleClosePair(req: Request, pairId: string): Promise<Response> 
       if (remainingCollateral > 0n) {
         position.roe = ((newUpnl * 10000n) / remainingCollateral).toString();
       }
+
+      // ✅ 记录部分平仓成交到 userTrades
+      const partialCloseTrade: TradeRecord = {
+        id: `close-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        orderId: `close-${pairId}`,
+        pairId,
+        token: position.token,
+        trader: position.trader,
+        isLong: position.isLong,
+        isMaker: false,
+        size: sizeToClose.toString(),
+        price: currentPrice.toString(),
+        fee: closeFee.toString(),
+        realizedPnL: closePnL.toString(),
+        timestamp: Date.now(),
+        type: "close",
+      };
+      const partialTrades = userTrades.get(normalizedTrader) || [];
+      partialTrades.push(partialCloseTrade);
+      userTrades.set(normalizedTrader, partialTrades);
+      TradeRepo.create({
+        orderId: partialCloseTrade.orderId, pairId: partialCloseTrade.pairId,
+        token: token, trader: normalizedTrader,
+        isLong: partialCloseTrade.isLong, isMaker: false,
+        size: partialCloseTrade.size, price: partialCloseTrade.price,
+        fee: partialCloseTrade.fee, realizedPnL: partialCloseTrade.realizedPnL,
+        timestamp: partialCloseTrade.timestamp, type: "close",
+      }).catch(e => console.error("[DB] Failed to save partial close trade:", e));
+
+      // ✅ 记录部分平仓 SETTLE_PNL 账单
+      try {
+        const bal = getUserBalance(normalizedTrader);
+        await RedisSettlementLogRepo.create({
+          userAddress: normalizedTrader,
+          type: "SETTLE_PNL",
+          amount: closePnL.toString(),
+          balanceBefore: "0", balanceAfter: "0",
+          onChainStatus: "CONFIRMED",
+          proofData: JSON.stringify({
+            token: position.token, pairId, isLong: position.isLong,
+            entryPrice: position.entryPrice, exitPrice: currentPrice.toString(),
+            size: sizeToClose.toString(), closeFee: closeFee.toString(),
+            closeType: "partial",
+          }),
+          positionId: pairId, orderId: partialCloseTrade.orderId, txHash: null,
+        });
+      } catch (billErr) {
+        console.error("[Close] Failed to log partial settle PnL bill:", billErr);
+      }
+
+      // ✅ 模式 2: 部分平仓收益记入链下调整 + 更新内存余额
+      const partialPnlMinusFee = closePnL - closeFee;
+      addMode2Adjustment(normalizedTrader, partialPnlMinusFee, "PARTIAL_CLOSE_PNL");
+      // ✅ 部分平仓手续费转入平台钱包
+      if (closeFee > 0n) {
+        addMode2Adjustment(FEE_RECEIVER_ADDRESS, closeFee, "PLATFORM_FEE");
+        console.log(`[Fee] Partial close fee Ξ${Number(closeFee) / 1e18} → platform wallet`);
+      }
+
+      if (returnAmount > 0n) {
+        const balance = getUserBalance(normalizedTrader);
+        balance.availableBalance += returnAmount;
+        balance.usedMargin -= releasedCollateral;
+        if (balance.usedMargin < 0n) balance.usedMargin = 0n;
+        balance.totalBalance = balance.availableBalance + (balance.usedMargin || 0n);
+      } else if (returnAmount < 0n) {
+        const balance = getUserBalance(normalizedTrader);
+        const loss = -returnAmount;
+        if (balance.availableBalance >= loss) {
+          balance.availableBalance -= loss;
+        }
+        balance.usedMargin -= releasedCollateral;
+        if (balance.usedMargin < 0n) balance.usedMargin = 0n;
+        balance.totalBalance = balance.availableBalance + (balance.usedMargin || 0n);
+      }
+      broadcastBalanceUpdate(normalizedTrader);
 
       // 广播部分平仓事件
       broadcastPartialClose(position, sizeToClose, currentPrice, closePnL);
@@ -5661,11 +7546,9 @@ async function handleUpdatePrice(req: Request): Promise<Response> {
     const priceBigInt = BigInt(price);
     engine.updatePrice(token as Address, priceBigInt);
 
-    // Update on-chain if submitter is available
-    if (submitter) {
-      const hash = await submitter.updatePrice(token as Address, priceBigInt);
-      console.log(`[API] Price updated on-chain: ${hash}`);
-    }
+    // ❌ Mode 2: 不再更新链上价格，永续交易使用后端价格
+    // 现货交易价格由 TokenFactory AMM 自动计算
+    console.log(`[API] Price updated in engine: ${token.slice(0, 10)} = ${priceBigInt}`);
 
     return jsonResponse({ success: true, price: priceBigInt.toString() });
   } catch (e) {
@@ -5686,13 +7569,24 @@ async function handleGetKlines(token: string, url: URL): Promise<Response> {
     const { handleGetLatestKlines } = await import("./api/handlers");
     const result = await handleGetLatestKlines(token as Address, interval, limit);
     if (result.success && result.data && result.data.length > 0) {
+      // 格式化极小数字，避免科学计数法
+      const formatSmallNumber = (val: string | number): string => {
+        const num = typeof val === 'string' ? parseFloat(val) : val;
+        if (num === 0) return "0";
+        if (num < 1e-10) return num.toFixed(15);
+        if (num < 1e-8) return num.toFixed(12);
+        if (num < 1e-6) return num.toFixed(10);
+        if (num < 1e-4) return num.toFixed(8);
+        return num.toString();
+      };
+
       return jsonResponse({
         klines: result.data.map((k: any) => ({
           timestamp: k.time * 1000, // 转换为毫秒
-          open: k.open,
-          high: k.high,
-          low: k.low,
-          close: k.close,
+          open: formatSmallNumber(k.open),
+          high: formatSmallNumber(k.high),
+          low: formatSmallNumber(k.low),
+          close: formatSmallNumber(k.close),
           volume: k.volume,
           trades: k.trades,
         })),
@@ -5703,16 +7597,19 @@ async function handleGetKlines(token: string, url: URL): Promise<Response> {
   }
 
   // 回退到撮合引擎内存数据
+  // ETH 本位: 撮合引擎存的是 ETH/Token 价格 (1e18 精度)
   const klines = engine.getKlines(token as Address, interval, limit);
 
   return jsonResponse({
     klines: klines.map(k => ({
-      timestamp: k.timestamp,
-      open: k.open.toString(),
-      high: k.high.toString(),
-      low: k.low.toString(),
-      close: k.close.toString(),
-      volume: k.volume.toString(),
+      timestamp: k.timestamp * 1000, // 统一转为毫秒
+      // ETH 本位: 直接输出 ETH 价格 (1e18 精度 → 小数)
+      open: (Number(k.open) / 1e18).toString(),
+      high: (Number(k.high) / 1e18).toString(),
+      low: (Number(k.low) / 1e18).toString(),
+      close: (Number(k.close) / 1e18).toString(),
+      // 交易量: Token 数量 (1e18 精度 → 小数)
+      volume: (Number(k.volume) / 1e18).toString(),
       trades: k.trades,
     })),
   });
@@ -5723,6 +7620,24 @@ async function handleGetKlines(token: string, url: URL): Promise<Response> {
  * 优先使用现货交易历史的 24h 统计（存储在 Redis），如果没有则回退到撮合引擎数据
  */
 async function handleGetStats(token: string): Promise<Response> {
+  const normalizedToken = token.toLowerCase() as Address;
+
+  // ✅ 价格回退链: Redis现货统计 → 订单簿价格(由syncSpotPrices设置) → 撮合引擎
+  const orderBook = engine.getOrderBook(normalizedToken);
+  let markPrice = orderBook.getCurrentPrice();
+  if (markPrice <= 0n) {
+    markPrice = engine.getSpotPrice(normalizedToken);
+  }
+
+  // ✅ 计算真实未平仓合约 (from in-memory userPositions)
+  const { longOI, shortOI } = calculateOpenInterest(normalizedToken);
+  const totalOI = longOI + shortOI;
+
+  // ✅ 使用动态资金费率
+  const currentRate = currentFundingRates.get(normalizedToken) || 0n;
+  const nextSettlement = nextFundingSettlement.get(normalizedToken) || (Date.now() + 5 * 60 * 1000);
+
+
   // 首先尝试从 Redis 获取现货交易的 24h 统计
   try {
     const { handleGetSpotPrice } = await import("./api/handlers");
@@ -5730,36 +7645,43 @@ async function handleGetStats(token: string): Promise<Response> {
     if (spotResult.success && spotResult.data) {
       const data = spotResult.data;
       const changePercent = parseFloat(data.change24h || "0");
+      // 使用 spot 价格，如果没有则使用订单簿价格
+      const priceStr = data.price || (markPrice > 0n ? (Number(markPrice) / 1e18).toString() : "0");
       return jsonResponse({
-        price: data.price || "0",
-        priceChange24h: (changePercent * 100).toString(), // 转为基点表示
+        price: priceStr,
+        priceChange24h: (changePercent * 100).toString(),
         priceChangePercent24h: changePercent.toFixed(2),
         high24h: data.high24h || "0",
         low24h: data.low24h || "0",
         volume24h: data.volume24h || "0",
         trades24h: data.trades24h || 0,
-        openInterest: "0",
-        fundingRate: "0",
-        nextFundingTime: Date.now() + 8 * 60 * 60 * 1000,
+        openInterest: totalOI.toString(),
+        longOI: longOI.toString(),
+        shortOI: shortOI.toString(),
+        fundingRate: currentRate.toString(),
+        nextFundingTime: nextSettlement,
       });
     }
   } catch (e) {
     console.warn("[Server] Failed to get spot stats from Redis:", e);
   }
 
-  // 回退到撮合引擎数据
+  // 回退到撮合引擎数据 + 订单簿价格
   const stats = engine.getStats(token as Address);
+  const fallbackPrice = markPrice > 0n ? markPrice : stats.price;
 
   return jsonResponse({
-    price: stats.price.toString(),
+    price: fallbackPrice.toString(),
     priceChange24h: stats.priceChange24h.toString(),
     high24h: stats.high24h.toString(),
     low24h: stats.low24h.toString(),
     volume24h: stats.volume24h.toString(),
     trades24h: stats.trades24h,
-    openInterest: stats.openInterest.toString(),
-    fundingRate: stats.fundingRate.toString(),
-    nextFundingTime: stats.nextFundingTime,
+    openInterest: totalOI.toString(),
+    longOI: longOI.toString(),
+    shortOI: shortOI.toString(),
+    fundingRate: currentRate.toString(),
+    nextFundingTime: nextSettlement,
   });
 }
 
@@ -5787,18 +7709,20 @@ async function handleGetFundingRate(token: string): Promise<Response> {
 // ============================================================
 
 /**
- * 计算清算价格
- * 使用 Bybit 行业标准公式:
+ * 计算清算价格 (ETH 本位 - Bybit 行业标准)
  * 多头: liqPrice = entryPrice * (1 - 1/leverage + MMR)
  * 空头: liqPrice = entryPrice * (1 + 1/leverage - MMR)
  *
- * 注意: leverage 是 1e4 精度 (10x = 100000)
+ * ETH 本位:
+ * - entryPrice: ETH/Token (1e18 精度)
+ * - 返回值: ETH/Token (1e18 精度)
+ * - leverage 是 1e4 精度 (10x = 100000)
  */
 function calculateLiquidationPrice(
-  entryPrice: bigint,
-  leverage: bigint,  // 1e4 精度 (10x = 100000)
+  entryPrice: bigint,   // ETH/Token (1e18 精度)
+  leverage: bigint,     // 1e4 精度 (10x = 100000)
   isLong: boolean,
-  mmr: bigint = 200n // 基础 MMR，会根据杠杆动态调整
+  mmr: bigint = 200n    // 基础 MMR，会根据杠杆动态调整
 ): bigint {
   const PRECISION = 10000n; // 基点精度
 
@@ -5840,16 +7764,18 @@ function calculateLiquidationPrice(
 }
 
 /**
- * 计算穿仓价格 (Bankruptcy Price)
+ * 计算穿仓价格 (Bankruptcy Price) - ETH 本位
  *
  * 穿仓价格 = 保证金完全亏损的价格 (MMR = 0)
  *
  * 多头: bankruptcyPrice = entryPrice * (1 - 1/leverage)
  * 空头: bankruptcyPrice = entryPrice * (1 + 1/leverage)
+ *
+ * ETH 本位: 所有价格都是 ETH/Token (1e18 精度)
  */
 function calculateBankruptcyPrice(
-  entryPrice: bigint,
-  leverage: bigint,  // 1e4 精度
+  entryPrice: bigint,   // ETH/Token (1e18 精度)
+  leverage: bigint,     // 1e4 精度
   isLong: boolean
 ): bigint {
   const PRECISION = 10000n;
@@ -5869,77 +7795,79 @@ function calculateBankruptcyPrice(
 }
 
 /**
- * 计算未实现盈亏 (行业标准 - GMX/Binance)
- * 公式: PnL = Size × Direction × (MarkPrice - EntryPrice) - OpenFee
+ * 计算未实现盈亏 (ETH 本位 - GMX 标准)
+ * 公式: PnL = Size × (MarkPrice - EntryPrice) / EntryPrice × Direction
  *
- * 开仓后价格没变 → PnL = -手续费 (浮亏)
+ * ETH 本位说明:
+ * - size: Token 数量 (1e18)
+ * - entryPrice/currentPrice: ETH/Token (1e18)
+ * - 返回值: ETH 盈亏 (1e18 精度)
  *
- * 精度说明:
- * - size: 1e18 (代币数量)
- * - entryPrice/currentPrice: 1e12 (USD，来自订单簿)
- * - 返回值: 1e6 精度 (USD)
+ * 计算步骤:
+ * 1. priceDelta = |currentPrice - entryPrice|
+ * 2. delta = size * priceDelta / entryPrice (ETH 盈亏)
+ * 3. 多头价格上涨盈利，空头价格下跌盈利
  */
 function calculateUnrealizedPnL(
-  size: bigint,         // 1e18 精度 (代币数量)
-  entryPrice: bigint,   // 1e12 精度 (来自订单簿)
-  currentPrice: bigint, // 1e12 精度 (来自订单簿)
+  size: bigint,         // Token 数量 (1e18 精度)
+  entryPrice: bigint,   // ETH/Token (1e18 精度)
+  currentPrice: bigint, // ETH/Token (1e18 精度)
   isLong: boolean
 ): bigint {
-  // 1. 计算价格变动带来的盈亏
-  // PnL = size * (currentPrice - entryPrice) * direction
-  // 单位转换: size(1e18) * priceDiff(1e12) / 1e24 = 1e6 精度
-  let pricePnL: bigint;
-  if (isLong) {
-    pricePnL = (size * (currentPrice - entryPrice)) / (10n ** 24n);
-  } else {
-    pricePnL = (size * (entryPrice - currentPrice)) / (10n ** 24n);
-  }
+  if (entryPrice <= 0n) return 0n;
 
-  // 2. 计算开仓手续费 (0.05% of position value)
-  // positionValue = size * entryPrice / 1e24 (USD, 1e6 精度)
-  const positionValue = (size * entryPrice) / (10n ** 24n);
-  const openFee = (positionValue * 5n) / 10000n; // 0.05%
+  // GMX 标准 PnL 计算
+  const priceDelta = currentPrice > entryPrice
+    ? currentPrice - entryPrice
+    : entryPrice - currentPrice;
 
-  // 3. 未实现盈亏 = 价格盈亏 - 手续费
-  return pricePnL - openFee;
+  // delta = size * priceDelta / entryPrice
+  // 精度: (1e18 * 1e18) / 1e18 = 1e18 (ETH)
+  const delta = (size * priceDelta) / entryPrice;
+
+  const hasProfit = isLong
+    ? currentPrice > entryPrice
+    : entryPrice > currentPrice;
+
+  return hasProfit ? delta : -delta;
 }
 
 /**
- * 计算保证金率 (行业标准 - Binance/OKX)
+ * 计算保证金率 (ETH 本位 - Binance/OKX 标准)
  * 公式: 保证金率 = 维持保证金 / 账户权益
  *
  * 触发条件: 保证金率 >= 100% 时触发强平
  * 越小越安全，越大越危险
  *
- * 精度说明:
- * - collateral: 1e6 (USD)
- * - size: 1e18 (代币数量)
- * - entryPrice/currentPrice: 1e18 (USD，前端用 parseEther)
+ * ETH 本位精度:
+ * - collateral: 1e18 (ETH)
+ * - size: 1e18 (Token 数量)
+ * - entryPrice/currentPrice: 1e18 (ETH/Token)
  * - 返回值: 1e4 精度 (10000 = 100%)
  */
 function calculateMarginRatio(
-  collateral: bigint,   // 1e6 精度 (USD) - 初始保证金
-  size: bigint,         // 1e18 精度 (代币数量)
-  entryPrice: bigint,   // 1e12 精度 (来自订单簿)
-  currentPrice: bigint, // 1e12 精度 (来自订单簿)
+  collateral: bigint,   // 1e18 精度 (ETH) - 初始保证金
+  size: bigint,         // 1e18 精度 (Token 数量)
+  entryPrice: bigint,   // 1e18 精度 (ETH/Token)
+  currentPrice: bigint, // 1e18 精度 (ETH/Token)
   isLong: boolean,
   mmr: bigint = 50n     // 维持保证金率 0.5% (1e4 精度, 50 = 0.5%)
 ): bigint {
   if (size === 0n || currentPrice === 0n) return 0n; // 无仓位，0%风险
 
-  // 计算仓位价值 (USD, 1e6 精度)
-  // size(1e18) * currentPrice(1e12) / 1e24 = 1e6 精度
-  const positionValue = (size * currentPrice) / (10n ** 24n);
+  // 计算仓位的 ETH 价值
+  // positionValue = size * currentPrice / 1e18 (ETH)
+  const positionValue = (size * currentPrice) / (10n ** 18n);
   if (positionValue === 0n) return 0n;
 
   // 计算维持保证金 = 仓位价值 * MMR
-  // maintenanceMargin = positionValue * mmr / 10000
+  // maintenanceMargin = positionValue * mmr / 10000 (ETH)
   const maintenanceMargin = (positionValue * mmr) / 10000n;
 
-  // 计算未实现盈亏 (行业标准)
+  // 计算未实现盈亏 (ETH 本位)
   const pnl = calculateUnrealizedPnL(size, entryPrice, currentPrice, isLong);
 
-  // 账户权益 = 初始保证金 + 未实现盈亏
+  // 账户权益 = 初始保证金 + 未实现盈亏 (ETH)
   const equity = collateral + pnl;
   if (equity <= 0n) return 100000n; // 权益为负，返回 1000% (已爆仓)
 
@@ -6237,14 +8165,14 @@ async function handleGetInsuranceFund(): Promise<Response> {
     totalPayouts: insuranceFund.totalPayouts.toString(),
     lastUpdated: insuranceFund.lastUpdated,
     display: {
-      balance: `$${(Number(insuranceFund.balance) / 1e6).toFixed(2)}`,
-      totalContributions: `$${(Number(insuranceFund.totalContributions) / 1e6).toFixed(2)}`,
-      totalPayouts: `$${(Number(insuranceFund.totalPayouts) / 1e6).toFixed(2)}`,
+      balance: `$${(Number(insuranceFund.balance) / 1e18).toFixed(2)}`,
+      totalContributions: `$${(Number(insuranceFund.totalContributions) / 1e18).toFixed(2)}`,
+      totalPayouts: `$${(Number(insuranceFund.totalPayouts) / 1e18).toFixed(2)}`,
     },
     tokenFunds: Array.from(tokenInsuranceFunds.entries()).map(([token, fund]) => ({
       token,
       balance: fund.balance.toString(),
-      display: `$${(Number(fund.balance) / 1e6).toFixed(2)}`,
+      display: `$${(Number(fund.balance) / 1e18).toFixed(2)}`,
     })),
   });
 }
@@ -6264,9 +8192,9 @@ async function handleGetTokenInsuranceFund(token: string): Promise<Response> {
     totalPayouts: fund.totalPayouts.toString(),
     lastUpdated: fund.lastUpdated,
     display: {
-      balance: `$${(Number(fund.balance) / 1e6).toFixed(2)}`,
-      totalContributions: `$${(Number(fund.totalContributions) / 1e6).toFixed(2)}`,
-      totalPayouts: `$${(Number(fund.totalPayouts) / 1e6).toFixed(2)}`,
+      balance: `$${(Number(fund.balance) / 1e18).toFixed(2)}`,
+      totalContributions: `$${(Number(fund.totalContributions) / 1e18).toFixed(2)}`,
+      totalPayouts: `$${(Number(fund.totalPayouts) / 1e18).toFixed(2)}`,
     },
   });
 }
@@ -6357,7 +8285,7 @@ async function handleGetFundingHistory(token: string, url: URL): Promise<Respons
       timestamp: p.timestamp,
       display: {
         fundingRate: `${(Number(p.fundingRate) / 100).toFixed(4)}%`,
-        fundingAmount: `$${(Number(p.fundingAmount) / 1e6).toFixed(2)}`,
+        fundingAmount: `$${(Number(p.fundingAmount) / 1e18).toFixed(2)}`,
         time: new Date(p.timestamp).toISOString(),
       },
     })),
@@ -6480,7 +8408,7 @@ async function handleGetTPSL(pairId: string): Promise<Response> {
     display: {
       takeProfitPrice: order.takeProfitPrice ? `$${(Number(order.takeProfitPrice) / 1e12).toFixed(6)}` : "Not set",
       stopLossPrice: order.stopLossPrice ? `$${(Number(order.stopLossPrice) / 1e12).toFixed(6)}` : "Not set",
-      executionPnL: order.executionPnL ? `$${(Number(order.executionPnL) / 1e6).toFixed(2)}` : null,
+      executionPnL: order.executionPnL ? `$${(Number(order.executionPnL) / 1e18).toFixed(2)}` : null,
     },
   });
 }
@@ -6577,7 +8505,7 @@ interface RemoveMarginResult {
  * 3. 降低强平价格风险
  *
  * @param pairId 仓位 ID
- * @param amount 追加金额 (1e6 USD)
+ * @param amount 追加金额 (1e18 ETH)
  */
 function addMarginToPosition(pairId: string, amount: bigint): AddMarginResult {
   // 查找仓位
@@ -6619,7 +8547,8 @@ function addMarginToPosition(pairId: string, amount: bigint): AddMarginResult {
 
   // 计算新杠杆 = 仓位价值 / 新保证金
   const currentPrice = BigInt(position.markPrice);
-  const positionValue = (BigInt(position.size) * currentPrice) / (10n ** 24n);
+  // position.size 已经是 ETH 名义价值 (1e18 精度)
+  const positionValue = BigInt(position.size);
   const newLeverage = Number((positionValue * 10000n) / newCollateral) / 10000;
 
   // 更新仓位
@@ -6646,7 +8575,7 @@ function addMarginToPosition(pairId: string, amount: bigint): AddMarginResult {
 
   position.updatedAt = Date.now();
 
-  console.log(`[Margin] Added $${Number(amount) / 1e6} to ${pairId}. New collateral: $${Number(newCollateral) / 1e6}, leverage: ${newLeverage.toFixed(2)}x`);
+  console.log(`[Margin] Added $${Number(amount) / 1e18} to ${pairId}. New collateral: $${Number(newCollateral) / 1e18}, leverage: ${newLeverage.toFixed(2)}x`);
 
   // 广播保证金更新
   broadcastMarginUpdate(position, "add", amount);
@@ -6674,7 +8603,7 @@ function addMarginToPosition(pairId: string, amount: bigint): AddMarginResult {
  * - 新保证金率不能低于维持保证金率 × 1.5
  *
  * @param pairId 仓位 ID
- * @param amount 减少金额 (1e6 USD)
+ * @param amount 减少金额 (1e18 ETH)
  */
 function removeMarginFromPosition(pairId: string, amount: bigint): RemoveMarginResult {
   // 查找仓位
@@ -6702,7 +8631,8 @@ function removeMarginFromPosition(pairId: string, amount: bigint): RemoveMarginR
 
   const oldCollateral = BigInt(position.collateral);
   const currentPrice = BigInt(position.markPrice);
-  const positionValue = (BigInt(position.size) * currentPrice) / (10n ** 24n);
+  // position.size 已经是 ETH 名义价值 (1e18 精度)
+  const positionValue = BigInt(position.size);
   const mmr = BigInt(position.mmr);
 
   // 计算最大可减少金额
@@ -6740,7 +8670,7 @@ function removeMarginFromPosition(pairId: string, amount: bigint): RemoveMarginR
       newLeverage: Number(position.leverage),
       newLiquidationPrice: BigInt(position.liquidationPrice),
       maxRemovable,
-      reason: `Amount exceeds maximum removable. Max: $${Number(maxRemovable) / 1e6}`,
+      reason: `Amount exceeds maximum removable. Max: $${Number(maxRemovable) / 1e18}`,
     };
   }
 
@@ -6770,7 +8700,7 @@ function removeMarginFromPosition(pairId: string, amount: bigint): RemoveMarginR
 
   position.updatedAt = Date.now();
 
-  console.log(`[Margin] Removed $${Number(amount) / 1e6} from ${pairId}. New collateral: $${Number(newCollateral) / 1e6}, leverage: ${newLeverage.toFixed(2)}x`);
+  console.log(`[Margin] Removed $${Number(amount) / 1e18} from ${pairId}. New collateral: $${Number(newCollateral) / 1e18}, leverage: ${newLeverage.toFixed(2)}x`);
 
   // 广播保证金更新
   broadcastMarginUpdate(position, "remove", amount);
@@ -6810,7 +8740,8 @@ function getMarginAdjustmentInfo(pairId: string): {
 
   const currentCollateral = BigInt(position.collateral);
   const currentPrice = BigInt(position.markPrice);
-  const positionValue = (BigInt(position.size) * currentPrice) / (10n ** 24n);
+  // position.size 已经是 ETH 名义价值 (1e18 精度)
+  const positionValue = BigInt(position.size);
   const mmr = BigInt(position.mmr);
 
   const minCollateralForLeverage = positionValue / 100n;
@@ -6965,12 +8896,12 @@ async function handleGetReferrer(req: Request): Promise<Response> {
       totalVolumeReferred: referrer.totalVolumeReferred.toString(),
       createdAt: referrer.createdAt,
       display: {
-        totalEarnings: `$${(Number(referrer.totalEarnings) / 1e6).toFixed(2)}`,
-        pendingEarnings: `$${(Number(referrer.pendingEarnings) / 1e6).toFixed(2)}`,
-        withdrawnEarnings: `$${(Number(referrer.withdrawnEarnings) / 1e6).toFixed(2)}`,
-        level1Earnings: `$${(Number(referrer.level1Earnings) / 1e6).toFixed(2)}`,
-        level2Earnings: `$${(Number(referrer.level2Earnings) / 1e6).toFixed(2)}`,
-        totalVolumeReferred: `$${(Number(referrer.totalVolumeReferred) / 1e6).toFixed(2)}`,
+        totalEarnings: `$${(Number(referrer.totalEarnings) / 1e18).toFixed(2)}`,
+        pendingEarnings: `$${(Number(referrer.pendingEarnings) / 1e18).toFixed(2)}`,
+        withdrawnEarnings: `$${(Number(referrer.withdrawnEarnings) / 1e18).toFixed(2)}`,
+        level1Earnings: `$${(Number(referrer.level1Earnings) / 1e18).toFixed(2)}`,
+        level2Earnings: `$${(Number(referrer.level2Earnings) / 1e18).toFixed(2)}`,
+        totalVolumeReferred: `$${(Number(referrer.totalVolumeReferred) / 1e18).toFixed(2)}`,
       },
     },
   });
@@ -7008,8 +8939,8 @@ async function handleGetReferee(req: Request): Promise<Response> {
       totalCommissionGenerated: referee.totalCommissionGenerated.toString(),
       joinedAt: referee.joinedAt,
       display: {
-        totalFeesPaid: `$${(Number(referee.totalFeesPaid) / 1e6).toFixed(2)}`,
-        totalCommissionGenerated: `$${(Number(referee.totalCommissionGenerated) / 1e6).toFixed(2)}`,
+        totalFeesPaid: `$${(Number(referee.totalFeesPaid) / 1e18).toFixed(2)}`,
+        totalCommissionGenerated: `$${(Number(referee.totalCommissionGenerated) / 1e18).toFixed(2)}`,
       },
     },
   });
@@ -7043,8 +8974,8 @@ async function handleGetCommissions(req: Request): Promise<Response> {
       timestamp: c.timestamp,
       status: c.status,
       display: {
-        tradeFee: `$${(Number(c.tradeFee) / 1e6).toFixed(4)}`,
-        commissionAmount: `$${(Number(c.commissionAmount) / 1e6).toFixed(4)}`,
+        tradeFee: `$${(Number(c.tradeFee) / 1e18).toFixed(4)}`,
+        commissionAmount: `$${(Number(c.commissionAmount) / 1e18).toFixed(4)}`,
         commissionRate: `${c.commissionRate / 100}%`,
       },
     })),
@@ -7080,8 +9011,8 @@ async function handleWithdrawCommission(req: Request): Promise<Response> {
       withdrawnAmount: result.withdrawnAmount?.toString(),
       remainingPending: referrer?.pendingEarnings.toString(),
       display: {
-        withdrawnAmount: `$${(Number(result.withdrawnAmount || 0n) / 1e6).toFixed(2)}`,
-        remainingPending: referrer ? `$${(Number(referrer.pendingEarnings) / 1e6).toFixed(2)}` : "$0.00",
+        withdrawnAmount: `$${(Number(result.withdrawnAmount || 0n) / 1e18).toFixed(2)}`,
+        remainingPending: referrer ? `$${(Number(referrer.pendingEarnings) / 1e18).toFixed(2)}` : "$0.00",
       },
     });
   } catch (e) {
@@ -7107,7 +9038,7 @@ async function handleGetReferralLeaderboard(req: Request): Promise<Response> {
       referralCount: entry.referralCount,
       totalEarnings: entry.totalEarnings.toString(),
       display: {
-        totalEarnings: `$${(Number(entry.totalEarnings) / 1e6).toFixed(2)}`,
+        totalEarnings: `$${(Number(entry.totalEarnings) / 1e18).toFixed(2)}`,
       },
     })),
   });
@@ -7131,11 +9062,11 @@ async function handleGetReferralStats(): Promise<Response> {
       minWithdrawAmount: REFERRAL_CONFIG.minWithdrawAmount.toString(),
     },
     display: {
-      totalCommissionsPaid: `$${(Number(stats.totalCommissionsPaid) / 1e6).toFixed(2)}`,
-      totalCommissionsPending: `$${(Number(stats.totalCommissionsPending) / 1e6).toFixed(2)}`,
+      totalCommissionsPaid: `$${(Number(stats.totalCommissionsPaid) / 1e18).toFixed(2)}`,
+      totalCommissionsPending: `$${(Number(stats.totalCommissionsPending) / 1e18).toFixed(2)}`,
       level1Rate: `${REFERRAL_CONFIG.level1Rate / 100}%`,
       level2Rate: `${REFERRAL_CONFIG.level2Rate / 100}%`,
-      minWithdrawAmount: `$${Number(REFERRAL_CONFIG.minWithdrawAmount) / 1e6}`,
+      minWithdrawAmount: `$${Number(REFERRAL_CONFIG.minWithdrawAmount) / 1e18}`,
     },
   });
 }
@@ -7169,34 +9100,14 @@ async function handleGetReferrerByCode(code: string): Promise<Response> {
 }
 
 // ============================================================
-// Batch Submission Loop
+// [模式 2] Batch Submission Loop - DISABLED
 // ============================================================
+// 旧模式: 定期将未结算的 matches 批量提交到链上
+// 新模式: 不提交到链上，matches 存 submittedMatches 用于 Merkle 快照
 
 async function runBatchSubmissionLoop(): Promise<void> {
-  if (!submitter) {
-    console.log("[Batch] No submitter configured, skipping batch submission");
-    return;
-  }
-
-  setInterval(async () => {
-    const matches = engine.getPendingMatches();
-
-    if (matches.length > 0) {
-      console.log(`[Batch] Submitting ${matches.length} matches...`);
-      const hash = await submitter!.submitBatch(matches);
-
-      if (hash) {
-        // Clear pending matches on success
-        engine.clearPendingMatches();
-
-        // Track submitted matches
-        for (const match of matches) {
-          const matchId = `${match.longOrder.id}_${match.shortOrder.id}`;
-          submittedMatches.set(matchId, match);
-        }
-      }
-    }
-  }, BATCH_INTERVAL_MS);
+  console.log("[Batch] Mode 2: On-chain batch submission DISABLED");
+  console.log("[Batch] Mode 2: Matches are tracked in memory for Merkle snapshots");
 }
 
 // ============================================================
@@ -7224,6 +9135,96 @@ async function handleRequest(req: Request): Promise<Response> {
     return jsonResponse({ status: "ok", pendingMatches: engine.getPendingMatches().length });
   }
 
+  // 查询毕业代币信息 (价格源切换状态)
+  if (path === "/api/graduated-tokens" && method === "GET") {
+    const result: Record<string, { pairAddress: string; priceSource: string }> = {};
+    for (const [token, info] of graduatedTokens.entries()) {
+      result[token] = {
+        pairAddress: info.pairAddress,
+        priceSource: "uniswap_v2",
+      };
+    }
+    return jsonResponse({
+      success: true,
+      graduatedCount: graduatedTokens.size,
+      totalTokens: SUPPORTED_TOKENS.length,
+      tokens: result,
+    });
+  }
+
+  // ============================================================
+  // Mode 2 APIs (Merkle Snapshots + Withdrawal Authorization)
+  // ============================================================
+
+  // Get snapshot status
+  if (path === "/api/v2/snapshot/status" && method === "GET") {
+    const status = getSnapshotJobStatus();
+    return jsonResponse({
+      success: true,
+      ...status,
+    });
+  }
+
+  // Get Merkle proof for a user
+  if (path === "/api/v2/snapshot/proof" && method === "GET") {
+    const user = url.searchParams.get("user") as Address;
+    if (!user) {
+      return errorResponse("Missing user parameter");
+    }
+    const proof = getUserProof(user);
+    if (!proof) {
+      return errorResponse("No proof available for user");
+    }
+    return jsonResponse({
+      success: true,
+      proof: {
+        user: proof.user,
+        equity: proof.equity.toString(),
+        merkleProof: proof.proof,
+        leaf: proof.leaf,
+        root: proof.root,
+      },
+    });
+  }
+
+  // Request withdrawal authorization
+  if (path === "/api/v2/withdraw/request" && method === "POST") {
+    try {
+      const body = await req.json();
+      const { user, amount } = body;
+      if (!user || !amount) {
+        return errorResponse("Missing user or amount");
+      }
+      const result = await requestWithdrawal(user as Address, BigInt(amount));
+      if (!result.success) {
+        return errorResponse(result.error || "Withdrawal request failed");
+      }
+      return jsonResponse({
+        success: true,
+        authorization: {
+          user: result.authorization!.user,
+          amount: result.authorization!.amount.toString(),
+          nonce: result.authorization!.nonce.toString(),
+          deadline: result.authorization!.deadline,
+          merkleRoot: result.authorization!.merkleRoot,
+          merkleProof: result.authorization!.merkleProof,
+          signature: result.authorization!.signature,
+        },
+      });
+    } catch (e) {
+      return errorResponse(e instanceof Error ? e.message : "Unknown error");
+    }
+  }
+
+  // Get withdraw module status
+  if (path === "/api/v2/withdraw/status" && method === "GET") {
+    const status = getWithdrawModuleStatus();
+    return jsonResponse({
+      success: true,
+      ...status,
+    });
+  }
+
   // Redis status check
   if (path === "/api/redis/status") {
     const connected = db.isConnected();
@@ -7243,7 +9244,7 @@ async function handleRequest(req: Request): Promise<Response> {
     try {
       const testPosition = await PositionRepo.create({
         userAddress: "0x0000000000000000000000000000000000000001" as Address,
-        symbol: "TEST-USDT",
+        symbol: "TEST-ETH",
         side: "LONG",
         size: "1000000000000000000",
         entryPrice: "100000000",
@@ -7306,6 +9307,34 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   // ============================================================
+  // Token Holders API
+  // ============================================================
+
+  // Get token holders distribution
+  if (path.startsWith("/api/v1/spot/holders/") && method === "GET") {
+    const token = path.split("/").pop();
+    if (!token || !token.startsWith("0x")) {
+      return errorResponse("Invalid token address", 400);
+    }
+    const limit = parseInt(url.searchParams.get("limit") || "10");
+    const includePnl = url.searchParams.get("includePnl") === "true";
+    try {
+      const result = await getTokenHolders(token as Address, limit, includePnl);
+      return jsonResponse(result);
+    } catch (error: any) {
+      console.error("[Holders API] Error:", error);
+      return jsonResponse({
+        success: false,
+        holders: [],
+        total_holders: 0,
+        top10_percentage: 0,
+        concentration_risk: "LOW",
+        error: error.message,
+      });
+    }
+  }
+
+  // ============================================================
   // FOMO Events & Leaderboard API (P2)
   // ============================================================
 
@@ -7351,10 +9380,10 @@ async function handleRequest(req: Request): Promise<Response> {
     return handleGetMetaTxNonce(user);
   }
 
-  // Get user's Settlement balance
+  // Get user's Settlement balance (Relay API)
   if (path.match(/^\/api\/v1\/relay\/balance\/0x[a-fA-F0-9]+$/) && method === "GET") {
     const user = path.split("/")[5] as Address;
-    return handleGetUserBalance(user);
+    return handleGetRelayUserBalance(user);
   }
 
   // Relay depositFor (ERC20 token)
@@ -7375,6 +9404,208 @@ async function handleRequest(req: Request): Promise<Response> {
   // Market data endpoints (OKX format)
   if (path === "/api/v1/market/tickers" && method === "GET") {
     return handleGetTickers();
+  }
+
+  if (path === "/api/v1/market/ticker" && method === "GET") {
+    const instId = url.searchParams.get("instId");
+    if (!instId) {
+      return jsonResponse({ code: "1", msg: "instId required" }, 400);
+    }
+    return handleGetTicker(instId);
+  }
+
+  if (path === "/api/v1/market/trades" && method === "GET") {
+    const instId = url.searchParams.get("instId");
+    const limit = parseInt(url.searchParams.get("limit") || "100");
+    if (!instId) {
+      return jsonResponse({ code: "1", msg: "instId required" }, 400);
+    }
+    return handleGetMarketTrades(instId, limit);
+  }
+
+  // Order Book (OKX format) - /api/v1/market/books
+  if (path === "/api/v1/market/books" && method === "GET") {
+    const instId = url.searchParams.get("instId");
+    if (!instId) {
+      return jsonResponse({ code: "1", msg: "instId required" }, 400);
+    }
+    const token = instId.split("-")[0] as Address;
+    return handleGetOrderBook(token);
+  }
+
+  // Mark Price (OKX format) - /api/v1/market/mark-price
+  if (path === "/api/v1/market/mark-price" && method === "GET") {
+    const instId = url.searchParams.get("instId");
+    // 如果没有指定 instId，返回所有代币的标记价格
+    const tokens = instId ? [instId.split("-")[0] as Address] : Array.from(engine.getOrderBooks().keys());
+    const markPrices = tokens.map(token => {
+      const ob = engine.getOrderBook(token);
+      const depth = ob.getDepth(1);
+      return {
+        instId: `${token}-ETH`,
+        markPx: depth.lastPrice.toString(),
+        ts: Date.now(),
+      };
+    });
+    return jsonResponse({ code: "0", msg: "success", data: markPrices });
+  }
+
+  // Funding Rate (OKX format) - /api/v1/market/funding-rate
+  if (path === "/api/v1/market/funding-rate" && method === "GET") {
+    const instId = url.searchParams.get("instId");
+    if (!instId) {
+      return jsonResponse({ code: "1", msg: "instId required" }, 400);
+    }
+    const token = instId.split("-")[0] as Address;
+    return handleGetFundingRate(token);
+  }
+
+  // 前端充值/提现后同步链上余额
+  if (path === "/api/balance/sync" && method === "POST") {
+    try {
+      const { trader } = await req.json();
+      if (!trader) return errorResponse("Missing trader");
+      const normalizedTrader = (trader as string).toLowerCase() as Address;
+      await syncUserBalanceFromChain(normalizedTrader);
+      broadcastBalanceUpdate(normalizedTrader);
+      return jsonResponse({ success: true });
+    } catch (e: any) {
+      return errorResponse(e.message || "Failed to sync balance");
+    }
+  }
+
+  // 后端辅助提现: 用 session key 签名 Settlement.withdraw + ERC20 transfer 回主钱包
+  if (path === "/api/wallet/withdraw" && method === "POST") {
+    try {
+      const { tradingWallet, mainWallet, amount, token } = await req.json();
+      if (!tradingWallet || !mainWallet || !amount) {
+        return errorResponse("Missing required fields: tradingWallet, mainWallet, amount");
+      }
+      const normalizedTrader = (tradingWallet as string).toLowerCase() as Address;
+      const tokenAddr = (token || process.env.WETH_ADDRESS) as Address;
+      if (!tokenAddr) return errorResponse("Token address not configured");
+
+      // 检查挂单锁定金额，确保不提取被挂单占用的资金
+      let pendingOrdersLocked = 0n;
+      const userOrders = engine.getUserOrders(normalizedTrader);
+      for (const order of userOrders) {
+        if (order.status === "PENDING" || order.status === "PARTIALLY_FILLED") {
+          const marginInfo = orderMarginInfos.get(order.id);
+          if (marginInfo) {
+            const unfilledRatio = marginInfo.totalSize > 0n
+              ? ((marginInfo.totalSize - marginInfo.settledSize) * 10000n) / marginInfo.totalSize
+              : 10000n;
+            pendingOrdersLocked += (marginInfo.totalDeducted * unfilledRatio) / 10000n;
+          }
+        }
+      }
+
+      const sessionId = await getActiveSessionForDerived(normalizedTrader);
+      if (!sessionId) return errorResponse("No active session for this trading wallet");
+
+      const signingKey = await getSigningKey(sessionId);
+      if (!signingKey) return errorResponse("Signing key unavailable");
+
+      const account = privateKeyToAccount(signingKey);
+      const walletClient = createWalletClient({
+        account,
+        chain: baseSepolia,
+        transport: http(RPC_URL),
+      });
+      const pubClient = createPublicClient({
+        chain: baseSepolia,
+        transport: http(RPC_URL),
+      });
+
+      const withdrawAmount = BigInt(amount);
+
+      // 0. 获取链上钱包余额 + Settlement 可用余额，检查是否超出可提取上限 (ETH 本位)
+      const walletEthBal = await pubClient.readContract({
+        address: tokenAddr,
+        abi: ERC20_ABI,
+        functionName: "balanceOf",
+        args: [normalizedTrader],
+      }) as bigint;
+
+      const [settlementAvailableCheck] = await pubClient.readContract({
+        address: SETTLEMENT_ADDRESS!,
+        abi: SETTLEMENT_ABI,
+        functionName: "getUserBalance",
+        args: [normalizedTrader],
+      }) as [bigint, bigint];
+
+      // 实际可提取 = 链上可用 + 链下盈亏调整 + 钱包余额 - 挂单锁定 - 仓位保证金
+      // ⚠️ 注意：链下盈利无法直接从链上提取，需要先通过 Merkle 证明结算
+      const mode2Adj = getMode2Adjustment(normalizedTrader);
+      const posMargin = (userPositions.get(normalizedTrader) || []).reduce(
+        (sum, p) => sum + BigInt(p.collateral || "0"), 0n
+      );
+      const maxWithdrawable = walletEthBal + settlementAvailableCheck + mode2Adj - pendingOrdersLocked - posMargin;
+      if (withdrawAmount > maxWithdrawable) {
+        return errorResponse(`提取金额超出可用余额。可提取: $${Number(maxWithdrawable > 0n ? maxWithdrawable : 0n) / 1e18}, 挂单锁定: $${Number(pendingOrdersLocked) / 1e18}`);
+      }
+
+      // 1. 从 Settlement 提取 (复用上面已读取的可用余额)
+      const settlementAvailable = settlementAvailableCheck;
+
+      let settlementWithdrawTx: string | null = null;
+      if (settlementAvailable > 0n) {
+        // 从 Settlement 提取 (取 min(可用余额, 请求金额))
+        const settlementWithdrawAmount = settlementAvailable > withdrawAmount ? withdrawAmount : settlementAvailable;
+        const swHash = await walletClient.writeContract({
+          address: SETTLEMENT_ADDRESS!,
+          abi: SETTLEMENT_ABI,
+          functionName: "withdraw",
+          args: [tokenAddr, settlementWithdrawAmount],
+        });
+        await pubClient.waitForTransactionReceipt({ hash: swHash });
+        settlementWithdrawTx = swHash;
+        console.log(`[Withdraw] ${normalizedTrader.slice(0, 10)} withdrew $${Number(settlementWithdrawAmount) / 1e18} from Settlement: ${swHash}`);
+      }
+
+      // 2. 从派生钱包 ERC20 转到主钱包
+      const walletErc20Balance = await pubClient.readContract({
+        address: tokenAddr,
+        abi: ERC20_ABI,
+        functionName: "balanceOf",
+        args: [normalizedTrader],
+      }) as bigint;
+
+      const transferAmount = walletErc20Balance > withdrawAmount ? withdrawAmount : walletErc20Balance;
+      let transferTx: string | null = null;
+      if (transferAmount > 0n) {
+        const tHash = await walletClient.writeContract({
+          address: tokenAddr,
+          abi: ERC20_ABI,
+          functionName: "transfer",
+          args: [mainWallet as Address, transferAmount],
+        });
+        await pubClient.waitForTransactionReceipt({ hash: tHash });
+        transferTx = tHash;
+        console.log(`[Withdraw] ${normalizedTrader.slice(0, 10)} transferred $${Number(transferAmount) / 1e18} to main wallet: ${tHash}`);
+      }
+
+      await syncUserBalanceFromChain(normalizedTrader);
+      broadcastBalanceUpdate(normalizedTrader);
+      return jsonResponse({ success: true, settlementWithdrawTx, transferTx, amount: transferAmount.toString() });
+    } catch (e: any) {
+      return errorResponse(e.message || "Withdraw failed");
+    }
+  }
+
+  // 注册前端交易钱包 session (用于自动 approve+deposit)
+  if (path === "/api/wallet/register-session" && method === "POST") {
+    try {
+      const body = await req.json();
+      const { signature, expiresInSeconds } = body;
+      if (!signature) {
+        return errorResponse("Missing signature");
+      }
+      const result = await registerTradingSession(signature, expiresInSeconds || 86400);
+      return jsonResponse({ success: true, data: result });
+    } catch (e: any) {
+      return errorResponse(e.message || "Failed to register session");
+    }
   }
 
   if (path === "/api/order/submit" && method === "POST") {
@@ -7485,6 +9716,99 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   // ============================================================
+  // 借贷清算 API
+  // ============================================================
+
+  // 获取代币的活跃借贷
+  if (path.match(/^\/api\/lending\/borrows\/0x[a-fA-F0-9]+$/) && method === "GET") {
+    const token = path.split("/")[4] as Address;
+    const borrows = getActiveBorrows(token);
+    return new Response(JSON.stringify({
+      ok: true,
+      data: {
+        token,
+        borrows: borrows.map(b => ({
+          borrower: b.borrower,
+          amount: b.amount.toString(),
+          trackedAt: b.trackedAt,
+          lastChecked: b.lastChecked,
+        })),
+        count: borrows.length,
+      },
+    }), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
+  }
+
+  // 获取借贷清算模块状态
+  if (path === "/api/lending/metrics" && method === "GET") {
+    const metrics = getLendingLiquidationMetrics();
+    return new Response(JSON.stringify({
+      ok: true,
+      data: metrics,
+    }), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
+  }
+
+  // ============================================================
+  // PerpVault API
+  // ============================================================
+
+  // 获取 PerpVault 池子状态
+  if (path === "/api/vault/info" && method === "GET") {
+    const stats = await getPerpVaultPoolStats();
+    const metrics = getPerpVaultMetrics();
+    return new Response(JSON.stringify({
+      ok: true,
+      data: {
+        enabled: metrics.enabled,
+        ...(stats ? {
+          poolValue: stats.poolValue.toString(),
+          sharePrice: stats.sharePrice.toString(),
+          totalShares: stats.totalShares.toString(),
+          totalOI: stats.totalOI.toString(),
+          maxOI: stats.maxOI.toString(),
+          utilization: stats.utilization.toString(),
+          totalFeesCollected: stats.totalFeesCollected.toString(),
+          totalProfitsPaid: stats.totalProfitsPaid.toString(),
+          totalLossesReceived: stats.totalLossesReceived.toString(),
+          totalLiquidationReceived: stats.totalLiquidationReceived.toString(),
+        } : {}),
+        metrics,
+      },
+    }), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
+  }
+
+  // 获取 LP 信息
+  if (path.match(/^\/api\/vault\/lp\/0x[a-fA-F0-9]+$/) && method === "GET") {
+    const lpAddress = path.split("/")[4] as Address;
+    const lpInfo = await getPerpVaultLPInfo(lpAddress);
+    return new Response(JSON.stringify({
+      ok: true,
+      data: lpInfo ? {
+        shares: lpInfo.shares.toString(),
+        value: lpInfo.value.toString(),
+        pendingWithdrawalShares: lpInfo.pendingWithdrawalShares.toString(),
+        withdrawalRequestTime: lpInfo.withdrawalRequestTime.toString(),
+        withdrawalExecuteAfter: lpInfo.withdrawalExecuteAfter.toString(),
+        withdrawalEstimatedETH: lpInfo.withdrawalEstimatedETH.toString(),
+      } : null,
+    }), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
+  }
+
+  // 获取代币 OI 信息
+  if (path.match(/^\/api\/vault\/oi\/0x[a-fA-F0-9]+$/) && method === "GET") {
+    const token = path.split("/")[4] as Address;
+    const oi = await getPerpVaultTokenOI(token);
+    return new Response(JSON.stringify({
+      ok: true,
+      data: {
+        token,
+        longOI: oi.longOI.toString(),
+        shortOI: oi.shortOI.toString(),
+        totalOI: (oi.longOI + oi.shortOI).toString(),
+      },
+    }), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } });
+  }
+
+  // ============================================================
   // 保险基金 API (P1)
   // ============================================================
 
@@ -7578,7 +9902,7 @@ async function handleRequest(req: Request): Promise<Response> {
       const currentBlock = toBlock || await publicClient.getBlockNumber();
       const startBlock = fromBlock > 0n ? fromBlock : currentBlock - 50000n; // 默认回填最近 50000 个区块
 
-      const { backfillHistoricalTrades } = await import("./modules/spotHistory");
+      const { backfillHistoricalTrades } = await import("../spot/spotHistory");
       const count = await backfillHistoricalTrades(token, startBlock, currentBlock, currentEthPriceUsd);
 
       return jsonResponse({
@@ -7694,6 +10018,40 @@ async function handleRequest(req: Request): Promise<Response> {
     return handleGetReferrerByCode(code);
   }
 
+  // ✅ 账单 API: GET /api/user/:trader/bills
+  const billsMatch = path.match(/^\/api\/user\/(0x[a-fA-F0-9]+)\/bills$/);
+  if (billsMatch && method === "GET") {
+    const trader = billsMatch[1].toLowerCase() as Address;
+    const type = url.searchParams.get("type") || undefined;
+    const limit = parseInt(url.searchParams.get("limit") || "50");
+    const before = url.searchParams.get("before") ? parseInt(url.searchParams.get("before")!) : undefined;
+
+    try {
+      const logs = await RedisSettlementLogRepo.getByUser(trader, limit);
+      let filtered = logs;
+      if (type) filtered = filtered.filter(l => l.type === type);
+      if (before) filtered = filtered.filter(l => l.createdAt < before);
+
+      const serialized = filtered.map(log => ({
+        id: log.id,
+        txHash: log.txHash,
+        type: log.type,
+        amount: log.amount.toString(),
+        balanceBefore: log.balanceBefore.toString(),
+        balanceAfter: log.balanceAfter.toString(),
+        onChainStatus: log.onChainStatus,
+        proofData: log.proofData,
+        positionId: log.positionId,
+        orderId: log.orderId,
+        createdAt: log.createdAt,
+      }));
+      return jsonResponse(serialized);
+    } catch (e) {
+      console.error("[Bills] Error fetching bills:", e);
+      return jsonResponse([]);
+    }
+  }
+
   // Not found
   return errorResponse("Not found", 404);
 }
@@ -7796,11 +10154,321 @@ function broadcastTrade(trade: Trade): void {
   }
 }
 
-function handleWSMessage(ws: WebSocket, message: string): void {
-  try {
-    const msg = JSON.parse(message) as WSMessage & { trader?: string };
+/**
+ * 推送市场数据给订阅该代币的所有客户端
+ * 前端期望格式: { type: "market_data", token: "0x...", data: { lastPrice, high24h, ... } }
+ */
+function broadcastMarketData(token: Address): void {
+  if (!wss) return;
 
-    if (msg.type === "subscribe" && msg.token) {
+  const normalizedToken = token.toLowerCase() as Address;
+  const orderBook = engine.getOrderBook(normalizedToken);
+  const depth = orderBook.getDepth(20);
+  const trades = engine.getRecentTrades(normalizedToken, 100);
+
+  // ✅ 价格回退链: 永续成交价 → 现货价格 (TokenFactory AMM)
+  // 当永续订单簿没有成交时，使用现货价格作为标记价格
+  let currentPrice = orderBook.getCurrentPrice();
+  if (currentPrice <= 0n) {
+    currentPrice = engine.getSpotPrice(normalizedToken);
+  }
+
+  // 计算24小时统计
+  const now = Date.now();
+  const oneDayAgo = now - 24 * 60 * 60 * 1000;
+  const trades24h = trades.filter(t => t.timestamp >= oneDayAgo);
+
+  let high24h = currentPrice;
+  let low24h = currentPrice;
+  let volume24h = 0n;
+  let open24h = currentPrice;
+
+  if (trades24h.length > 0) {
+    open24h = trades24h[trades24h.length - 1].price;
+    for (const t of trades24h) {
+      if (t.price > high24h) high24h = t.price;
+      if (t.price < low24h) low24h = t.price;
+      // 计算 ETH 成交量: size (1e18) * price (1e18) / 1e18 = ETH (1e18 精度)
+      volume24h += (t.size * t.price) / (10n ** 18n);
+    }
+  }
+
+  const priceChange = currentPrice - open24h;
+  const priceChangePercent = open24h > 0n ? Number(priceChange * 10000n / open24h) / 100 : 0;
+
+  // ✅ 计算真实未平仓合约 (Open Interest)
+  const { longOI, shortOI } = calculateOpenInterest(normalizedToken);
+  const totalOI = longOI + shortOI;
+
+  // 构建市场数据 - 前端期望 token 在顶层
+  const marketData = {
+    lastPrice: currentPrice.toString(),
+    markPrice: currentPrice.toString(),
+    indexPrice: currentPrice.toString(),
+    high24h: high24h.toString(),
+    low24h: low24h.toString(),
+    volume24h: volume24h.toString(),
+    open24h: open24h.toString(),
+    priceChange24h: priceChange.toString(),
+    priceChangePercent24h: priceChangePercent.toFixed(2),
+    trades24h: trades24h.length,
+    openInterest: totalOI.toString(),
+    longOI: longOI.toString(),
+    shortOI: shortOI.toString(),
+    timestamp: now,
+  };
+
+  const message = JSON.stringify({
+    type: "market_data",
+    token: normalizedToken,
+    data: marketData,
+    timestamp: now,
+  });
+
+  for (const [client, tokens] of wsClients) {
+    if (client.readyState === WebSocket.OPEN && tokens.has(normalizedToken)) {
+      client.send(message);
+    }
+  }
+}
+
+/**
+ * 推送资金费率给订阅该代币的所有客户端
+ * 前端期望格式: { type: "funding_rate", token: "0x...", rate: "...", nextFundingTime: ... }
+ */
+function broadcastFundingRateWS(token: Address): void {
+  if (!wss) return;
+
+  const normalizedToken = token.toLowerCase() as Address;
+
+  // 从资金费率状态获取当前费率
+  const rate = currentFundingRates.get(normalizedToken) || 0n;
+
+  // ✅ 使用动态资金费引擎的实际下次结算时间
+  // 而不是静态的5分钟周期，因为动态引擎会根据波动率调整周期
+  const nextFundingTime = nextFundingSettlement.get(normalizedToken) || (Date.now() + 5 * 60 * 1000);
+  const dynamicInterval = getDynamicFundingInterval(normalizedToken);
+  const intervalLabel = dynamicInterval >= 60000 ? `${Math.round(dynamicInterval / 60000)}m` : `${Math.round(dynamicInterval / 1000)}s`;
+
+  const message = JSON.stringify({
+    type: "funding_rate",
+    token: normalizedToken,
+    rate: rate.toString(),
+    nextFundingTime,
+    interval: intervalLabel,
+    timestamp: Date.now(),
+  });
+
+  for (const [client, tokens] of wsClients) {
+    if (client.readyState === WebSocket.OPEN && tokens.has(normalizedToken)) {
+      client.send(message);
+    }
+  }
+}
+
+// 市场数据推送间隔 (用于 setInterval)
+let marketDataPushInterval: NodeJS.Timeout | null = null;
+
+// 上一次推送的市场数据缓存 (用于变化检测，避免无变化时频繁推送导致前端抖动)
+const lastBroadcastedMarketData = new Map<Address, string>();
+const lastBroadcastedFundingRate = new Map<Address, string>();
+
+/**
+ * 启动市场数据定时推送
+ *
+ * 使用变化检测: 只有数据确实变化时才推送，避免前端因为频繁 re-render 导致 UI 抖动
+ * - market_data: 每秒检查，但只有 lastPrice/OI/volume 等变化时才推送
+ * - funding_rate: 每 10 秒推送一次 (与 DYNAMIC_FUNDING_CHECK_INTERVAL 同步)
+ */
+let fundingRatePushCounter = 0;
+
+function startMarketDataPush(): void {
+  if (marketDataPushInterval) return;
+
+  console.log("[MarketData] Starting periodic market data push (1s check, change-detection)");
+
+  marketDataPushInterval = setInterval(() => {
+    // 获取所有被订阅的代币
+    const subscribedTokens = new Set<Address>();
+    for (const [, tokens] of wsClients) {
+      for (const token of tokens) {
+        subscribedTokens.add(token);
+      }
+    }
+
+    fundingRatePushCounter++;
+
+    for (const token of subscribedTokens) {
+      // market_data: 只有数据变化时才推送
+      broadcastMarketDataIfChanged(token);
+
+      // funding_rate: 每 10 秒推送一次 (不需要每秒推送，费率变化很缓慢)
+      if (fundingRatePushCounter % 10 === 0) {
+        broadcastFundingRateWS(token);
+      }
+    }
+  }, 1000);
+}
+
+/**
+ * 只在市场数据变化时才广播 (避免前端无意义 re-render)
+ */
+function broadcastMarketDataIfChanged(token: Address): void {
+  if (!wss) return;
+
+  const normalizedToken = token.toLowerCase() as Address;
+  const orderBook = engine.getOrderBook(normalizedToken);
+
+  // 快速检查: 用 lastPrice + OI 组合作为变化指纹
+  let currentPrice = orderBook.getCurrentPrice();
+  if (currentPrice <= 0n) {
+    currentPrice = engine.getSpotPrice(normalizedToken);
+  }
+  const { longOI, shortOI } = calculateOpenInterest(normalizedToken);
+  const fingerprint = `${currentPrice}_${longOI}_${shortOI}`;
+
+  const lastFingerprint = lastBroadcastedMarketData.get(normalizedToken);
+  if (lastFingerprint === fingerprint) {
+    return; // 数据未变化，跳过推送
+  }
+  lastBroadcastedMarketData.set(normalizedToken, fingerprint);
+
+  // 数据有变化，执行完整推送
+  broadcastMarketData(token);
+}
+
+/**
+ * 推送订单更新给交易者
+ */
+function broadcastOrderUpdate(order: Order): void {
+  if (!wss) return;
+
+  const trader = order.trader.toLowerCase() as Address;
+  const wsSet = wsTraderClients.get(trader);
+  if (!wsSet || wsSet.size === 0) return;
+
+  const message = JSON.stringify({
+    type: "orders",
+    order: {
+      id: order.id,
+      orderId: order.orderId,
+      clientOrderId: order.clientOrderId,
+      trader: order.trader,
+      token: order.token,
+      isLong: order.isLong,
+      size: order.size.toString(),
+      price: order.price.toString(),
+      leverage: order.leverage.toString(),
+      margin: order.margin.toString(),
+      fee: order.fee.toString(),
+      orderType: order.orderType,
+      timeInForce: order.timeInForce,
+      reduceOnly: order.reduceOnly,
+      postOnly: order.postOnly,
+      filledSize: order.filledSize.toString(),
+      avgFillPrice: order.avgFillPrice.toString(),
+      status: order.status,
+      createdAt: order.createdAt,
+      updatedAt: order.updatedAt,
+    },
+    timestamp: Date.now(),
+  });
+
+  for (const ws of wsSet) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(message);
+    }
+  }
+}
+
+/**
+ * 推送所有待处理订单给交易者
+ */
+function broadcastPendingOrders(trader: Address): void {
+  if (!wss) return;
+
+  const normalizedTrader = trader.toLowerCase() as Address;
+  const wsSet = wsTraderClients.get(normalizedTrader);
+  if (!wsSet || wsSet.size === 0) return;
+
+  const orders = engine.getUserOrders(normalizedTrader);
+  const pendingOrders = orders.filter(o =>
+    o.status === OrderStatus.PENDING || o.status === OrderStatus.PARTIALLY_FILLED
+  );
+
+  const message = JSON.stringify({
+    type: "orders",
+    orders: pendingOrders.map(o => ({
+      id: o.id,
+      orderId: o.orderId,
+      clientOrderId: o.clientOrderId,
+      trader: o.trader,
+      token: o.token,
+      isLong: o.isLong,
+      size: o.size.toString(),
+      price: o.price.toString(),
+      leverage: o.leverage.toString(),
+      margin: o.margin.toString(),
+      fee: o.fee.toString(),
+      orderType: o.orderType,
+      timeInForce: o.timeInForce,
+      reduceOnly: o.reduceOnly,
+      postOnly: o.postOnly,
+      filledSize: o.filledSize.toString(),
+      avgFillPrice: o.avgFillPrice.toString(),
+      status: o.status,
+      createdAt: o.createdAt,
+      updatedAt: o.updatedAt,
+    })),
+    timestamp: Date.now(),
+  });
+
+  for (const ws of wsSet) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(message);
+    }
+  }
+}
+
+function handleWSMessage(ws: WebSocket, message: string): void {
+  // 处理 ping/pong 心跳
+  if (message === "ping") {
+    ws.send("pong");
+    return;
+  }
+
+  try {
+    const msg = JSON.parse(message) as WSMessage & { trader?: string; data?: any; request_id?: string };
+
+    // ✅ 新增：处理带 request_id 的 subscribe 请求（新 API 格式）
+    if (msg.type === "subscribe" && msg.data && Array.isArray(msg.data.topics)) {
+      const tokens = wsClients.get(ws) || new Set();
+
+      // 订阅所有 topics
+      for (const topic of msg.data.topics) {
+        // 提取 token 地址: "tickers:0x123" -> "0x123"
+        const parts = topic.split(':');
+        if (parts.length >= 2) {
+          const token = parts[1].toLowerCase() as Address;
+          tokens.add(token);
+          console.log(`[WS] Client subscribed to topic: ${topic}`);
+        }
+      }
+
+      wsClients.set(ws, tokens);
+
+      // ✅ 发送确认响应（防止前端超时）
+      if (msg.request_id) {
+        ws.send(JSON.stringify({
+          type: "subscribe",
+          request_id: msg.request_id,
+          data: { success: true, topics: msg.data.topics },
+          timestamp: Date.now(),
+        }));
+      }
+    }
+    // ✅ 处理旧格式：subscribe with token field
+    else if (msg.type === "subscribe" && msg.token) {
       const tokens = wsClients.get(ws) || new Set();
       tokens.add(msg.token.toLowerCase() as Address);
       wsClients.set(ws, tokens);
@@ -7808,12 +10476,76 @@ function handleWSMessage(ws: WebSocket, message: string): void {
       // Send current orderbook immediately
       broadcastOrderBook(msg.token.toLowerCase() as Address);
       console.log(`[WS] Client subscribed to ${msg.token}`);
-    } else if (msg.type === "unsubscribe" && msg.token) {
+
+      // ✅ 发送确认响应
+      if (msg.request_id) {
+        ws.send(JSON.stringify({
+          type: "subscribe",
+          request_id: msg.request_id,
+          data: { success: true, token: msg.token },
+          timestamp: Date.now(),
+        }));
+      }
+    }
+    // ✅ 新增：处理 subscribe_token（直接格式）
+    else if (msg.type === "subscribe_token" && msg.token) {
+      const tokens = wsClients.get(ws) || new Set();
+      tokens.add(msg.token.toLowerCase() as Address);
+      wsClients.set(ws, tokens);
+      console.log(`[WS] Client subscribed to token: ${msg.token}`);
+
+      // 立即发送当前市场数据
+      broadcastOrderBook(msg.token.toLowerCase() as Address);
+    }
+    // ✅ 新增：处理 unsubscribe 请求（新 API 格式）
+    else if (msg.type === "unsubscribe" && msg.data && Array.isArray(msg.data.topics)) {
+      const tokens = wsClients.get(ws);
+      if (tokens) {
+        for (const topic of msg.data.topics) {
+          const parts = topic.split(':');
+          if (parts.length >= 2) {
+            const token = parts[1].toLowerCase() as Address;
+            tokens.delete(token);
+            console.log(`[WS] Client unsubscribed from topic: ${topic}`);
+          }
+        }
+      }
+
+      // ✅ 发送确认响应
+      if (msg.request_id) {
+        ws.send(JSON.stringify({
+          type: "unsubscribe",
+          request_id: msg.request_id,
+          data: { success: true, topics: msg.data.topics },
+          timestamp: Date.now(),
+        }));
+      }
+    }
+    // ✅ 处理旧格式：unsubscribe with token field
+    else if (msg.type === "unsubscribe" && msg.token) {
       const tokens = wsClients.get(ws);
       if (tokens) {
         tokens.delete(msg.token.toLowerCase() as Address);
       }
       console.log(`[WS] Client unsubscribed from ${msg.token}`);
+
+      // ✅ 发送确认响应
+      if (msg.request_id) {
+        ws.send(JSON.stringify({
+          type: "unsubscribe",
+          request_id: msg.request_id,
+          data: { success: true, token: msg.token },
+          timestamp: Date.now(),
+        }));
+      }
+    }
+    // ✅ 新增：处理 unsubscribe_token（直接格式）
+    else if (msg.type === "unsubscribe_token" && msg.token) {
+      const tokens = wsClients.get(ws);
+      if (tokens) {
+        tokens.delete(msg.token.toLowerCase() as Address);
+      }
+      console.log(`[WS] Client unsubscribed from token: ${msg.token}`);
     }
     // 风控数据订阅 - 用户仓位风险
     else if (msg.type === "subscribe_risk" && msg.trader) {
@@ -7852,6 +10584,9 @@ function handleWSMessage(ws: WebSocket, message: string): void {
         }));
       }
 
+      // 推送待处理订单
+      broadcastPendingOrders(trader);
+
       console.log(`[WS] Trader ${trader.slice(0, 10)} subscribed to risk data`);
     }
     // 取消风控数据订阅
@@ -7877,9 +10612,9 @@ function handleWSMessage(ws: WebSocket, message: string): void {
         totalPayouts: insuranceFund.totalPayouts.toString(),
         lastUpdated: insuranceFund.lastUpdated,
         display: {
-          balance: (Number(insuranceFund.balance) / 1e6).toFixed(2),
-          totalContributions: (Number(insuranceFund.totalContributions) / 1e6).toFixed(2),
-          totalPayouts: (Number(insuranceFund.totalPayouts) / 1e6).toFixed(2),
+          balance: (Number(insuranceFund.balance) / 1e18).toFixed(2),
+          totalContributions: (Number(insuranceFund.totalContributions) / 1e18).toFixed(2),
+          totalPayouts: (Number(insuranceFund.totalPayouts) / 1e18).toFixed(2),
         },
       };
 
@@ -7939,77 +10674,424 @@ async function startServer(): Promise<void> {
 
     // 从 Redis 加载已有仓位到内存 (兼容现有风控引擎)
     await loadPositionsFromRedis();
+
+    // 从 Redis 恢复订单保证金记录 (重启后撤单退款依赖此数据)
+    try {
+      const savedMargins = await OrderMarginRepo.getAll();
+      for (const [orderId, info] of savedMargins) {
+        orderMarginInfos.set(orderId, {
+          margin: info.margin,
+          fee: info.fee,
+          totalDeducted: info.totalDeducted,
+          totalSize: info.totalSize,
+          settledSize: info.settledSize,
+        });
+      }
+      console.log(`[Server] Restored ${savedMargins.size} order margin records from Redis`);
+    } catch (e) {
+      console.error("[Server] Failed to restore order margin records:", e);
+    }
+
+    // 从 Redis 恢复 Mode 2 链下盈亏调整 (平仓盈亏、资金费等)
+    try {
+      const savedAdjustments = await Mode2AdjustmentRepo.getAll();
+      for (const [user, adj] of savedAdjustments) {
+        mode2PnLAdjustments.set(user.toLowerCase() as Address, adj);
+      }
+      console.log(`[Server] Restored ${savedAdjustments.size} Mode 2 PnL adjustments from Redis`);
+    } catch (e) {
+      console.error("[Server] Failed to restore Mode 2 adjustments:", e);
+    }
   } else {
     console.warn("[Server] Redis connection failed, using in-memory storage only");
   }
 
-  // Initialize submitter if credentials are available
+  // ❌ Mode 2: submitter 已移除，不再提交仓位到链上
+  // 链上只做资金托管，不做仓位结算
+  console.log("[Server] Mode 2: On-chain position settlement DISABLED");
+
+  // ============================================================
+  // 初始化 Mode 2 模块 (Merkle 快照 + 提现签名)
+  // ============================================================
+  initializeSnapshotModule({
+    getBalance: getUserBalance,
+    getPositions: (trader: Address) => userPositions.get(trader.toLowerCase() as Address) || [],
+    getAllTraders: () => Array.from(userBalances.keys()) as Address[],
+  });
+  console.log("[Server] Mode 2: Snapshot module initialized");
+
+  // 提现模块需要签名私钥
   if (MATCHER_PRIVATE_KEY && SETTLEMENT_ADDRESS) {
-    submitter = new SettlementSubmitter(RPC_URL, MATCHER_PRIVATE_KEY, SETTLEMENT_ADDRESS);
-    console.log(`[Server] Settlement submitter initialized for ${SETTLEMENT_ADDRESS}`);
+    initializeWithdrawModule({
+      signerPrivateKey: MATCHER_PRIVATE_KEY,
+      contractAddress: SETTLEMENT_ADDRESS,
+      chainId: 84532, // Base Sepolia
+    });
+    console.log("[Server] Mode 2: Withdraw module initialized");
+
+    // 启动快照定时任务 (每小时生成 Merkle root)
+    startSnapshotJob({
+      intervalMs: 60 * 60 * 1000, // 1 hour
+      submitToChain: false, // 暂时不提交到链上，等 SettlementV2 部署后启用
+      pruneAfterHours: 24,
+    });
+    console.log("[Server] Mode 2: Snapshot job started (1 hour interval)");
   } else {
-    console.log("[Server] No submitter configured (MATCHER_PRIVATE_KEY or SETTLEMENT_ADDRESS missing)");
+    console.warn("[Server] Mode 2: MATCHER_PRIVATE_KEY or SETTLEMENT_ADDRESS missing, withdraw module disabled");
   }
 
   // Initialize Relay Service (P2)
   const { logRelayStatus } = await import("./modules/relay");
   logRelayStatus();
 
+  // ============================================================
+  // 初始化借贷清算模块
+  // ============================================================
+  {
+    const lendingPublicClient = createPublicClient({
+      chain: baseSepolia,
+      transport: http(RPC_URL),
+    });
+
+    let lendingWalletClient = null;
+    if (MATCHER_PRIVATE_KEY) {
+      const matcherAccount = privateKeyToAccount(MATCHER_PRIVATE_KEY);
+      lendingWalletClient = createWalletClient({
+        account: matcherAccount,
+        chain: baseSepolia,
+        transport: http(RPC_URL),
+      });
+    }
+
+    initLendingLiquidation(
+      lendingPublicClient,
+      lendingWalletClient,
+      LENDING_POOL_ADDRESS_LOCAL
+    );
+    console.log(`[Server] Lending liquidation module initialized (LendingPool: ${LENDING_POOL_ADDRESS_LOCAL})`);
+  }
+
+  // ============================================================
+  // 初始化 PerpVault 模块 (GMX-style LP Pool)
+  // ============================================================
+  if (PERP_VAULT_ADDRESS_LOCAL) {
+    const vaultPublicClient = createPublicClient({
+      chain: baseSepolia,
+      transport: http(RPC_URL),
+    });
+
+    let vaultWalletClient = null;
+    if (MATCHER_PRIVATE_KEY) {
+      const matcherAccount = privateKeyToAccount(MATCHER_PRIVATE_KEY);
+      vaultWalletClient = createWalletClient({
+        account: matcherAccount,
+        chain: baseSepolia,
+        transport: http(RPC_URL),
+      });
+    }
+
+    initPerpVault(
+      vaultPublicClient,
+      vaultWalletClient,
+      PERP_VAULT_ADDRESS_LOCAL
+    );
+    console.log(`[Server] PerpVault module initialized (PerpVault: ${PERP_VAULT_ADDRESS_LOCAL})`);
+  } else {
+    console.log("[Server] PerpVault: No PERP_VAULT_ADDRESS set, vault mode disabled");
+  }
+
   // 配置价格数据源（TokenFactory 获取真实现货价格）
   engine.configurePriceSource(RPC_URL, TOKEN_FACTORY_ADDRESS, PRICE_FEED_ADDRESS);
   console.log(`[Server] TokenFactory: ${TOKEN_FACTORY_ADDRESS}`);
   console.log(`[Server] PriceFeed: ${PRICE_FEED_ADDRESS}`);
 
-  // Start batch submission loop
-  runBatchSubmissionLoop();
+  // ❌ Mode 2: batch submission 已禁用
+  // runBatchSubmissionLoop();
 
   // Start cleanup interval
   setInterval(() => {
     engine.cleanupExpired();
   }, 60000); // Clean up every minute
 
-  // 定期从 PriceFeed 同步现货价格
+  // Start Redis data cleanup interval (daily)
+  const runRedisCleanup = async () => {
+    try {
+      const ordersRemoved = await cleanupStaleOrders(7);
+      const positionsRemoved = await cleanupClosedPositions(7);
+      if (ordersRemoved > 0 || positionsRemoved > 0) {
+        console.log(`[Redis Cleanup] Removed ${ordersRemoved} stale orders, ${positionsRemoved} closed positions`);
+      }
+    } catch (err) {
+      console.error("[Redis Cleanup] Error:", err);
+    }
+  };
+  // Run immediately on startup, then every 24 hours
+  runRedisCleanup();
+  setInterval(runRedisCleanup, 24 * 60 * 60 * 1000);
+
+  // 定期从 TokenFactory / Uniswap V2 Pair 同步现货价格并更新 K 线
+  // ✅ ETH 本位: 直接使用 Token/ETH 价格 (1e18 精度)，不做 USD 转换
+  // ✅ 毕业代币: 自动从 Uniswap V2 Pair 读取真实市场价格
   const syncSpotPrices = async () => {
+    const { updateKlineWithCurrentPrice } = await import("../spot/spotHistory");
+
+    // 创建 publicClient 直接读取合约
+    const publicClient = createPublicClient({
+      chain: baseSepolia,
+      transport: http(RPC_URL),
+    });
+
+    const LOCAL_TOKEN_FACTORY_ABI = [
+      {
+        inputs: [{ name: "token", type: "address" }],
+        name: "getCurrentPrice",
+        outputs: [{ type: "uint256" }],
+        stateMutability: "view",
+        type: "function",
+      },
+    ] as const;
+
+    if (SUPPORTED_TOKENS.length === 0) {
+      // 静默返回，等待代币列表加载
+      return;
+    }
+
     for (const token of SUPPORTED_TOKENS) {
       try {
-        const spotPrice = await engine.fetchSpotPrice(token);
-        // 更新波动率跟踪 (用于动态资金费计算)
-        if (spotPrice && spotPrice > 0n) {
-          updateVolatility(token, Number(spotPrice) / 1e6);
+        let spotPriceEthRaw: bigint | null = null;
+        let priceSource = "bonding_curve";
+
+        // 检查是否是毕业代币 → 从 Uniswap V2 Pair 读取价格
+        const graduatedInfo = graduatedTokens.get(token.toLowerCase());
+        if (graduatedInfo) {
+          // ✅ 毕业代币: 从 Uniswap V2 Pair.getReserves() 读取真实价格
+          try {
+            const reserves = await publicClient.readContract({
+              address: graduatedInfo.pairAddress,
+              abi: UNISWAP_V2_PAIR_ABI,
+              functionName: "getReserves",
+            }) as [bigint, bigint, number];
+
+            const [reserve0, reserve1] = reserves;
+
+            if (reserve0 > 0n && reserve1 > 0n) {
+              // 计算 Token/ETH 价格
+              // 如果 WETH 是 token0: price = reserve0 / reserve1 (ETH per Token)
+              // 如果 WETH 是 token1: price = reserve1 / reserve0 (ETH per Token)
+              if (graduatedInfo.isWethToken0) {
+                // WETH = token0, MemeToken = token1
+                // price(ETH/Token) = reserve0 / reserve1
+                // 转为 1e18 精度: price = reserve0 * 1e18 / reserve1
+                spotPriceEthRaw = (reserve0 * (10n ** 18n)) / reserve1;
+              } else {
+                // MemeToken = token0, WETH = token1
+                // price(ETH/Token) = reserve1 / reserve0
+                spotPriceEthRaw = (reserve1 * (10n ** 18n)) / reserve0;
+              }
+              priceSource = "uniswap_v2";
+            }
+          } catch (pairErr: any) {
+            console.warn(`[syncSpotPrices] Uniswap V2 Pair read failed for ${token.slice(0, 10)}:`, pairErr?.message?.slice(0, 80));
+            // 回退到 TokenFactory (虽然可能是冻结价格，总比没有好)
+          }
         }
-      } catch (e) {
-        console.error(`[Server] Failed to sync spot price for ${token}:`, e);
+
+        // 未毕业代币 或 Uniswap V2 读取失败 → 从 TokenFactory bonding curve 读取
+        if (!spotPriceEthRaw) {
+          spotPriceEthRaw = await publicClient.readContract({
+            address: TOKEN_FACTORY_ADDRESS,
+            abi: LOCAL_TOKEN_FACTORY_ABI,
+            functionName: "getCurrentPrice",
+            args: [token],
+          });
+          priceSource = "bonding_curve";
+        }
+
+        if (spotPriceEthRaw && spotPriceEthRaw > 0n) {
+          // ETH 本位: 直接使用 Token/ETH 价格 (1e18 精度)
+          const priceEth = Number(spotPriceEthRaw) / 1e18;
+
+          // 更新 K 线 (ETH 本位，不需要 USD 转换)
+          await updateKlineWithCurrentPrice(token, priceEth.toString(), priceEth.toString());
+
+          // 更新波动率跟踪 (用于动态资金费计算，使用 ETH 价格)
+          updateVolatility(token, priceEth);
+
+          // ETH 本位: 同步现货价格到订单簿 (1e18 精度)
+          engine.updatePrice(token, spotPriceEthRaw);
+          engine.setSpotPrice(token, spotPriceEthRaw);
+
+          // 广播订单簿更新到前端
+          broadcastOrderBook(token);
+
+          // 广播 K 线更新到前端
+          try {
+            const { KlineRepo } = await import("../spot/spotHistory");
+            const now = Math.floor(Date.now() / 1000);
+            const bucketTime = Math.floor(now / 60) * 60;
+            const klines = await KlineRepo.get(token, "1m", bucketTime, bucketTime);
+            if (klines.length > 0) {
+              const kline = klines[0];
+              broadcastKline(token, {
+                timestamp: kline.time * 1000,
+                open: kline.open,
+                high: kline.high,
+                low: kline.low,
+                close: kline.close,
+                volume: kline.volume,
+              });
+            }
+          } catch (_klineErr) {
+            // K线广播失败不影响主流程
+          }
+
+          const sourceTag = priceSource === "uniswap_v2" ? " [UniV2]" : "";
+          console.log(`[syncSpotPrices] ${token.slice(0, 10)}: ${priceEth.toExponential(4)} ETH${sourceTag}`);
+        }
+      } catch (e: any) {
+        // 只在首次或关键错误时输出日志
+        const errMsg = e?.message || e?.shortMessage || String(e);
+        if (!errMsg.includes("execution reverted")) {
+          console.warn(`[syncSpotPrices] Error for ${token.slice(0, 10)}:`, errMsg.slice(0, 80));
+        }
       }
     }
   };
 
-  // 初始同步
-  syncSpotPrices();
-
-  // 从 TokenFactory 同步支持的代币列表 (用于资金费计算)
+  // 从 TokenFactory 同步支持的代币列表 (必须在 syncSpotPrices 之前)
   await syncSupportedTokens();
+
+  // 初始同步 (在代币列表加载后)
+  console.log("[Server] Starting initial spot price sync...");
+  syncSpotPrices();
 
   // 从 Redis 加载待处理订单 (在代币列表同步后)
   await loadOrdersFromRedis();
 
-  // 从链上同步已有仓位 (解决 P003)
-  syncPositionsFromChain().then(() => {
-    console.log("[Server] Initial position sync completed");
-  }).catch((e) => {
-    console.error("[Server] Initial position sync failed:", e);
-  });
+  // ============================================================
+  // 🧹 清理孤儿 orderMarginInfos (重启后 Redis 恢复的记录可能已过期)
+  // ============================================================
+  // orderMarginInfos 在 Redis 恢复时加载 (line ~9822)，但对应的订单可能已成交/取消
+  // loadOrdersFromRedis 只恢复 PENDING/PARTIALLY_FILLED 订单到引擎
+  // 对比: 如果 marginInfo 对应的 orderId 在引擎中不存在，说明是孤儿记录
+  {
+    let orphanCount = 0;
+    const marginEntries = [...orderMarginInfos.entries()];
+    for (const [orderId, _info] of marginEntries) {
+      const engineOrder = engine.getOrder(orderId);
+      if (!engineOrder || (engineOrder.status !== "PENDING" && engineOrder.status !== "PARTIALLY_FILLED")) {
+        orderMarginInfos.delete(orderId);
+        OrderMarginRepo.delete(orderId).catch(e =>
+          console.error(`[Cleanup] Failed to delete orphaned margin from Redis: ${orderId}`, e)
+        );
+        orphanCount++;
+      }
+    }
+    if (orphanCount > 0) {
+      console.log(`[Server] Cleaned up ${orphanCount} orphaned orderMarginInfos (no matching active order in engine)`);
+    } else {
+      console.log(`[Server] No orphaned orderMarginInfos found (${marginEntries.length} records all valid)`);
+    }
+  }
 
-  // 定时同步现货价格
+  // ============================================================
+  // 🛡️ 启动安全检查: 单边仓位检测 (防止无对手方的虚假盈利)
+  // ============================================================
+  // 永续合约是零和博弈: 多头盈利 = 空头亏损
+  // 如果某个代币只有单边仓位 (没有对手方)，说明对手方已被强平但 ADL 未正确执行
+  // 这种仓位的"盈利"是虚假的，系统中没有足够资金兑付
+  // 处理: 以当前价格强制平仓，只返还保证金 (不支付虚假盈利)
+  {
+    const tokenPositionMap = new Map<string, { longs: Position[], shorts: Position[] }>();
+
+    // 按 token 分组统计多空仓位
+    for (const [, positions] of userPositions) {
+      for (const pos of positions) {
+        const tok = (pos.token || "").toLowerCase();
+        if (!tok) continue;
+        let group = tokenPositionMap.get(tok);
+        if (!group) {
+          group = { longs: [], shorts: [] };
+          tokenPositionMap.set(tok, group);
+        }
+        if (pos.isLong) {
+          group.longs.push(pos);
+        } else {
+          group.shorts.push(pos);
+        }
+      }
+    }
+
+    for (const [tok, group] of tokenPositionMap) {
+      const hasLongs = group.longs.length > 0;
+      const hasShorts = group.shorts.length > 0;
+
+      if (hasLongs && !hasShorts) {
+        // 只有多头，没有空头对手方
+        console.log(`[SafetyCheck] Token ${tok.slice(0, 10)}: ${group.longs.length} LONG positions with NO SHORT counterparty`);
+        for (const pos of group.longs) {
+          const pnl = BigInt(pos.unrealizedPnL || "0");
+          if (pnl > 0n) {
+            console.log(`[SafetyCheck] ⚠️ Orphan profitable LONG: ${pos.trader.slice(0, 10)} pnl=Ξ${Number(pnl) / 1e18}, collateral=Ξ${Number(BigInt(pos.collateral)) / 1e18}`);
+            console.log(`[SafetyCheck] Force-closing position ${pos.pairId} — returning collateral only, no profit payout`);
+
+            // 从 userPositions 中移除
+            const traderAddr = pos.trader.toLowerCase() as Address;
+            const traderPositions = userPositions.get(traderAddr) || [];
+            const filtered = traderPositions.filter(p => p.pairId !== pos.pairId);
+            userPositions.set(traderAddr, filtered);
+
+            // 退还保证金 (但不退盈利 — 因为没有对手方来支付)
+            const collateral = BigInt(pos.collateral);
+            adjustUserBalance(traderAddr, collateral, "ORPHAN_CLOSE_REFUND");
+            // Mode 2 调整: 保证金退还 = 净零 (开仓扣了 collateral，现在退回)
+            // 不需要 addMode2Adjustment，因为 adjustUserBalance 已经增加了 available
+
+            // 从 Redis 删除仓位
+            PositionRepo.delete(pos.pairId).catch(e =>
+              console.error(`[SafetyCheck] Failed to delete position from Redis: ${e}`)
+            );
+
+            console.log(`[SafetyCheck] ✅ Force-closed orphan LONG, refunded Ξ${Number(collateral) / 1e18}`);
+          }
+        }
+      } else if (hasShorts && !hasLongs) {
+        // 只有空头，没有多头对手方
+        console.log(`[SafetyCheck] Token ${tok.slice(0, 10)}: ${group.shorts.length} SHORT positions with NO LONG counterparty`);
+        for (const pos of group.shorts) {
+          const pnl = BigInt(pos.unrealizedPnL || "0");
+          if (pnl > 0n) {
+            console.log(`[SafetyCheck] ⚠️ Orphan profitable SHORT: ${pos.trader.slice(0, 10)} pnl=Ξ${Number(pnl) / 1e18}, collateral=Ξ${Number(BigInt(pos.collateral)) / 1e18}`);
+            console.log(`[SafetyCheck] Force-closing position ${pos.pairId} — returning collateral only, no profit payout`);
+
+            const traderAddr = pos.trader.toLowerCase() as Address;
+            const traderPositions = userPositions.get(traderAddr) || [];
+            const filtered = traderPositions.filter(p => p.pairId !== pos.pairId);
+            userPositions.set(traderAddr, filtered);
+
+            const collateral = BigInt(pos.collateral);
+            adjustUserBalance(traderAddr, collateral, "ORPHAN_CLOSE_REFUND");
+
+            PositionRepo.delete(pos.pairId).catch(e =>
+              console.error(`[SafetyCheck] Failed to delete position from Redis: ${e}`)
+            );
+
+            console.log(`[SafetyCheck] ✅ Force-closed orphan SHORT, refunded Ξ${Number(collateral) / 1e18}`);
+          }
+        }
+      }
+    }
+  }
+
+  // ============================================================
+  // 🔄 模式 2: 仓位存 Redis，不从链上同步
+  // ============================================================
+  // 启动时从 Redis 加载仓位 (而非从链上)
+  console.log("[Server] Mode 2: Positions loaded from Redis, chain sync DISABLED");
+
+  // 定时同步现货价格 (仍需要，供现货交易使用)
   setInterval(syncSpotPrices, SPOT_PRICE_SYNC_INTERVAL_MS);
   console.log(`[Server] Spot price sync interval: ${SPOT_PRICE_SYNC_INTERVAL_MS}ms`);
-
-  // 定时同步链上仓位 (每5分钟同步一次，保持数据一致)
-  setInterval(() => {
-    syncPositionsFromChain().catch((e) => {
-      console.error("[Server] Periodic position sync failed:", e);
-    });
-  }, 300000); // 5 minutes
-  console.log("[Server] Position sync interval: 300000ms (5 minutes)");
 
   // ========================================
   // 启动链上事件监听 (实时同步链上状态)
@@ -8019,10 +11101,43 @@ async function startServer(): Promise<void> {
   });
 
   // ========================================
-  // 启动 100ms Risk Engine (Meme Perp 核心)
+  // 启动时回填现货交易数据 (异步，不阻塞启动)
+  // 回填最近 50000 个区块 (~28 小时) 以捕获重启期间遗漏的交易
+  // ========================================
+  (async () => {
+    try {
+      const { createPublicClient, http } = await import("viem");
+      const { baseSepolia } = await import("viem/chains");
+      const backfillClient = createPublicClient({
+        chain: baseSepolia,
+        transport: http("https://base-sepolia-rpc.publicnode.com"),
+      });
+      const currentBlock = await backfillClient.getBlockNumber();
+      const backfillFrom = currentBlock > 50000n ? currentBlock - 50000n : 0n;
+      console.log(`[Startup] Backfilling spot trades from block ${backfillFrom} to ${currentBlock} for all supported tokens...`);
+      const { backfillHistoricalTrades } = await import("../spot/spotHistory");
+      for (const token of SUPPORTED_TOKENS) {
+        try {
+          const count = await backfillHistoricalTrades(token, backfillFrom, currentBlock, currentEthPriceUsd || 2500);
+          if (count > 0) {
+            console.log(`[Startup] Backfilled ${count} trades for ${token.slice(0, 10)}`);
+          }
+        } catch (e: any) {
+          console.error(`[Startup] Backfill failed for ${token.slice(0, 10)}:`, e.message);
+        }
+      }
+      console.log("[Startup] Spot trade backfill complete");
+    } catch (e: any) {
+      console.error("[Startup] Spot trade backfill failed:", e.message);
+    }
+  })();
+
+  // ========================================
+  // 启动 Event-Driven Risk Engine (Meme Perp 核心)
+  // 架构: Hyperliquid-style 实时强平 + 1s 兜底检查
   // ========================================
   startRiskEngine();
-  console.log(`[Server] Risk Engine started: ${RISK_ENGINE_INTERVAL_MS}ms interval`);
+  console.log(`[Server] Risk Engine started: Event-driven + ${RISK_ENGINE_INTERVAL_MS}ms safety-net`);
 
   // ========================================
   // 启动 Dynamic Funding Engine (P1)
@@ -8031,19 +11146,16 @@ async function startServer(): Promise<void> {
   console.log(`[Server] Dynamic Funding Engine started: ${DYNAMIC_FUNDING_CHECK_INTERVAL}ms check interval`);
 
   // 定期计算资金费率（基于现货价格锚定）
+  // 注意：暂时禁用链上资金费率更新，避免 nonce 冲突影响订单结算
   setInterval(() => {
     for (const token of SUPPORTED_TOKENS) {
       const rate = engine.calculateFundingRate(token);
-
-      // 如果有链上提交器，更新链上资金费率
-      if (submitter && rate !== 0n) {
-        submitter.updateFundingRate(token, rate).catch((e) => {
-          console.error(`[Server] Failed to update on-chain funding rate:`, e);
-        });
-      }
+      // 资金费率仍在内存中计算，但不再推送到链上
+      // 这样可以避免频繁的链上交易导致 nonce 不同步
+      // TODO: 实现更好的 nonce 管理后再启用链上更新
     }
   }, FUNDING_RATE_INTERVAL_MS);
-  console.log(`[Server] Funding rate interval: ${FUNDING_RATE_INTERVAL_MS}ms`);
+  console.log(`[Server] Funding rate interval: ${FUNDING_RATE_INTERVAL_MS}ms (on-chain update disabled)`);
 
   // Start HTTP server (Node.js compatible)
   import("http").then((http) => {
@@ -8126,6 +11238,9 @@ async function startServer(): Promise<void> {
           cleanupWSConnection(ws);
         });
       });
+
+      // 启动市场数据定时推送
+      startMarketDataPush();
     });
   });
 }
@@ -8135,4 +11250,4 @@ if (import.meta.main) {
   startServer();
 }
 
-export { startServer, engine, submitter };
+export { startServer, engine };

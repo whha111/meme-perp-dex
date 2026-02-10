@@ -56,6 +56,7 @@ export enum MessageType {
 
   // 账户相关 (私有频道)
   ACCOUNT = 'account',
+  BALANCE = 'balance',
   POSITIONS = 'positions',
   ORDERS = 'orders',
   LIQUIDATION_WARNING = 'liquidation-warning',
@@ -212,7 +213,7 @@ export interface WebSocketConfig {
  * 获取安全的 WebSocket URL
  */
 function getSecureWebSocketUrl(): string {
-  const url = process.env.NEXT_PUBLIC_WEBSOCKET_URL || 'ws://localhost:8080/ws';
+  const url = process.env.NEXT_PUBLIC_WEBSOCKET_URL || 'ws://localhost:8081/ws';
   const isProduction = process.env.NODE_ENV === 'production';
   const isLocalhost = url.includes('localhost') || url.includes('127.0.0.1');
 

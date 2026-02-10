@@ -96,7 +96,7 @@ export function WebSocketStatusIndicator() {
               </span>
             </div>
             <div className="text-[#636366] text-[10px] space-y-1">
-              <div>URL: {process.env.NEXT_PUBLIC_WEBSOCKET_URL || 'ws://localhost:8080/ws'}</div>
+              <div>URL: {process.env.NEXT_PUBLIC_WEBSOCKET_URL || 'ws://localhost:8081/ws'}</div>
               <div className="pt-2 border-t border-[#222]">
                 <span className="text-[#8E8E93]">Note:</span> Dev only
               </div>

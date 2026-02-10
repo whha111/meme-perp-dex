@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "forge-std/Script.sol";
-import "../src/core/PositionManager.sol";
+import "../src/perpetual/PositionManager.sol";
 
 interface IVaultSetPM {
     function setPositionManager(address newPositionManager) external;
