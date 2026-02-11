@@ -49,3 +49,11 @@ credentials/
 # Debug/test scripts (one-off)
 check-all-bal.ts
 contracts/debug-*.ts
+
+# Testnet data (sensitive env + runtime data)
+testnet/.env.testnet
+testnet/logs/
+testnet/pids/
+testnet/postgres_data/
+testnet/redis_data/
+dump.rdb

@@ -1169,5 +1169,14 @@
     "slopeAbove": "高于最优斜率",
     "maxUtil": "最大利用率",
     "reserveFactor": "储备金比例"
+  },
+  "tokenSelector": {
+    "selectToken": "选择代币",
+    "searchPlaceholder": "搜索代币名或粘贴地址",
+    "all": "全部",
+    "active": "活跃",
+    "graduated": "已毕业",
+    "noTokensFound": "未找到代币",
+    "price": "价格"
   }
 }

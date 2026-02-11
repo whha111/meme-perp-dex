@@ -105,8 +105,10 @@ export interface ClaimRewardsResponse {
 // ============================================================
 
 class ApiClient {
-  constructor(_baseUrl?: string) {
-    // TODO: 对接真实后端 API
+  private baseUrl: string;
+
+  constructor(baseUrl?: string) {
+    this.baseUrl = baseUrl || process.env.NEXT_PUBLIC_MATCHING_ENGINE_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8081";
   }
 
   // ==================
@@ -132,8 +134,17 @@ class ApiClient {
   }
 
   async getTickers(): Promise<Ticker[]> {
-    // TODO: 对接真实 API
-    return [];
+    try {
+      const res = await fetch(`${this.baseUrl}/api/v1/market/tickers`);
+      if (!res.ok) return [];
+      const json = await res.json();
+      if (json.code === "0" && Array.isArray(json.data)) {
+        return json.data;
+      }
+      return [];
+    } catch {
+      return [];
+    }
   }
 
   async getCandles(

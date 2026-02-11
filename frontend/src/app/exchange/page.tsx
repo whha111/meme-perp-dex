@@ -5,6 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { Navbar } from "@/components/layout/Navbar";
 import { TradingTerminal } from "@/components/common/TradingTerminal";
 import { useOnChainTokenList } from "@/hooks/common/useTokenList";
+import { TokenSelector } from "@/components/spot/TokenSelector";
 import { useTranslations } from "next-intl";
 
 function ExchangeContent() {
@@ -34,6 +35,11 @@ function ExchangeContent() {
   // 获取要交易的代币: URL参数 > 第一个可用代币
   const symbol = urlSymbol || (tokens.length > 0 ? tokens[0].address : null);
 
+  // Token 选择回调 — 更新 URL (replace 不污染浏览历史)
+  const handleTokenSelect = (tokenAddress: string) => {
+    router.replace(`/exchange?symbol=${tokenAddress}`, { scroll: false });
+  };
+
   // 如果没有代币可交易，提示用户
   if (!symbol) {
     return (
@@ -55,8 +61,20 @@ function ExchangeContent() {
     );
   }
 
-  // 显示交易终端
-  return <TradingTerminal symbol={symbol} />;
+  // 把 TokenSelector 作为 headerSlot 注入到 TradingTerminal 顶栏
+  return (
+    <TradingTerminal
+      symbol={symbol}
+      headerSlot={
+        <TokenSelector
+          tokens={tokens}
+          isLoading={isLoading}
+          selectedAddress={symbol}
+          onSelect={handleTokenSelect}
+        />
+      }
+    />
+  );
 }
 
 /**

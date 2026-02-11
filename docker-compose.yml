@@ -27,7 +27,7 @@ services:
     container_name: memeperp-redis
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "16379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -53,6 +53,7 @@ services:
       - TOKEN_FACTORY_ADDRESS=${MEMEPERP_TOKEN_FACTORY_ADDRESS:-0x583d35e9d407Ea03dE5A2139e792841353CB67b1}
       - PRICE_FEED_ADDRESS=${MEMEPERP_PRICE_FEED_ADDRESS:-0xa97a1E55cFfF5C1e45Ac2c1D882717cDD4F44e01}
       - BATCH_INTERVAL_MS=${MEMEPERP_BATCH_INTERVAL_MS:-30000}
+      - SKIP_SIGNATURE_VERIFY=${SKIP_SIGNATURE_VERIFY:-false}
       - REDIS_URL=redis://redis:6379
     depends_on:
       redis:
@@ -99,10 +100,22 @@ services:
       retries: 3
 
   # Frontend Next.js App
+  # NOTE: NEXT_PUBLIC_* vars are baked into the JS bundle at build time.
+  # The 'args' section below ensures correct values during 'docker-compose build'.
+  # The 'environment' section only affects server-side rendering, NOT client-side code.
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_MATCHING_ENGINE_URL=${NEXT_PUBLIC_MATCHING_ENGINE_URL:-http://localhost:8081}
+        - NEXT_PUBLIC_TOKEN_FACTORY_ADDRESS=${MEMEPERP_TOKEN_FACTORY_ADDRESS:-0x583d35e9d407Ea03dE5A2139e792841353CB67b1}
+        - NEXT_PUBLIC_SETTLEMENT_ADDRESS=${MEMEPERP_BLOCKCHAIN_POSITION_ADDRESS:-0x027131BbC5EF6427826F64D12BACAAb447Ee1B13}
+        - NEXT_PUBLIC_VAULT_ADDRESS=${MEMEPERP_BLOCKCHAIN_VAULT_ADDRESS:-0x780E415Ffd8104Ee2EECD7418A9227Bb92ebE294}
+        - NEXT_PUBLIC_PRICE_FEED_ADDRESS=${MEMEPERP_BLOCKCHAIN_PRICE_FEED_ADDRESS:-0xa97a1E55cFfF5C1e45Ac2c1D882717cDD4F44e01}
+        - NEXT_PUBLIC_CHAIN_ID=${MEMEPERP_BLOCKCHAIN_CHAIN_ID:-84532}
+        - NEXT_PUBLIC_RPC_URL=${MEMEPERP_BLOCKCHAIN_RPC_URL:-https://base-sepolia-rpc.publicnode.com}
+        - NEXT_PUBLIC_BASE_TESTNET_RPC_URL=${MEMEPERP_BLOCKCHAIN_RPC_URL:-https://base-sepolia-rpc.publicnode.com}
     container_name: memeperp-frontend
     restart: unless-stopped
     ports:
@@ -114,7 +127,7 @@ services:
       - NEXT_PUBLIC_WS_PRIVATE_URL=${NEXT_PUBLIC_WS_PRIVATE_URL:-ws://localhost:8080/ws/private}
       - NEXT_PUBLIC_CHAIN_ID=${NEXT_PUBLIC_CHAIN_ID:-84532}
       - NEXT_PUBLIC_RPC_URL=${NEXT_PUBLIC_RPC_URL:-https://base-sepolia-rpc.publicnode.com}
-      - NEXT_PUBLIC_SETTLEMENT_ADDRESS=${NEXT_PUBLIC_SETTLEMENT_ADDRESS:?NEXT_PUBLIC_SETTLEMENT_ADDRESS is required}
+      - NEXT_PUBLIC_SETTLEMENT_ADDRESS=${NEXT_PUBLIC_SETTLEMENT_ADDRESS:-0x027131BbC5EF6427826F64D12BACAAb447Ee1B13}
     depends_on:
       backend:
         condition: service_healthy

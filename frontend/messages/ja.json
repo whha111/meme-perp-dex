@@ -1066,5 +1066,14 @@
     "slopeAbove": "最適以上の傾き",
     "maxUtil": "最大利用率",
     "reserveFactor": "準備金率"
+  },
+  "tokenSelector": {
+    "selectToken": "トークン選択",
+    "searchPlaceholder": "トークン名を検索またはアドレスを貼り付け",
+    "all": "すべて",
+    "active": "アクティブ",
+    "graduated": "卒業済み",
+    "noTokensFound": "トークンが見つかりません",
+    "price": "価格"
   }
 }

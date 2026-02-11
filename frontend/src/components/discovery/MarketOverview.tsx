@@ -374,18 +374,38 @@ export function MarketOverview() {
   }, [onChainTokens]);
 
   // 合并后端数据和链上数据：
-  // 1. 链上数据优先（用户创建的新 token）
-  // 2. 后端数据作为补充（预设的 meme token）
-  // 3. 去重：如果 instId 相同，使用链上数据（更新更及时）
+  // 1. 链上数据提供 FDV、soldSupply、isGraduated 等链上状态
+  // 2. 后端数据提供 volume24h、priceChange24h 等交易统计
+  // 3. 通过 token address 匹配，互相补充
   const assets = useMemo(() => {
-    const merged: InstrumentAssetData[] = [...onChainAssetsConverted];
-    const onChainInstIds = new Set(onChainAssetsConverted.map(a => a.instId.toLowerCase()));
+    // 建立后端数据索引 (token address → backend asset)
+    // 后端 instId 格式: "0xABC...-ETH"，需要提取地址部分
+    const backendByAddress = new Map<string, InstrumentAssetData>();
+    for (const ba of backendAssets) {
+      const addr = (ba.tokenAddress || ba.instId.split("-")[0]).toLowerCase();
+      backendByAddress.set(addr, ba);
+    }
+
+    // 用后端 ticker 数据补充链上数据
+    const merged: InstrumentAssetData[] = onChainAssetsConverted.map(onChain => {
+      const addr = onChain.instId.toLowerCase();
+      const backend = backendByAddress.get(addr);
+      if (backend) {
+        // Merge: use on-chain for chain state, backend for trading stats
+        backendByAddress.delete(addr); // Mark as merged
+        return {
+          ...onChain,
+          volume24h: backend.volume24h || onChain.volume24h,
+          priceChange24h: backend.priceChange24h || onChain.priceChange24h,
+          uniqueTraders: backend.uniqueTraders || onChain.uniqueTraders,
+        };
+      }
+      return onChain;
+    });
 
     // 添加后端中不存在于链上的 token
-    for (const backendAsset of backendAssets) {
-      if (!onChainInstIds.has(backendAsset.instId.toLowerCase())) {
-        merged.push(backendAsset);
-      }
+    for (const [, backendAsset] of backendByAddress) {
+      merged.push(backendAsset);
     }
 
     // 按创建时间排序（最新的在前）

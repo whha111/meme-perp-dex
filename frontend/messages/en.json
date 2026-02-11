@@ -1169,5 +1169,14 @@
     "slopeAbove": "Slope Above Optimal",
     "maxUtil": "Max Utilization",
     "reserveFactor": "Reserve Factor"
+  },
+  "tokenSelector": {
+    "selectToken": "Select Token",
+    "searchPlaceholder": "Search token name or paste address",
+    "all": "All",
+    "active": "Active",
+    "graduated": "Graduated",
+    "noTokensFound": "No tokens found",
+    "price": "Price"
   }
 }

@@ -66,9 +66,11 @@ const TokenPriceChart = dynamic(
 interface TradingTerminalProps {
   symbol: string; // 交易对符号，如 "PEPE"
   className?: string;
+  /** 可选: 顶部 Token 选择器插槽 (替换默认面包屑) */
+  headerSlot?: React.ReactNode;
 }
 
-export function TradingTerminal({ symbol, className }: TradingTerminalProps) {
+export function TradingTerminal({ symbol, className, headerSlot }: TradingTerminalProps) {
   // 最早的调试日志 - 如果这个都看不到，说明组件根本没有渲染
   console.log("========== [TradingTerminal] COMPONENT MOUNTED ==========");
   console.log("[TradingTerminal] Props received:", { symbol, className });
@@ -447,15 +449,24 @@ export function TradingTerminal({ symbol, className }: TradingTerminalProps) {
 
   return (
     <div className={`flex flex-col bg-okx-bg-primary min-h-screen text-okx-text-primary ${className}`}>
-      {/* 顶部面包屑与标题栏 */}
-      <div className="h-8 bg-okx-bg-primary border-b border-okx-border-primary flex items-center px-4 gap-2 text-[11px] text-okx-text-secondary">
-         <span>★</span>
-         <span className="text-okx-text-primary font-bold">{displaySymbol}</span>
-         <span className="mx-1">——</span>
-         <span>
-           ${(Number(formatUnits(marketCap, 18)) * ethPriceUsd).toLocaleString('en-US', { maximumFractionDigits: 2 })}
-         </span>
-      </div>
+      {/* 顶部面包屑与标题栏 — 支持外部 headerSlot 替换 */}
+      {headerSlot ? (
+        <div className="bg-okx-bg-primary border-b border-okx-border-primary flex items-center px-2">
+          {headerSlot}
+          <span className="ml-2 text-[11px] text-okx-text-secondary">
+            ${(Number(formatUnits(marketCap, 18)) * ethPriceUsd).toLocaleString('en-US', { maximumFractionDigits: 2 })}
+          </span>
+        </div>
+      ) : (
+        <div className="h-8 bg-okx-bg-primary border-b border-okx-border-primary flex items-center px-4 gap-2 text-[11px] text-okx-text-secondary">
+           <span>★</span>
+           <span className="text-okx-text-primary font-bold">{displaySymbol}</span>
+           <span className="mx-1">——</span>
+           <span>
+             ${(Number(formatUnits(marketCap, 18)) * ethPriceUsd).toLocaleString('en-US', { maximumFractionDigits: 2 })}
+           </span>
+        </div>
+      )}
 
       {/* 核心指标头 */}
       <PriceBoard

@@ -192,16 +192,43 @@ class WebSocketServices {
   }
 
   /**
-   * 获取代币列表
-   * TODO: 对接真实后端 API
+   * 获取代币列表 — 从后端 /api/v1/market/tickers 获取真实数据
    */
   async getTokenList(_params: TokenListParams): Promise<TokenListResponse> {
-    // 未对接 - 返回空列表
-    return {
-      success: false,
-      tokens: [],
-      message: "服务未对接",
-    };
+    try {
+      const res = await fetch(`${MATCHING_ENGINE_URL}/api/v1/market/tickers`);
+      if (!res.ok) {
+        return { success: false, tokens: [], message: `HTTP ${res.status}` };
+      }
+      const json = await res.json();
+      // Backend returns { code: "0", msg: "success", data: Ticker[] }
+      if (json.code !== "0" || !Array.isArray(json.data)) {
+        return { success: false, tokens: [], message: json.msg || "Unknown error" };
+      }
+
+      const tokens = json.data.map((t: any) => {
+        // instId format: "0xABC...-ETH"
+        const tokenAddress = t.instId.split("-")[0];
+        // Calculate 24h price change percentage
+        const last = parseFloat(t.last) || 0;
+        const open24h = parseFloat(t.open24h) || 0;
+        const priceChange24h = open24h > 0 ? ((last - open24h) / open24h) * 100 : 0;
+
+        return {
+          inst_id: t.instId,
+          token_address: tokenAddress,
+          current_price: t.last,
+          fdv: "0", // Will be enriched by on-chain data
+          volume_24h: t.vol24h, // ETH volume in wei
+          price_change_24h: priceChange24h,
+          is_graduated: false, // Will be enriched by on-chain data
+        };
+      });
+
+      return { success: true, tokens };
+    } catch (err: any) {
+      return { success: false, tokens: [], message: err.message || "Fetch failed" };
+    }
   }
 
   /**

@@ -1066,5 +1066,14 @@
     "slopeAbove": "최적 이상 기울기",
     "maxUtil": "최대 이용률",
     "reserveFactor": "준비금 비율"
+  },
+  "tokenSelector": {
+    "selectToken": "토큰 선택",
+    "searchPlaceholder": "토큰명 검색 또는 주소 붙여넣기",
+    "all": "전체",
+    "active": "활성",
+    "graduated": "졸업",
+    "noTokensFound": "토큰을 찾을 수 없습니다",
+    "price": "가격"
   }
 }
