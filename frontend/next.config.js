@@ -1,7 +1,19 @@
+const { withSentryConfig } = require("@sentry/nextjs");
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Enable standalone output for Docker deployment
   output: 'standalone',
+
+  // 代理外部 API 避免浏览器 CORS 限制
+  async rewrites() {
+    return [
+      {
+        source: '/api/proxy/binance/:path*',
+        destination: 'https://api.binance.com/api/:path*',
+      },
+    ];
+  },
 
   // 关闭 Strict Mode 避免双重挂载导致的 WebSocket 连接/断开循环
   reactStrictMode: false,
@@ -39,4 +51,9 @@ const nextConfig = {
   },
 };
 
-module.exports = nextConfig;
+module.exports = process.env.NEXT_PUBLIC_SENTRY_DSN
+  ? withSentryConfig(nextConfig, {
+      silent: true,
+      hideSourceMaps: true,
+    })
+  : nextConfig;

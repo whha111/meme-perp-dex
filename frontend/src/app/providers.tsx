@@ -6,7 +6,7 @@ import { WagmiProvider } from "wagmi";
 import { RainbowKitProvider } from "@rainbow-me/rainbowkit";
 import { ToastProvider } from "@/components/shared/Toast";
 import { config, configError } from "@/lib/wagmi";
-import { useAutoConnectWebSocket } from "@/lib/websocket/hooks";
+import { useUnifiedWebSocket } from "@/hooks/common/useUnifiedWebSocket";
 import { WebSocketStatusIndicator } from "@/components/debug/WebSocketStatusIndicator";
 import { NavigationProgress } from "@/components/shared/NavigationProgress";
 import { I18nProvider, useLocale } from "@/i18n";
@@ -296,8 +296,7 @@ function LoadingSkeleton() {
 // WebSocket Auto-Connect Component
 // =====================================================
 function WebSocketAutoConnect({ children }: { children: ReactNode }) {
-  // TEMPORARILY DISABLED to debug infinite loop
-  // useAutoConnectWebSocket(true);
+  useUnifiedWebSocket({ enabled: true });
   return <>{children}</>;
 }
 
