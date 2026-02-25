@@ -38,6 +38,7 @@ import {
 import { useAccount, useBalance } from "wagmi";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { useETHPrice, ETH_PRICE_FALLBACK } from "@/hooks/common/useETHPrice";
+import { useTradingDataStore } from "@/lib/stores/tradingDataStore";
 
 // 动态导入图表组件
 const TokenPriceChart = dynamic(
@@ -1067,6 +1068,7 @@ export function OKXTradingPage({ symbol, className }: OKXTradingPageProps) {
   const { openConnectModal } = useConnectModal();
   const t = useTranslations();
   const { price: ethPriceUsd } = useETHPrice();
+  const wsConnected = useTradingDataStore(state => state.wsConnected);
 
   const [activeTab, setActiveTab] = useState("tradeActivity");
   const [copied, setCopied] = useState(false);
@@ -1237,7 +1239,7 @@ export function OKXTradingPage({ symbol, className }: OKXTradingPageProps) {
       </div>
 
       {/* Bottom Status Bar */}
-      <BottomStatusBar isConnected={true} />
+      <BottomStatusBar isConnected={wsConnected} />
 
       {/* Copy Toast */}
       {copied && (

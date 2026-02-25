@@ -28,11 +28,6 @@ export function Navbar() {
     setMounted(true);
   }, []);
 
-  // Debug log
-  useEffect(() => {
-    console.log('🔍 Wallet state:', { address, isConnected, chain: chain?.name });
-  }, [address, isConnected, chain]);
-
   // Close menu when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {

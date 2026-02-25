@@ -148,8 +148,13 @@ export function PerpetualTradingTerminal({
     ? (Number(tokenStats.priceChange24h) / 100).toFixed(2) + "%"
     : "0.00%";
   const isPriceUp = tokenStats?.priceChange24h ? Number(tokenStats.priceChange24h) >= 0 : true;
-  const formattedHigh24h = formatMemePrice(tokenStats?.high24h);
-  const formattedLow24h = formatMemePrice(tokenStats?.low24h);
+  // 24h 高低价：有 WS 数据用 WS，否则 fallback 到 spot 价格
+  const formattedHigh24h = (tokenStats?.high24h && tokenStats.high24h !== "0")
+    ? formatMemePrice(tokenStats.high24h)
+    : spotPriceBigInt ? formatMemePrice(spotPriceBigInt.toString()) : "0.0000000000";
+  const formattedLow24h = (tokenStats?.low24h && tokenStats.low24h !== "0")
+    ? formatMemePrice(tokenStats.low24h)
+    : spotPriceBigInt ? formatMemePrice(spotPriceBigInt.toString()) : "0.0000000000";
   // volume24h 是 ETH 成交量 (ETH 本位: 1e18 精度)
   // 后端计算: volume24h = Σ(trade.size * trade.price) / 1e18
   const formattedVolume24h = tokenStats?.volume24h
@@ -524,18 +529,6 @@ export function PerpetualTradingTerminal({
     <div
       className={`flex flex-col bg-okx-bg-primary min-h-screen text-okx-text-primary ${className}`}
     >
-      {/* Perpetual Not Enabled Warning */}
-      {!isPoolLoading && tokenAddress && !isPerpEnabled && (
-        <div className="bg-yellow-900/30 border-b border-yellow-500/50 px-4 py-2">
-          <div className="flex items-center gap-2 text-yellow-400 text-sm">
-            <svg className="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-            </svg>
-            <span>{t("perpNotEnabled")}</span>
-          </div>
-        </div>
-      )}
-
       {/* Top Bar - Symbol Info */}
       <div className="h-14 bg-okx-bg-secondary border-b border-okx-border-primary flex items-center px-4 gap-6">
         {/* Symbol */}
@@ -543,8 +536,8 @@ export function PerpetualTradingTerminal({
           <span className="text-[18px] font-bold text-okx-text-primary">
             {displaySymbol.toUpperCase()}-PERP
           </span>
-          <span className={`text-[12px] px-2 py-0.5 rounded ${isPerpEnabled ? 'text-okx-up bg-okx-up/10' : 'text-yellow-400 bg-yellow-900/30'}`}>
-            {isPerpEnabled ? 'Perpetual' : t("perpNotEnabled")}
+          <span className="text-[12px] px-2 py-0.5 rounded text-okx-up bg-okx-up/10">
+            Perpetual
           </span>
         </div>
 

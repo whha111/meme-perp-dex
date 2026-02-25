@@ -1,41 +1,22 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useRef, useMemo } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import React, { useEffect, useState, useRef, useMemo } from "react";
 import { useTranslations } from "next-intl";
 import { TokenCard } from "./TokenCard";
 import { Navbar } from "@/components/layout/Navbar";
 import { SOLD_TOKENS_TARGET } from "@/lib/protocol-constants";
-import {
-  InstrumentAssetData,
-  getWebSocketClient,
-  getWebSocketServices,
-  ConnectionStatus,
-  MessageType,
-  useWebSocketMessage,
-  adaptTokenAssetList,
-} from "@/lib/websocket";
+import { InstrumentAssetData } from "@/lib/websocket";
 import { formatTimeAgo } from "@/utils/formatters";
 import { FilterPanel, FilterState, defaultFilterState } from "./FilterPanel";
 import { FAQPanel } from "./FAQPanel";
 import { useOnChainTokenList, OnChainToken } from "@/hooks/common/useTokenList";
 import { useETHPrice } from "@/hooks/common/useETHPrice";
 import { trackRender } from "@/lib/debug-render";
+import { useTradingDataStore, type TokenStats } from "@/lib/stores/tradingDataStore";
+import { useUnifiedWebSocket, getWebSocketManager } from "@/hooks/common/useUnifiedWebSocket";
+import { type Address } from "viem";
+import { apiClient, type Ticker } from "@/lib/api/client";
 
-// [FIX F-H-01] 非阻塞连接检查 - 立即返回连接状态，不等待
-function checkConnection(): boolean {
-  const wsClient = getWebSocketClient();
-  return wsClient.isConnected();
-}
-
-// [FIX F-H-01] 触发连接但不阻塞
-function triggerConnection(): void {
-  const wsClient = getWebSocketClient();
-  const status = wsClient.getStatus();
-  if (status === ConnectionStatus.DISCONNECTED || status === ConnectionStatus.ERROR) {
-    wsClient.connect().catch(() => {});
-  }
-}
 
 function Column({ title, assets, noTokensText, ethPrice }: { title: string; assets: any[]; noTokensText: string; ethPrice: number }) {
   return (
@@ -100,7 +81,7 @@ function Column({ title, assets, noTokensText, ethPrice }: { title: string; asse
               symbol={instId}
               logo={asset.logo || asset.imageUrl}
               timeAgo={formatTimeAgo(asset.createdAt)}
-              address={asset.creatorAddress?.slice(0, 4) + "..." + asset.creatorAddress?.slice(-4)}
+              address={asset.creatorAddress ? (asset.creatorAddress.slice(0, 4) + "..." + asset.creatorAddress.slice(-4)) : ""}
               marketCap={marketCapDisplay}
               volume={volumeDisplay}
               traders={asset.uniqueTraders || 0}
@@ -207,13 +188,10 @@ export function MarketOverview() {
   // 调试：追踪渲染次数 (仅 console 警告，不 throw)
   trackRender("MarketOverview");
 
-  const [wsConnected, setWsConnected] = useState(false);
-  const [minLoadingDone, setMinLoadingDone] = useState(false); // 最小加载时间标记
+  const [minLoadingDone, setMinLoadingDone] = useState(false);
   const [filterPanelOpen, setFilterPanelOpen] = useState(false);
   const [faqPanelOpen, setFaqPanelOpen] = useState(false);
   const [filters, setFilters] = useState<FilterState>(defaultFilterState);
-  const queryClient = useQueryClient();
-  const lastRefetchTime = useRef<number>(0);
 
   // 获取实时 ETH 价格
   const { price: ethPrice } = useETHPrice();
@@ -226,74 +204,47 @@ export function MarketOverview() {
     return () => clearTimeout(timer);
   }, []);
 
-  // 监听 WebSocket 连接状态
-  useEffect(() => {
-    const wsClient = getWebSocketClient();
-    const unsubscribe = wsClient.onConnectionChange((status) => {
-      setWsConnected(status === ConnectionStatus.CONNECTED);
-    });
-    // 初始状态
-    setWsConnected(wsClient.isConnected());
-    return () => unsubscribe();
-  }, []);
+  // 通过 useUnifiedWebSocket 建立 WSS 连接（不订阅特定 token，仅建立连接）
+  const { isConnected: wsConnected } = useUnifiedWebSocket({ enabled: true });
 
-  // 订阅实时交易事件，当有新交易时刷新列表
-  useEffect(() => {
-    const wsServices = getWebSocketServices();
-
-    // Subscribe to trade events and invalidate cache for real-time updates
-    const unsubscribeTrade = wsServices.onTradeEvent((event) => {
-      // Throttle refetches to max once per 2 seconds to avoid overwhelming
-      const now = Date.now();
-      if (now - lastRefetchTime.current > 2000) {
-        lastRefetchTime.current = now;
-        // Invalidate domain assets cache to trigger refetch
-        queryClient.invalidateQueries({ queryKey: ["tokenAssets"] });
-      }
-    });
-
-    return () => {
-      unsubscribeTrade();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // queryClient 是稳定的，不需要作为依赖
-
-  // [FIX F-H-01] 非阻塞数据获取 - 立即触发连接，不等待
-  // 使用 useEffect 在组件挂载时触发连接
-  useEffect(() => {
-    triggerConnection();
-  }, []);
-
-  // 直接从链上获取代币列表（当后端没有数据时使用）
+  // 直接从链上获取代币列表
   const { tokens: onChainTokens, isLoading: isLoadingOnChain } = useOnChainTokenList();
 
-  const { data: assetsResponse, isLoading: isLoadingBackend, error, refetch } = useQuery<{ tokenAssets: InstrumentAssetData[] }>({
-    queryKey: ["tokenAssets"],
-    queryFn: async () => {
-      // 直接通过 REST API 获取数据，不依赖 WebSocket
-      const services = getWebSocketServices();
-      const response = await services.getTokenList({
-        page_size: 50,
-        sort_by: 'created_at',
-        sort_order: 'desc',
-        filter_by: 'all',
-      });
-
-      if (response.success && response.tokens) {
-        return { tokenAssets: adaptTokenAssetList(response.tokens) };
+  // 当链上 token 列表就绪后，通过 WSS 批量订阅所有 token 获取实时数据
+  useEffect(() => {
+    if (onChainTokens.length > 0 && wsConnected) {
+      const manager = getWebSocketManager();
+      if (manager) {
+        manager.subscribeAll(onChainTokens.map(t => t.address as Address));
       }
+    }
+  }, [onChainTokens, wsConnected]);
 
-      return { tokenAssets: [] };
-    },
-    enabled: true,
-    staleTime: 10000, // 10s - data considered fresh
-    retry: 5, // [FIX F-H-01] 增加重试次数，因为首次可能连接未就绪
-    retryDelay: (attemptIndex) => Math.min(500 * 2 ** attemptIndex, 3000), // [FIX F-H-01] 更快的重试间隔
-    refetchInterval: 15000, // Always poll every 15s as fallback for real-time
-  });
+  // 从 tradingDataStore 读取 WSS 推送的实时市场数据
+  const tokenStatsMap = useTradingDataStore(state => state.tokenStats);
 
-  // 合并后端数据和链上数据：优先使用后端数据，如果后端没有数据则使用链上数据
-  const backendAssets = assetsResponse?.tokenAssets || [];
+  // HTTP fallback: 当 WS 没有返回 tokenStats 数据时，从 HTTP API 获取 ticker
+  const [httpTickers, setHttpTickers] = useState<Ticker[]>([]);
+  const httpFallbackEnabled = tokenStatsMap.size === 0;
+
+  useEffect(() => {
+    if (!httpFallbackEnabled) return;
+
+    const fetchTickers = async () => {
+      try {
+        const tickers = await apiClient.getTickers();
+        if (tickers.length > 0) {
+          setHttpTickers(tickers);
+        }
+      } catch (e) {
+        console.warn("[MarketOverview] HTTP ticker fallback failed:", e);
+      }
+    };
+
+    fetchTickers();
+    const interval = setInterval(fetchTickers, 30000);
+    return () => clearInterval(interval);
+  }, [httpFallbackEnabled]);
 
   // 解析 metadataURI 获取 logo
   // metadataURI 格式可能是：
@@ -373,46 +324,49 @@ export function MarketOverview() {
     });
   }, [onChainTokens]);
 
-  // 合并后端数据和链上数据：
-  // 1. 链上数据提供 FDV、soldSupply、isGraduated 等链上状态
-  // 2. 后端数据提供 volume24h、priceChange24h 等交易统计
-  // 3. 通过 token address 匹配，互相补充
+  // 合并链上数据 + WSS 实时市场数据 + HTTP fallback：
+  // 优先级: WS 实时数据 > HTTP ticker 数据 > 链上默认值
   const assets = useMemo(() => {
-    // 建立后端数据索引 (token address → backend asset)
-    // 后端 instId 格式: "0xABC...-ETH"，需要提取地址部分
-    const backendByAddress = new Map<string, InstrumentAssetData>();
-    for (const ba of backendAssets) {
-      const addr = (ba.tokenAddress || ba.instId.split("-")[0]).toLowerCase();
-      backendByAddress.set(addr, ba);
-    }
-
-    // 用后端 ticker 数据补充链上数据
     const merged: InstrumentAssetData[] = onChainAssetsConverted.map(onChain => {
-      const addr = onChain.instId.toLowerCase();
-      const backend = backendByAddress.get(addr);
-      if (backend) {
-        // Merge: use on-chain for chain state, backend for trading stats
-        backendByAddress.delete(addr); // Mark as merged
+      const addr = (onChain.instId || "").toLowerCase() as Address;
+
+      // 1. 优先: WS 实时数据 (来自 Matching Engine 的 market_data)
+      const stats = tokenStatsMap.get(addr);
+      if (stats && (stats.volume24h !== "0" || stats.lastPrice !== "0")) {
         return {
           ...onChain,
-          volume24h: backend.volume24h || onChain.volume24h,
-          priceChange24h: backend.priceChange24h || onChain.priceChange24h,
-          uniqueTraders: backend.uniqueTraders || onChain.uniqueTraders,
+          volume24h: stats.volume24h || onChain.volume24h,
+          priceChange24h: parseFloat(stats.priceChangePercent24h || "0") || onChain.priceChange24h,
+          uniqueTraders: stats.trades24h || onChain.uniqueTraders, // trades24h 作为交易笔数近似值
         };
       }
+
+      // 2. Fallback: HTTP ticker 数据 (来自 Go 后端 /api/v1/market/tickers)
+      const ticker = httpTickers.find(t => t.instId?.toLowerCase() === addr);
+      if (ticker) {
+        let change24h = 0;
+        if (ticker.open24h && ticker.last) {
+          const openVal = parseFloat(ticker.open24h);
+          const lastVal = parseFloat(ticker.last);
+          if (openVal > 0) {
+            change24h = ((lastVal - openVal) / openVal) * 100;
+          }
+        }
+        return {
+          ...onChain,
+          volume24h: ticker.volCcy24h || ticker.vol24h || onChain.volume24h,
+          priceChange24h: change24h || onChain.priceChange24h,
+        };
+      }
+
       return onChain;
     });
 
-    // 添加后端中不存在于链上的 token
-    for (const [, backendAsset] of backendByAddress) {
-      merged.push(backendAsset);
-    }
-
     // 按创建时间排序（最新的在前）
     return merged.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-  }, [backendAssets, onChainAssetsConverted]);
+  }, [onChainAssetsConverted, tokenStatsMap, httpTickers]);
 
-  const isLoading = isLoadingBackend && isLoadingOnChain;
+  const isLoading = isLoadingOnChain;
 
   // 应用筛选
   const filteredAssets = useMemo(() => {

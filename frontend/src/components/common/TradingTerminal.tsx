@@ -14,8 +14,8 @@ import dynamic from 'next/dynamic';
 import {
   getWebSocketServices,
   InstrumentAssetData,
-  adaptInstrumentAssetResponse,
 } from "@/lib/websocket";
+import { useTradingDataStore } from "@/lib/stores/tradingDataStore";
 import { useAppStore } from "@/lib/stores/appStore";
 import { useETHPrice } from "@/hooks/common/useETHPrice";
 import { LiquidityPanel } from "@/components/spot/LiquidityPanel";
@@ -47,6 +47,12 @@ function formatSmallPriceETH(priceEth: number): string {
   return priceEth.toFixed(8) + " ETH";
 }
 
+// 测试代币常用的占位域名，跳过 fetch 避免 CORS 报错
+const BLOCKED_METADATA_DOMAINS = ['example.com', 'example.org', 'example.net'];
+
+// 模块级缓存 — 组件 remount 后不丢失，避免重复请求已失败的 URI
+const failedMetadataURIs = new Set<string>();
+
 // 格式化 ETH 金额为显示值
 function formatETHValue(ethAmount: number): string {
   if (ethAmount <= 0) return "0 ETH";
@@ -71,10 +77,6 @@ interface TradingTerminalProps {
 }
 
 export function TradingTerminal({ symbol, className, headerSlot }: TradingTerminalProps) {
-  // 最早的调试日志 - 如果这个都看不到，说明组件根本没有渲染
-  console.log("========== [TradingTerminal] COMPONENT MOUNTED ==========");
-  console.log("[TradingTerminal] Props received:", { symbol, className });
-
   const t = useTranslations();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState("tradeActivity");
@@ -98,7 +100,6 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
   const poolData = usePoolState(isValidTokenAddress ? pureTokenAddress : undefined);
 
   // 获取链上交易记录
-  console.log(`[TradingTerminal] isTokenAddress: ${isTokenAddress}, symbol: ${symbol}, pureTokenAddress: ${pureTokenAddress}, isValidTokenAddress: ${isValidTokenAddress}`);
   const {
     trades: onChainTrades,
     refetch: refetchOnChainTrades,
@@ -106,23 +107,17 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
     enabled: !!isValidTokenAddress,
     resolutionSeconds: 60,
   });
-  console.log(`[TradingTerminal] onChainTrades count: ${onChainTrades?.length || 0}`);
 
   // 订阅交易事件，实现交易活动的实时更新
   useEffect(() => {
     if (!symbol) return;
 
-    console.log(`[TradingTerminal] Subscribing to trade events for symbol: ${symbol}`);
     const unsubscribe = tradeEventEmitter.subscribe((tradedToken, txHash) => {
-      console.log(`[TradingTerminal] Trade event received: tradedToken=${tradedToken}, symbol=${symbol}`);
       if (tradedToken.toLowerCase() === symbol.toLowerCase()) {
-        console.log(`[TradingTerminal] Token match! Refreshing trade data...`);
         // 刷新链上交易记录
         refetchOnChainTrades();
         // 刷新后端交易历史
         queryClient.invalidateQueries({ queryKey: ["tradeHistory", instId] });
-      } else {
-        console.log(`[TradingTerminal] Token mismatch: ${tradedToken.toLowerCase()} !== ${symbol.toLowerCase()}`);
       }
     });
 
@@ -138,12 +133,18 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
     return uri;
   };
 
-  // 验证 URI 是否为可获取的格式
+  // 验证 URI 是否为可获取的格式（排除占位域名）
   const isValidFetchableURI = (uri: string): boolean => {
     if (!uri) return false;
     if (uri.startsWith('data:')) return true;
     if (uri.startsWith('ipfs://')) return true;
-    if (uri.startsWith('http://') || uri.startsWith('https://')) return true;
+    if (uri.startsWith('http://') || uri.startsWith('https://')) {
+      try {
+        const url = new URL(uri);
+        if (BLOCKED_METADATA_DOMAINS.includes(url.hostname)) return false;
+      } catch { return false; }
+      return true;
+    }
     // 有效的 IPFS CID (Qm... 或 bafy...)
     if (uri.startsWith('Qm') && uri.length === 46) return true;
     if (uri.startsWith('bafy')) return true;
@@ -153,9 +154,6 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
   // 从 metadataURI 获取图片 URL
   // metadataURI 可能是：1. 直接的图片 URL/IPFS  2. JSON 元数据文件  3. base64 编码的 JSON
   const [tokenLogoUrl, setTokenLogoUrl] = useState<string | undefined>(undefined);
-
-  // 缓存已失败的 URI，避免重复请求
-  const failedURIsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const fetchMetadataImage = async (uri: string | undefined) => {
@@ -170,7 +168,7 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
       }
 
       // 跳过已失败的 URI
-      if (failedURIsRef.current.has(uri)) {
+      if (failedMetadataURIs.has(uri)) {
         return;
       }
 
@@ -195,7 +193,7 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
           try {
             const headResponse = await fetch(fetchUrl, { method: 'HEAD' });
             if (!headResponse.ok) {
-              failedURIsRef.current.add(uri);
+              failedMetadataURIs.add(uri);
               return;
             }
             const contentType = headResponse.headers.get('content-type') || '';
@@ -220,7 +218,7 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
             }
           } catch {
             // HEAD 请求失败，记录并跳过
-            failedURIsRef.current.add(uri);
+            failedMetadataURIs.add(uri);
             return;
           }
         }
@@ -231,7 +229,7 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
         }
       } catch (e) {
         console.warn('Failed to fetch metadata image:', uri);
-        failedURIsRef.current.add(uri);
+        failedMetadataURIs.add(uri);
       }
     };
 
@@ -303,31 +301,11 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
   // const { latestTrade } = useInstrumentTradeStream(instId, { ... });
   const latestTrade = null;
 
-  // 从 WebSocket 获取资产信息
-  const { data: assetData, isLoading: isAssetLoading, isError: isAssetError } = useQuery({
-    queryKey: ["instrumentAsset", instId],
-    queryFn: async () => {
-      const wsServices = getWebSocketServices();
-      const response = await wsServices.getInstrumentAsset({
-        inst_id: instId,
-      });
-
-      const adapted = adaptInstrumentAssetResponse(response);
-      return {
-        ...adapted,
-        instId: adapted.instId || instId,
-        createdAt: adapted.createdAt || 0,
-      };
-    },
-    enabled: !!instId,
-    retry: 2,
-    retryDelay: 1000,
-    staleTime: 10000,
-    refetchInterval: false, // [DEBUG] 暂时禁用轮询
+  // 从 tradingDataStore 读取 WSS 推送的实时市场数据（由 useUnifiedWebSocket 填充）
+  const tokenAddress = pureTokenAddress?.toLowerCase() as `0x${string}` | undefined;
+  const tokenStats = useTradingDataStore(state => {
+    return tokenAddress ? state.tokenStats.get(tokenAddress) : null;
   });
-
-  // [DEBUG] 暂时移除 liveAssetData 同步
-  // useEffect(() => { ... }, [assetData]);
 
   // Fetch Trade History
   const { data: tradesData, isLoading: isTradesLoading, error: tradesError } = useQuery({
@@ -368,14 +346,8 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
     retry: 2,
   });
 
-  // 安全地解析 securityStatus
-  const securityStatus = useMemo(() => {
-    const status = assetData?.securityStatus;
-    if (typeof status === 'string' && ['UNKNOWN', 'AUTHENTIC', 'MISMATCH', 'MISSING', 'TRANSFERRED', 'GRADUATED'].includes(status)) {
-      return status as SecurityStatus;
-    }
-    return 'AUTHENTIC' as SecurityStatus;
-  }, [assetData?.securityStatus]);
+  // 安全地解析 securityStatus (默认 AUTHENTIC)
+  const securityStatus = 'AUTHENTIC' as SecurityStatus;
 
   // 从合约数据获取供应量和状态（使用稳定的引用）
   const poolSoldSupply = poolData.poolState?.soldTokens?.toString();
@@ -391,36 +363,27 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
     };
   }, [tokenLogoUrl]);
 
-  // 从 assetData 或合约数据获取池子状态
-  const isPoolGraduated = poolIsGraduated ?? assetData?.isGraduated ?? false;
+  // 从合约数据获取池子状态
+  const isPoolGraduated = poolIsGraduated ?? false;
   const isPoolActive = poolIsActive ?? true;
   const poolTotalSupply = "1000000000000000000000000000"; // 1B tokens in wei
 
-  // [DEBUG] 简化 displayData - 直接使用 assetData
+  // 构建 displayData — 合约数据 + WSS 数据合并
   const displayData = useMemo(() => {
     const tokenAddressFromSymbol = isTokenAddress ? symbol : undefined;
-
-    if (assetData) {
-      return {
-        ...assetData,
-        tokenAddress: tokenAddressFromSymbol || assetData.tokenAddress,
-        creatorAddress: poolCreator || assetData.creatorAddress,
-        soldSupply: poolSoldSupply || assetData.soldSupply,
-        totalSupply: poolTotalSupply || assetData.totalSupply,
-      };
-    }
     return {
       instId,
-      currentPrice: "0",
+      currentPrice: tokenStats?.lastPrice || "0",
       fdv: "0",
-      volume24h: "0",
+      volume24h: tokenStats?.volume24h || "0",
+      priceChange24h: parseFloat(tokenStats?.priceChangePercent24h || "0"),
       securityStatus: 'AUTHENTIC' as SecurityStatus,
       tokenAddress: tokenAddressFromSymbol,
       creatorAddress: poolCreator,
       soldSupply: poolSoldSupply,
       totalSupply: poolTotalSupply,
     } as InstrumentAssetData;
-  }, [assetData, instId, isTokenAddress, symbol, poolSoldSupply, poolCreator]);
+  }, [tokenStats, instId, isTokenAddress, symbol, poolSoldSupply, poolCreator]);
 
   // 安全地将字符串转换为 BigInt
   const safeBigInt = (value: string | undefined): bigint => {
@@ -433,19 +396,15 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
     }
   };
 
-  // 优先使用 TokenFactory 合约数据，如果后端返回 0 或无数据
-  const backendPrice = safeBigInt(displayData?.currentPrice);
-  const backendMarketCap = safeBigInt(displayData?.fdv);
-  const backendVolume = safeBigInt(displayData?.volume24h);
-
-  // 如果后端数据为 0 且有合约数据，使用合约数据
-  const currentPrice = backendPrice === 0n && poolData.currentPrice > 0n
-    ? poolData.currentPrice
-    : backendPrice;
-  const marketCap = backendMarketCap === 0n && poolData.marketCap > 0n
-    ? poolData.marketCap
-    : backendMarketCap;
-  const volume24h = backendVolume; // Volume 只能从后端获取
+  // 价格优先级: WSS lastPrice > 合约 currentPrice
+  const wssPrice = safeBigInt(tokenStats?.lastPrice);
+  const currentPrice = wssPrice > 0n ? wssPrice
+    : poolData.currentPrice > 0n ? poolData.currentPrice
+    : 0n;
+  // 市值优先级: 合约 marketCap（链上数据）
+  const marketCap = poolData.marketCap > 0n ? poolData.marketCap : 0n;
+  // 成交量: 仅从 WSS 获取（后端撮合引擎统计）
+  const volume24h = safeBigInt(tokenStats?.volume24h);
 
   return (
     <div className={`flex flex-col bg-okx-bg-primary min-h-screen text-okx-text-primary ${className}`}>
@@ -532,11 +491,8 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
                        const seenTxHashes = new Set<string>();
                        const merged: Trade[] = [];
 
-                       console.log(`[TradingTerminal] Building trade list - onChainTrades: ${onChainTrades?.length || 0}, realtimeTrades: ${realtimeTrades.length}, historyTrades: ${tradesData?.length || 0}`);
-
                        // 首先添加链上交易（最准确的数据源）
                        if (Array.isArray(onChainTrades) && onChainTrades.length > 0) {
-                         console.log(`[TradingTerminal] Processing ${onChainTrades.length} on-chain trades`);
                          // 按时间倒序排列
                          const sortedOnChain = [...onChainTrades].sort((a, b) => b.timestamp - a.timestamp);
                          for (const trade of sortedOnChain) {
@@ -577,7 +533,6 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
                          }
                        }
 
-                       console.log(`[TradingTerminal] Final merged trades: ${merged.length}`);
                        // 按时间排序并限制数量
                        return merged.sort((a, b) => b.timestamp - a.timestamp).slice(0, 100);
                      })()} />

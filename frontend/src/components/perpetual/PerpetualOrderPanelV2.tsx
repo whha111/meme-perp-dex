@@ -35,8 +35,6 @@ import { usePerpetualV2 } from "@/hooks/perpetual/usePerpetualV2";
 import { useTradingWallet } from "@/hooks/perpetual/useTradingWallet";
 import { useETHPrice } from "@/hooks/common/useETHPrice";
 import { usePoolState } from "@/hooks/spot/usePoolState";
-import { useWebSocketSubscription, useWebSocketMessage } from "@/lib/websocket/hooks";
-import { MessageType, createUserTopic } from "@/lib/websocket/types";
 import { useWalletBalance } from "@/contexts/WalletBalanceContext";
 import { Copy, Check, Key, RefreshCw, ExternalLink } from "lucide-react";
 
@@ -127,24 +125,14 @@ export function PerpetualOrderPanelV2({
   // Global wallet balance context (ERC20 on-chain balances)
   const { refreshBalance: refreshWalletBalance } = useWalletBalance();
 
-  // ── WebSocket: subscribe to user topic for balance updates ──
-  const { subscribe, unsubscribe } = useWebSocketSubscription();
-
+  // ── Balance 实时更新: System B (WebSocketManager) → tradingDataStore ──
+  const storeBalance = useTradingDataStore(state => state.balance);
   useEffect(() => {
-    if (!tradingWalletAddress) return;
-    const topic = createUserTopic(tradingWalletAddress);
-    subscribe(topic).catch(() => {});
-    return () => {
-      unsubscribe(topic).catch(() => {});
-    };
-  }, [tradingWalletAddress, subscribe, unsubscribe]);
-
-  // Listen for WS balance messages → refresh on-chain wallet balances
-  // (perp balance is now handled directly inside usePerpetualV2 via WS data)
-  useWebSocketMessage(MessageType.BALANCE, useCallback(() => {
-    refreshWalletBalance();
-    refreshTradingWalletBalance();
-  }, [refreshWalletBalance, refreshTradingWalletBalance]));
+    if (storeBalance) {
+      refreshWalletBalance();
+      refreshTradingWalletBalance();
+    }
+  }, [storeBalance, refreshWalletBalance, refreshTradingWalletBalance]);
 
   // Store state
   const instId = `${tokenSymbol.toUpperCase()}-PERP`;
@@ -336,11 +324,16 @@ export function PerpetualOrderPanelV2({
         "info"
       );
 
+      // P2-2: 传递止盈止损参数
+      const tpslOptions = (showTpSl && (takeProfit || stopLoss))
+        ? { takeProfit: takeProfit || undefined, stopLoss: stopLoss || undefined }
+        : undefined;
+
       let result;
       if (orderType === "market") {
-        result = await submitMarketOrder(tokenAddress, isLong, sizeEthString, leverage);
+        result = await submitMarketOrder(tokenAddress, isLong, sizeEthString, leverage, tpslOptions);
       } else {
-        result = await submitLimitOrder(tokenAddress, isLong, sizeEthString, leverage, limitPrice);
+        result = await submitLimitOrder(tokenAddress, isLong, sizeEthString, leverage, limitPrice, tpslOptions);
       }
 
       if (result.success) {
@@ -381,6 +374,9 @@ export function PerpetualOrderPanelV2({
     submitLimitOrder,
     updateOrderForm,
     showToast,
+    showTpSl,
+    takeProfit,
+    stopLoss,
     t,
   ]);
 

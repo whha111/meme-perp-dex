@@ -1,7 +1,8 @@
 "use client";
 
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { useTranslations } from "next-intl";
+import { MATCHING_ENGINE_URL } from "@/config/api";
 
 interface Invitee {
   address: string;
@@ -11,40 +12,91 @@ interface Invitee {
   isActive: boolean;
 }
 
-export function InviteeList() {
+interface InviteeListProps {
+  address?: string;
+}
+
+/**
+ * P2-1: 邀请人列表组件 — 从真实 API 获取数据
+ *
+ * API: GET /api/referral/referrer?address=0x...
+ * 返回: referrer.level1Referrals (地址列表)
+ *
+ * 注意: 当前后端 API 返回的是邀请人数量 (number)，不是详细列表。
+ * 如果后端扩展了详细列表 API，此组件会自动适配。
+ * 当前降级为显示汇总信息。
+ */
+export function InviteeList({ address }: InviteeListProps) {
   const t = useTranslations("referral");
+  const [invitees, setInvitees] = useState<Invitee[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [totalCount, setTotalCount] = useState(0);
 
-  // Mock data - replace with real API data
-  const invitees: Invitee[] = [
-    {
-      address: "0x1234...5678",
-      registeredAt: "2024-01-10",
-      totalVolume: "2.5",
-      rewardsGenerated: "0.0375",
-      isActive: true,
-    },
-    {
-      address: "0xabcd...ef01",
-      registeredAt: "2024-01-09",
-      totalVolume: "1.2",
-      rewardsGenerated: "0.018",
-      isActive: true,
-    },
-    {
-      address: "0x9876...5432",
-      registeredAt: "2024-01-08",
-      totalVolume: "0",
-      rewardsGenerated: "0",
-      isActive: false,
-    },
-  ];
+  useEffect(() => {
+    if (!address) return;
 
+    const fetchInvitees = async () => {
+      setLoading(true);
+      try {
+        const res = await fetch(`${MATCHING_ENGINE_URL}/api/referral/referrer?address=${address}`);
+        const data = await res.json();
+
+        if (data.isReferrer && data.referrer) {
+          const r = data.referrer;
+          // 后端返回的是数量，不是详细列表
+          // 设置总数用于显示汇总
+          setTotalCount(r.level1Referrals || 0);
+
+          // 如果后端返回了详细列表 (未来扩展)
+          if (Array.isArray(r.level1ReferralDetails)) {
+            setInvitees(r.level1ReferralDetails.map((detail: any) => ({
+              address: detail.address ? `${detail.address.slice(0, 6)}...${detail.address.slice(-4)}` : "Unknown",
+              registeredAt: detail.joinedAt ? new Date(detail.joinedAt).toLocaleDateString() : "-",
+              totalVolume: detail.totalVolume ? (Number(detail.totalVolume) / 1e18).toFixed(4) : "0",
+              rewardsGenerated: detail.commissionGenerated ? (Number(detail.commissionGenerated) / 1e18).toFixed(6) : "0",
+              isActive: detail.isActive ?? true,
+            })));
+          }
+        }
+      } catch (e) {
+        console.error("[InviteeList] Failed to fetch:", e);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchInvitees();
+  }, [address]);
+
+  if (loading) {
+    return (
+      <div className="flex justify-center items-center py-12">
+        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-okx-accent"></div>
+      </div>
+    );
+  }
+
+  // 如果没有详细列表数据，显示汇总卡片
   if (invitees.length === 0) {
     return (
       <div className="text-center py-12">
-        <div className="text-4xl mb-4">👥</div>
-        <p className="text-okx-text-secondary">{t("noInvitees")}</p>
-        <p className="text-sm text-okx-text-tertiary mt-2">{t("shareCodeHint")}</p>
+        {totalCount > 0 ? (
+          <>
+            <div className="text-4xl mb-4">👥</div>
+            <p className="text-lg font-medium mb-2">
+              {totalCount} {totalCount === 1 ? "Invitee" : "Invitees"}
+            </p>
+            <p className="text-sm text-okx-text-secondary">
+              {t("shareCodeHint")}
+            </p>
+          </>
+        ) : (
+          <>
+            <div className="text-4xl mb-4">👥</div>
+            <p className="text-okx-text-secondary">{t("noInvitees")}</p>
+            <p className="text-sm text-okx-text-tertiary mt-2">{t("shareCodeHint")}</p>
+          </>
+        )}
       </div>
     );
   }

@@ -23,12 +23,8 @@ const TradingTerminal = dynamic(
  * 现货交易页面
  */
 export default function TokenTradePage() {
-  console.log("========== [TokenTradePage] PAGE COMPONENT EXECUTED ==========");
-
   const params = useParams();
   const addressOrSymbol = params.address as string;
-
-  console.log("[TokenTradePage] addressOrSymbol:", addressOrSymbol);
 
   const [mounted, setMounted] = useState(false);
 
@@ -38,12 +34,10 @@ export default function TokenTradePage() {
     : addressOrSymbol?.toUpperCase() || "";
 
   useEffect(() => {
-    console.log("[TokenTradePage] useEffect - setting mounted to true");
     setMounted(true);
   }, []);
 
   if (!mounted) {
-    console.log("[TokenTradePage] Not mounted yet, showing loading...");
     return (
       <main className="min-h-screen bg-okx-bg-primary text-okx-text-primary">
         <Navbar />
@@ -53,8 +47,6 @@ export default function TokenTradePage() {
       </main>
     );
   }
-
-  console.log("[TokenTradePage] Mounted, rendering TradingTerminal with symbol:", symbol);
 
   return (
     <main className="min-h-screen bg-okx-bg-primary text-okx-text-primary">

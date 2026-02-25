@@ -2,16 +2,16 @@
 
 import React, { useState, useEffect, Suspense, useMemo } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
 import { Navbar } from "@/components/layout/Navbar";
 import { PerpetualTradingTerminal } from "@/components/perpetual/PerpetualTradingTerminal";
 import { useOnChainTokenList, OnChainToken } from "@/hooks/common/useTokenList";
-import { getWebSocketServices } from "@/lib/websocket";
 import { useTranslations } from "next-intl";
 import { formatTimeAgo } from "@/utils/formatters";
 import { useETHPrice } from "@/hooks/common/useETHPrice";
 import { trackRender } from "@/lib/debug-render";
-import { MATCHING_ENGINE_URL } from "@/config/api";
+import { useTradingDataStore } from "@/lib/stores/tradingDataStore";
+import { useUnifiedWebSocket, getWebSocketManager } from "@/hooks/common/useUnifiedWebSocket";
+import { type Address } from "viem";
 
 // 榜单分类类型
 type RankingCategory = "hot" | "new" | "gainers" | "losers" | "marketCap" | "volume";
@@ -118,68 +118,25 @@ function PerpContent() {
   // 从链上获取代币列表
   const { tokens: onChainTokens, isLoading: isLoadingOnChain } = useOnChainTokenList();
 
-  // 从后端获取代币列表
-  const { data: backendTokens, isLoading: isLoadingBackend } = useQuery({
-    queryKey: ["perpTokenAssets"],
-    queryFn: async () => {
-      try {
-        const services = getWebSocketServices();
-        const response = await services.getTokenList({
-          page_size: 50,
-          sort_by: 'created_at',
-          sort_order: 'desc',
-          filter_by: 'all',
-        });
+  // 通过 useUnifiedWebSocket 建立 WSS 连接
+  const { isConnected: wsConnected } = useUnifiedWebSocket({ enabled: true });
 
-        if (response.success && response.tokens) {
-          // 将后端tokens转换为OnChainToken格式
-          return response.tokens.map((t: any) => ({
-            address: t.address as `0x${string}`,
-            name: t.name || "Unknown",
-            symbol: t.symbol || "???",
-            creator: (t.creator_address || "0x0") as `0x${string}`,
-            createdAt: t.created_at ? Math.floor(new Date(t.created_at).getTime() / 1000) : 0,
-            isGraduated: t.is_graduated || false,
-            isActive: true,
-            price: t.current_price || "0",
-            marketCap: t.fdv || "0",
-            soldSupply: t.sold_supply || "0",
-            metadataURI: t.image_url || t.metadata_uri || "",
-            perpEnabled: false, // 后端tokens默认不支持合约交易（需要链上确认）
-            lendingEnabled: false,
-            realETHReserve: "0",
-            isOnChain: false, // 标记为非链上token
-          }));
-        }
-        return [];
-      } catch (err) {
-        console.warn("Failed to fetch backend tokens:", err);
-        return [];
-      }
-    },
-    staleTime: 30000,
-    retry: 3,
-  });
-
-  // 合并链上和后端数据：链上数据优先（有perpEnabled状态）
-  const tokens = useMemo(() => {
-    const merged: (OnChainToken & { isOnChain?: boolean })[] = onChainTokens.map(t => ({ ...t, isOnChain: true }));
-    const onChainAddrs = new Set(onChainTokens.map(t => t.address.toLowerCase()));
-
-    // 添加后端中不在链上的tokens
-    if (backendTokens) {
-      for (const bt of backendTokens) {
-        if (!onChainAddrs.has(bt.address.toLowerCase())) {
-          merged.push(bt);
-        }
+  // 当链上 token 列表就绪后，通过 WSS 批量订阅所有 token
+  useEffect(() => {
+    if (onChainTokens.length > 0 && wsConnected) {
+      const manager = getWebSocketManager();
+      if (manager) {
+        manager.subscribeAll(onChainTokens.map(t => t.address as Address));
       }
     }
+  }, [onChainTokens, wsConnected]);
 
-    // 按创建时间排序
-    return merged.sort((a, b) => b.createdAt - a.createdAt);
-  }, [onChainTokens, backendTokens]);
+  // 代币列表直接使用链上数据
+  const tokens = useMemo(() => {
+    return [...onChainTokens].sort((a, b) => b.createdAt - a.createdAt);
+  }, [onChainTokens]);
 
-  const isLoading = isLoadingOnChain && isLoadingBackend;
+  const isLoading = isLoadingOnChain;
 
   // 从 URL 参数获取交易对符号
   const urlSymbol = searchParams.get("symbol");
@@ -188,60 +145,19 @@ function PerpContent() {
     setMounted(true);
   }, []);
 
-  // ✅ 使用 WebSocket 市场数据 (实时推送)
-  // TODO: 实现 WebSocket 订阅所有代币的市场数据
-  // 暂时保留 REST API 用于初始加载，但减少请求频率
-  const { data: tokenStats } = useQuery({
-    queryKey: ["tokenStats24h", tokens.map(t => t.address).join(",")],
-    queryFn: async () => {
-      const statsMap: Record<string, { priceChange24h: number; volume24h: number }> = {};
+  // 从 tradingDataStore 读取 WSS 推送的实时市场数据
+  const tokenStatsMap = useTradingDataStore(state => state.tokenStats);
 
-      // 并行获取所有代币的 K线数据 (仅用于初始加载)
-      await Promise.all(
-        tokens.slice(0, 20).map(async (token) => {
-          try {
-            // 获取 1h K线数据，取最近24根用于计算24h涨跌幅
-            const res = await fetch(`${MATCHING_ENGINE_URL}/api/kline/${token.address}?interval=1h&limit=24`);
-            if (res.ok) {
-              const json = await res.json();
-              const allKlines = json.klines || [];
-
-              // API 可能返回超过24根（从第一笔交易至今），只取最近24根
-              const klines = allKlines.length > 24 ? allKlines.slice(-24) : allKlines;
-
-              if (klines.length >= 2) {
-                const oldPrice = Number(klines[0].open);
-                const newPrice = Number(klines[klines.length - 1].close);
-
-                if (oldPrice > 0) {
-                  const priceChange = ((newPrice - oldPrice) / oldPrice) * 100;
-                  const volume24h = klines.reduce((sum: number, k: any) => sum + Number(k.volume || 0), 0);
-                  statsMap[token.address.toLowerCase()] = { priceChange24h: priceChange, volume24h };
-                }
-              }
-            }
-          } catch (e) {
-            // Ignore errors for individual tokens
-          }
-        })
-      );
-
-      return statsMap;
-    },
-    staleTime: 300000, // ✅ 5分钟内不重新获取 (原来1分钟)
-    enabled: tokens.length > 0,
-  });
-
-  // 为每个代币计算交易统计数据
+  // 为每个代币计算交易统计数据（合并链上 + WSS 数据）
   const tokensWithStats = useMemo(() => {
     return tokens.map((token) => {
       const marketCapFloat = parseFloat(token.marketCap) || 0;
       const marketCapUsd = marketCapFloat * ETH_PRICE_USD;
 
-      // 使用真实的 24h 数据，如果没有则显示 0
-      const stats = tokenStats?.[token.address.toLowerCase()];
-      const priceChange24h = stats?.priceChange24h ?? 0;
-      const volume24h = stats?.volume24h ?? 0;
+      // 从 WSS 推送的 tokenStats 读取实时数据
+      const stats = tokenStatsMap.get(token.address.toLowerCase() as Address);
+      const priceChange24h = parseFloat(stats?.priceChangePercent24h || "0");
+      const volume24h = parseFloat(stats?.volume24h || "0");
 
       // 热度分数：市值权重 + 交易量权重 + 毕业加成
       const hotScore = marketCapUsd * 0.5 + volume24h * 0.3 + (token.isGraduated ? 1000 : 0);
@@ -254,7 +170,7 @@ function PerpContent() {
         hotScore,
       };
     });
-  }, [tokens, tokenStats, ETH_PRICE_USD]);
+  }, [tokens, tokenStatsMap, ETH_PRICE_USD]);
 
   // 根据分类获取排序后的代币
   const getTokensByCategory = (category: RankingCategory) => {

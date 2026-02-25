@@ -18,7 +18,7 @@ interface UseHeatmapDataResult {
 export function useHeatmapData(
   token: string | undefined,
   timeRange: TimeRange = "1d",
-  refreshInterval: number = 5000
+  refreshInterval: number = 60000
 ): UseHeatmapDataResult {
   const [data, setData] = useState<LiquidationHeatmapData | null>(null);
   const [loading, setLoading] = useState(true);

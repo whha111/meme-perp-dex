@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { useAccount } from "wagmi";
 import { useTranslations } from "next-intl";
 import { Navbar } from "@/components/layout/Navbar";
@@ -9,6 +9,7 @@ import { TierProgress } from "@/components/referral/TierProgress";
 import { ReferralStats } from "@/components/referral/ReferralStats";
 import { InviteeList } from "@/components/referral/InviteeList";
 import { RewardHistory } from "@/components/referral/RewardHistory";
+import { MATCHING_ENGINE_URL } from "@/config/api";
 
 interface ReferrerInfo {
   code: string;
@@ -23,35 +24,139 @@ interface ReferrerInfo {
   currentLevel2Bps: number;
 }
 
+/**
+ * P2-1: /invite 页面接入真实 API
+ *
+ * 调用撮合引擎 Referral API:
+ *  - GET /api/referral/referrer?address=0x... — 获取推荐信息
+ *  - POST /api/referral/register — 如果用户还不是推荐人，自动注册
+ */
+
+// 根据邀请人数和交易量计算当前等级
+function calculateTier(totalInvites: number, totalVolume: string): number {
+  const vol = parseFloat(totalVolume);
+  if (totalInvites >= 100 || vol >= 50) return 3; // Diamond
+  if (totalInvites >= 20 || vol >= 10) return 2;  // Gold
+  if (totalInvites >= 5 || vol >= 1) return 1;    // Silver
+  return 0; // Bronze
+}
+
+// 根据等级获取返佣比例
+function getTierRebateBps(tier: number): { rebate: number; level2: number } {
+  switch (tier) {
+    case 3: return { rebate: 2500, level2: 500 };
+    case 2: return { rebate: 2000, level2: 400 };
+    case 1: return { rebate: 1500, level2: 300 };
+    default: return { rebate: 1000, level2: 200 };
+  }
+}
+
 export default function InvitePage() {
   const t = useTranslations("referral");
   const { address, isConnected } = useAccount();
   const [referrerInfo, setReferrerInfo] = useState<ReferrerInfo | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"overview" | "invitees" | "rewards">("overview");
 
-  // Mock data for demonstration - replace with real API calls
+  // P2-1: 从真实 API 获取推荐信息
+  const fetchReferrerInfo = useCallback(async (addr: string) => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      // 1. 尝试获取推荐人信息
+      const res = await fetch(`${MATCHING_ENGINE_URL}/api/referral/referrer?address=${addr}`);
+      const data = await res.json();
+
+      if (data.isReferrer && data.referrer) {
+        const r = data.referrer;
+        const totalInvites = (r.level1Referrals || 0) + (r.level2Referrals || 0);
+        const totalVolumeEth = (Number(r.totalVolumeReferred || "0") / 1e18).toFixed(4);
+        const totalEarnedEth = (Number(r.totalEarnings || "0") / 1e18).toFixed(6);
+        const pendingEth = (Number(r.pendingEarnings || "0") / 1e18).toFixed(6);
+        const tier = calculateTier(r.level1Referrals || 0, totalVolumeEth);
+        const bps = getTierRebateBps(tier);
+
+        setReferrerInfo({
+          code: r.code || "",
+          codeReadable: r.code || "",
+          tier,
+          totalInvites,
+          activeInvites: r.level1Referrals || 0,
+          totalVolume: totalVolumeEth,
+          totalEarned: totalEarnedEth,
+          pendingReward: pendingEth,
+          currentRebateBps: bps.rebate,
+          currentLevel2Bps: bps.level2,
+        });
+      } else {
+        // 2. 不是推荐人，自动注册
+        const registerRes = await fetch(`${MATCHING_ENGINE_URL}/api/referral/register`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ address: addr }),
+        });
+        const registerData = await registerRes.json();
+
+        if (registerData.success && registerData.referrer) {
+          const r = registerData.referrer;
+          setReferrerInfo({
+            code: r.code || "",
+            codeReadable: r.code || "",
+            tier: 0,
+            totalInvites: 0,
+            activeInvites: 0,
+            totalVolume: "0",
+            totalEarned: "0",
+            pendingReward: "0",
+            currentRebateBps: 1000,
+            currentLevel2Bps: 200,
+          });
+        } else {
+          // 注册也失败，显示默认空状态
+          setReferrerInfo({
+            code: "",
+            codeReadable: "",
+            tier: 0,
+            totalInvites: 0,
+            activeInvites: 0,
+            totalVolume: "0",
+            totalEarned: "0",
+            pendingReward: "0",
+            currentRebateBps: 1000,
+            currentLevel2Bps: 200,
+          });
+        }
+      }
+    } catch (e) {
+      console.error("[Invite] Failed to fetch referrer info:", e);
+      setError("Failed to load referral data. Please try again later.");
+      // 降级到空状态（不显示假数据）
+      setReferrerInfo({
+        code: "",
+        codeReadable: "",
+        tier: 0,
+        totalInvites: 0,
+        activeInvites: 0,
+        totalVolume: "0",
+        totalEarned: "0",
+        pendingReward: "0",
+        currentRebateBps: 1000,
+        currentLevel2Bps: 200,
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (isConnected && address) {
-      setLoading(true);
-      // Simulate API call
-      setTimeout(() => {
-        setReferrerInfo({
-          code: "0x" + address.slice(2, 10) + "0000000000000000000000000000000000000000000000000000",
-          codeReadable: "",
-          tier: 1,
-          totalInvites: 12,
-          activeInvites: 8,
-          totalVolume: "5.5",
-          totalEarned: "0.275",
-          pendingReward: "0.05",
-          currentRebateBps: 1500,
-          currentLevel2Bps: 300,
-        });
-        setLoading(false);
-      }, 500);
+      fetchReferrerInfo(address);
+    } else {
+      setReferrerInfo(null);
     }
-  }, [isConnected, address]);
+  }, [isConnected, address, fetchReferrerInfo]);
 
   const tierConfig = [
     { name: t("tierBronze"), minInvites: 0, minVolume: "0", rebateBps: 1000, level2Bps: 200 },
@@ -70,6 +175,13 @@ export default function InvitePage() {
           <h1 className="text-3xl font-bold mb-2">{t("title")}</h1>
           <p className="text-okx-text-secondary">{t("subtitle")}</p>
         </div>
+
+        {/* Error Banner */}
+        {error && (
+          <div className="mb-4 p-3 bg-okx-down/10 border border-okx-down/20 rounded-lg text-sm text-okx-down">
+            {error}
+          </div>
+        )}
 
         {!isConnected ? (
           <div className="bg-okx-bg-card border border-okx-border-primary rounded-lg p-12 text-center">
@@ -214,8 +326,8 @@ export default function InvitePage() {
                       </div>
                     )}
 
-                    {activeTab === "invitees" && <InviteeList />}
-                    {activeTab === "rewards" && <RewardHistory />}
+                    {activeTab === "invitees" && <InviteeList address={address} />}
+                    {activeTab === "rewards" && <RewardHistory address={address} />}
                   </div>
                 </div>
               </div>
