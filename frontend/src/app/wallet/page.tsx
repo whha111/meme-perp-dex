@@ -9,13 +9,15 @@
  * - 提现: Settlement → 派生钱包 → 主钱包
  */
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useTranslations } from "next-intl";
-import { useAccount } from "wagmi";
+import { useAccount, useReadContract, useBalance } from "wagmi";
 import { formatUnits, type Address } from "viem";
 import { Navbar } from "@/components/layout/Navbar";
 import { usePerpetualV2 } from "@/hooks/perpetual/usePerpetualV2";
 import { useTradingWallet } from "@/hooks/perpetual/useTradingWallet";
+import { useToast } from "@/components/shared/Toast";
+import { CONTRACTS, SETTLEMENT_V2_ABI, ERC20_ABI } from "@/lib/contracts";
 
 // ETH 本位: 使用 WETH 或原生 ETH
 const WETH_ADDRESS = (process.env.NEXT_PUBLIC_WETH_ADDRESS || "0x4200000000000000000000000000000000000006") as Address;
@@ -31,8 +33,8 @@ export default function WalletPage() {
     balance,
     deposit,
     withdraw,
-    isPending,
-    isConfirming,
+    isDepositing,
+    isWithdrawing,
     error,
   } = usePerpetualV2({
     tradingWalletAddress: tradingWalletAddr || undefined,
@@ -40,11 +42,46 @@ export default function WalletPage() {
     mainWalletAddress: address,
   });
 
-  // Extract balances from V2 hook
-  const derivedWalletBalance = balance?.walletBalance || 0n;
-  const settlementAvailable = balance?.settlementAvailable || 0n;
+  const { showToast } = useToast();
+
+  // ── On-chain balance reads (fallback when backend is down) ──
+  const { data: onChainWeth, refetch: refetchWeth } = useReadContract({
+    address: WETH_ADDRESS,
+    abi: ERC20_ABI,
+    functionName: "balanceOf",
+    args: tradingWalletAddr ? [tradingWalletAddr] : undefined,
+    query: { enabled: !!tradingWalletAddr },
+  });
+  const { data: onChainSettlement, refetch: refetchSettlement } = useReadContract({
+    address: CONTRACTS.SETTLEMENT_V2,
+    abi: SETTLEMENT_V2_ABI,
+    functionName: "userDeposits",
+    args: tradingWalletAddr ? [tradingWalletAddr] : undefined,
+    query: { enabled: !!tradingWalletAddr },
+  });
+  const { refetch: refetchNative } = useBalance({
+    address: tradingWalletAddr ?? undefined,
+  });
+
+  // Refresh all on-chain reads after deposit/withdraw
+  // Small delay ensures RPC node has indexed the latest block
+  const refreshOnChain = useCallback(() => {
+    refetchWeth();
+    refetchSettlement();
+    refetchNative();
+    // Second refetch after 2s to catch any RPC propagation delay
+    setTimeout(() => {
+      refetchWeth();
+      refetchSettlement();
+      refetchNative();
+    }, 2000);
+  }, [refetchWeth, refetchSettlement, refetchNative]);
+
+  // Extract balances: prefer backend, fallback to on-chain
+  const derivedWalletBalance = balance?.walletBalance || (onChainWeth as bigint) || 0n;
+  const settlementAvailable = balance?.settlementAvailable || (onChainSettlement as bigint) || 0n;
   const settlementLocked = balance?.settlementLocked || 0n;
-  const availableBalance = balance?.available || 0n;
+  const availableBalance = balance?.available || settlementAvailable;
   const lockedMargin = balance?.locked || 0n;
   const vaultBalance = availableBalance + lockedMargin;
 
@@ -53,7 +90,6 @@ export default function WalletPage() {
   const [activeTab, setActiveTab] = useState<"deposit" | "withdraw">("deposit");
   const [actionError, setActionError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
-  const [isWithdrawing, setIsWithdrawing] = useState(false);
 
   // Format ETH balance for display (18 decimals)
   const formatBalance = (balance: bigint | null | undefined): string => {
@@ -74,10 +110,14 @@ export default function WalletPage() {
     setActionError(null);
     setTxHash(null);
     try {
-      await deposit(WETH_ADDRESS, depositAmount);
+      const hash = await deposit(WETH_ADDRESS, depositAmount);
+      setTxHash(hash);
       setDepositAmount("");
+      refreshOnChain();
+      showToast(t("depositSuccess"), "success");
     } catch (err) {
       setActionError((err as Error).message);
+      showToast((err as Error).message, "error");
     }
   };
 
@@ -95,14 +135,15 @@ export default function WalletPage() {
     }
     setActionError(null);
     setTxHash(null);
-    setIsWithdrawing(true);
     try {
-      await withdraw(WETH_ADDRESS, withdrawAmount);
+      const hash = await withdraw(WETH_ADDRESS, withdrawAmount);
+      if (hash) setTxHash(hash);
       setWithdrawAmount("");
+      refreshOnChain();
+      showToast(t("withdrawSuccess"), "success");
     } catch (err) {
       setActionError((err as Error).message);
-    } finally {
-      setIsWithdrawing(false);
+      showToast((err as Error).message, "error");
     }
   };
 
@@ -262,13 +303,13 @@ export default function WalletPage() {
 
                     <button
                       onClick={handleDeposit}
-                      disabled={isPending || isConfirming || !depositAmount}
+                      disabled={isDepositing || !depositAmount}
                       className="w-full bg-okx-up text-black py-3 rounded-xl font-bold hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {isPending || isConfirming ? (
+                      {isDepositing ? (
                         <span className="flex items-center justify-center gap-2">
                           <LoadingSpinner />
-                          {isConfirming ? t("confirming") : t("processing")}
+                          {t("processing")}
                         </span>
                       ) : (
                         t("depositButton")
@@ -303,13 +344,13 @@ export default function WalletPage() {
 
                     <button
                       onClick={handleWithdraw}
-                      disabled={isPending || isConfirming || isWithdrawing || !withdrawAmount}
+                      disabled={isWithdrawing || !withdrawAmount}
                       className="w-full bg-okx-down text-white py-3 rounded-xl font-bold hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {isPending || isConfirming || isWithdrawing ? (
+                      {isWithdrawing ? (
                         <span className="flex items-center justify-center gap-2">
                           <LoadingSpinner />
-                          {isWithdrawing ? t("processing") : isConfirming ? t("confirming") : t("processing")}
+                          {t("processing")}
                         </span>
                       ) : (
                         t("withdrawButton")

@@ -17,16 +17,15 @@
  * - Token 数量: 1e18
  */
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Address, Hex } from "viem";
-import { createWalletClient, http, keccak256, parseEther } from "viem";
+import { createWalletClient, createPublicClient, http, keccak256, parseEther } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
-import { MATCHING_ENGINE_URL, SETTLEMENT_ADDRESS } from "@/config/api";
-import { CONTRACTS } from "@/lib/contracts";
-import { useWebSocketMessage } from "@/lib/websocket/hooks";
-import { MessageType } from "@/lib/websocket/types";
+import { MATCHING_ENGINE_URL, SETTLEMENT_ADDRESS, SETTLEMENT_V2_ADDRESS } from "@/config/api";
+import { CONTRACTS, SETTLEMENT_V2_ABI, ERC20_ABI } from "@/lib/contracts";
+import { useTradingDataStore } from "@/lib/stores/tradingDataStore";
 import {
   signOrder,
   submitOrder,
@@ -158,14 +157,14 @@ export interface UsePerpetualV2Return {
     side: "buy" | "sell";
     timestamp: number;
   }>;
-  submitMarketOrder: (token: Address, isLong: boolean, size: string, leverage: number) => Promise<{ success: boolean; orderId?: string; error?: string }>;
-  submitLimitOrder: (token: Address, isLong: boolean, size: string, leverage: number, price: string) => Promise<{ success: boolean; orderId?: string; error?: string }>;
+  submitMarketOrder: (token: Address, isLong: boolean, size: string, leverage: number, options?: { takeProfit?: string; stopLoss?: string }) => Promise<{ success: boolean; orderId?: string; error?: string }>;
+  submitLimitOrder: (token: Address, isLong: boolean, size: string, leverage: number, price: string, options?: { takeProfit?: string; stopLoss?: string }) => Promise<{ success: boolean; orderId?: string; error?: string }>;
   cancelPendingOrder: (orderId: string) => Promise<{ success: boolean; error?: string }>;
   closePair: (pairId: string) => Promise<{ success: boolean; error?: string }>;
   approveToken: (token: Address, amount: string) => Promise<void>;
   approveTradingWallet: (token: Address, amount?: string) => Promise<`0x${string}`>;
-  deposit: (token: Address, amount: string) => Promise<void>;
-  withdraw: (token: Address, amount: string) => Promise<void>;
+  deposit: (token: Address, amount: string) => Promise<string>;
+  withdraw: (token: Address, amount: string) => Promise<string | null>;
   refreshBalance: () => void;
   refreshPositions: () => void;
   refreshOrders: () => void;
@@ -174,6 +173,8 @@ export interface UsePerpetualV2Return {
   isLoading: boolean;
   isSigningOrder: boolean;
   isSubmittingOrder: boolean;
+  isDepositing: boolean;
+  isWithdrawing: boolean;
   isPending: boolean;
   isConfirming: boolean;
   error: string | null;
@@ -285,6 +286,8 @@ export function usePerpetualV2(props?: UsePerpetualV2Props): UsePerpetualV2Retur
   // ── Signing / submitting state ─────────────────────────────
   const [isSigningOrder, setIsSigningOrder] = useState(false);
   const [isSubmittingOrder, setIsSubmittingOrder] = useState(false);
+  const [isDepositing, setIsDepositing] = useState(false);
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // ── Derive local WalletClient from trading wallet signature ─
@@ -305,8 +308,17 @@ export function usePerpetualV2(props?: UsePerpetualV2Props): UsePerpetualV2Retur
     }
   }, [tradingWalletSignature]);
 
+  // Public client for reading chain state and waiting for tx receipts
+  const publicClient = useMemo(() => createPublicClient({
+    chain: baseSepolia,
+    transport: http(),
+  }), []);
+
   // Resolve settlement address: env var → hardcoded from contracts.ts
   const settlementAddress = (SETTLEMENT_ADDRESS || CONTRACTS.SETTLEMENT) as Address;
+
+  // Resolve SettlementV2 address (Merkle withdrawal system)
+  const settlementV2Address = (SETTLEMENT_V2_ADDRESS || CONTRACTS.SETTLEMENT_V2) as Address | undefined;
 
   // ── Balance: HTTP for initial load, WS for real-time updates ──
   const {
@@ -318,36 +330,25 @@ export function usePerpetualV2(props?: UsePerpetualV2Props): UsePerpetualV2Retur
     enabled: !!tradingWalletAddress,
     retry: 2,
     staleTime: 30_000,
-    refetchInterval: 30_000,
   });
 
   // WS balance kept in local state for instant updates
   const [wsBalance, setWsBalance] = useState<UserBalance | null>(null);
 
-  // Listen for WS "balance" messages → use pushed data directly
-  useWebSocketMessage<{ trader: string; availableBalance: string; usedMargin: string; unrealizedPnL: string; walletBalance?: string; settlementAvailable?: string; settlementLocked?: string }>(
-    MessageType.BALANCE,
-    useCallback((message: { data?: { trader?: string; availableBalance?: string; usedMargin?: string; unrealizedPnL?: string; walletBalance?: string; settlementAvailable?: string; settlementLocked?: string } }) => {
-      const d = message.data;
-      if (d && d.trader?.toLowerCase() === tradingWalletAddress?.toLowerCase()) {
-        const available = BigInt(d.availableBalance || "0");
-        const locked = BigInt(d.usedMargin || "0");
-        const unrealizedPnL = BigInt(d.unrealizedPnL || "0");
-        const walletBalance = BigInt(d.walletBalance || "0");
-        const settlementAvailable = BigInt(d.settlementAvailable || "0");
-        const settlementLocked = BigInt(d.settlementLocked || "0");
-        setWsBalance({
-          available,
-          locked,
-          unrealizedPnL,
-          equity: available + locked + unrealizedPnL,
-          walletBalance,
-          settlementAvailable,
-          settlementLocked,
-        });
-      }
-    }, [tradingWalletAddress])
-  );
+  // System B (WebSocketManager) → tradingDataStore.balance
+  // When store balance changes, update local wsBalance state
+  const storeBalance = useTradingDataStore(state => state.balance);
+  useEffect(() => {
+    if (storeBalance) {
+      setWsBalance({
+        available: storeBalance.available,
+        locked: storeBalance.locked,
+        unrealizedPnL: storeBalance.unrealizedPnL,
+        equity: storeBalance.equity,
+        walletBalance: storeBalance.walletBalance,
+      });
+    }
+  }, [storeBalance]);
 
   // WS takes priority, HTTP is fallback
   const balance = wsBalance ?? httpBalance ?? null;
@@ -388,15 +389,15 @@ export function usePerpetualV2(props?: UsePerpetualV2Props): UsePerpetualV2Retur
     }));
   }, [positionsData]);
 
-  // WS: refetch positions on position updates (实时刷新)
-  useWebSocketMessage(MessageType.POSITIONS, useCallback(() => {
-    if (tradingWalletAddress) {
-      // 使用 refetchQueries 立即重新获取数据，而不是 invalidateQueries
+  // System B → tradingDataStore.positions → refetch HTTP positions
+  const storePositions = useTradingDataStore(state => state.positions);
+  useEffect(() => {
+    if (storePositions.length > 0 && tradingWalletAddress) {
       queryClient.refetchQueries({
         queryKey: ["perpetual-positions", tradingWalletAddress],
       });
     }
-  }, [tradingWalletAddress, queryClient]));
+  }, [storePositions, tradingWalletAddress, queryClient]);
 
   // ── Orders from backend API ────────────────────────────────
   const { data: ordersData } = useQuery({
@@ -414,14 +415,15 @@ export function usePerpetualV2(props?: UsePerpetualV2Props): UsePerpetualV2Retur
     return ordersData.filter((o) => PENDING_STATUSES.has(o.status));
   }, [ordersData]);
 
-  // WS: refetch orders on order updates (实时刷新)
-  useWebSocketMessage(MessageType.ORDERS, useCallback(() => {
+  // System B → tradingDataStore.pendingOrders → refetch HTTP orders
+  const storePendingOrders = useTradingDataStore(state => state.pendingOrders);
+  useEffect(() => {
     if (tradingWalletAddress) {
       queryClient.refetchQueries({
         queryKey: ["perpetual-orders", tradingWalletAddress],
       });
     }
-  }, [tradingWalletAddress, queryClient]));
+  }, [storePendingOrders, tradingWalletAddress, queryClient]);
 
   // ── Refresh callbacks ──────────────────────────────────────
   const refreshBalance = useCallback(() => {
@@ -463,7 +465,7 @@ export function usePerpetualV2(props?: UsePerpetualV2Props): UsePerpetualV2Retur
 
   // ── Submit Market Order ────────────────────────────────────
   const submitMarketOrder = useCallback(
-    async (token: Address, isLong: boolean, size: string, leverage: number) => {
+    async (token: Address, isLong: boolean, size: string, leverage: number, options?: { takeProfit?: string; stopLoss?: string }) => {
       if (!tradingWalletClient || !tradingWalletAddress) {
         return { success: false, error: "交易钱包未连接" };
       }
@@ -489,9 +491,9 @@ export function usePerpetualV2(props?: UsePerpetualV2Props): UsePerpetualV2Retur
         const signedOrder = await signOrder(tradingWalletClient, settlementAddress, params);
         setIsSigningOrder(false);
 
-        // 4. Submit to matching engine
+        // 4. Submit to matching engine (P2-2: pass TP/SL)
         setIsSubmittingOrder(true);
-        const result = await submitOrder(signedOrder);
+        const result = await submitOrder(signedOrder, options);
         setIsSubmittingOrder(false);
 
         if (result.success) {
@@ -518,7 +520,7 @@ export function usePerpetualV2(props?: UsePerpetualV2Props): UsePerpetualV2Retur
 
   // ── Submit Limit Order ─────────────────────────────────────
   const submitLimitOrder = useCallback(
-    async (token: Address, isLong: boolean, size: string, leverage: number, price: string) => {
+    async (token: Address, isLong: boolean, size: string, leverage: number, price: string, options?: { takeProfit?: string; stopLoss?: string }) => {
       if (!tradingWalletClient || !tradingWalletAddress) {
         return { success: false, error: "交易钱包未连接" };
       }
@@ -546,7 +548,7 @@ export function usePerpetualV2(props?: UsePerpetualV2Props): UsePerpetualV2Retur
         setIsSigningOrder(false);
 
         setIsSubmittingOrder(true);
-        const result = await submitOrder(signedOrder);
+        const result = await submitOrder(signedOrder, options);
         setIsSubmittingOrder(false);
 
         if (result.success) {
@@ -651,11 +653,41 @@ export function usePerpetualV2(props?: UsePerpetualV2Props): UsePerpetualV2Retur
     throw new Error("交易钱包授权功能待实现");
   }, []);
 
-  const deposit = useCallback(async (_token: Address, _amount: string) => {
-    throw new Error("充值功能待实现");
-  }, []);
+  const deposit = useCallback(async (token: Address, amount: string): Promise<string> => {
+    if (!tradingWalletClient) throw new Error("交易钱包未连接");
+    if (!settlementV2Address) throw new Error("SettlementV2 合约未配置");
 
-  const withdraw = useCallback(async (token: Address, amount: string) => {
+    const amountWei = parseEther(amount);
+    if (amountWei <= 0n) throw new Error("无效的充值金额");
+
+    setIsDepositing(true);
+    try {
+      // 1. Approve WETH → SettlementV2
+      const approveTx = await tradingWalletClient.writeContract({
+        address: token,
+        abi: ERC20_ABI,
+        functionName: "approve",
+        args: [settlementV2Address, amountWei],
+      });
+      await publicClient.waitForTransactionReceipt({ hash: approveTx });
+
+      // 2. Deposit to SettlementV2
+      const depositTx = await tradingWalletClient.writeContract({
+        address: settlementV2Address,
+        abi: SETTLEMENT_V2_ABI,
+        functionName: "deposit",
+        args: [amountWei],
+      });
+      await publicClient.waitForTransactionReceipt({ hash: depositTx });
+
+      refreshBalance();
+      return depositTx;
+    } finally {
+      setIsDepositing(false);
+    }
+  }, [tradingWalletClient, settlementV2Address, publicClient, refreshBalance]);
+
+  const withdraw = useCallback(async (token: Address, amount: string): Promise<string | null> => {
     if (!tradingWalletAddress) throw new Error("交易钱包未连接");
     if (!mainWalletAddress) throw new Error("主钱包地址未提供");
 
@@ -663,20 +695,53 @@ export function usePerpetualV2(props?: UsePerpetualV2Props): UsePerpetualV2Retur
     const amountInWei = parseEther(amount);
     if (amountInWei <= 0n) throw new Error("无效的提现金额");
 
-    const res = await fetch(`${MATCHING_ENGINE_URL}/api/wallet/withdraw`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        tradingWallet: tradingWalletAddress,
-        mainWallet: mainWalletAddress,
-        amount: amountInWei.toString(),
-        token,
-      }),
-    });
-    const data = await res.json();
-    if (!data.success) throw new Error(data.error || "提现失败");
-    refreshBalance();
-  }, [tradingWalletAddress, mainWalletAddress, refreshBalance]);
+    setIsWithdrawing(true);
+    try {
+      // Step 1: 请求后端生成 Merkle proof + EIP-712 签名
+      let data: { success: boolean; error?: string; authorization?: { userEquity: string; merkleProof: string[]; deadline: string; signature: string } };
+      try {
+        const res = await fetch(`${MATCHING_ENGINE_URL}/api/wallet/withdraw`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tradingWallet: tradingWalletAddress,
+            mainWallet: mainWalletAddress,
+            amount: amountInWei.toString(),
+            token,
+          }),
+        });
+        data = await res.json();
+      } catch {
+        throw new Error("提现服务暂时不可用，请稍后重试");
+      }
+      if (!data.success) throw new Error(data.error || "提现失败");
+
+      // Step 2: 如果后端返回 Merkle 授权信息，提交到链上 SettlementV2
+      let withdrawTxHash: string | null = null;
+      if (data.authorization && settlementV2Address && tradingWalletClient) {
+        const { userEquity, merkleProof, deadline, signature } = data.authorization;
+        const txHash = await tradingWalletClient.writeContract({
+          address: settlementV2Address,
+          abi: SETTLEMENT_V2_ABI,
+          functionName: "withdraw",
+          args: [
+            BigInt(amountInWei),
+            BigInt(userEquity),
+            merkleProof as `0x${string}`[],
+            BigInt(deadline),
+            signature as `0x${string}`,
+          ],
+        });
+        await publicClient.waitForTransactionReceipt({ hash: txHash });
+        withdrawTxHash = txHash;
+      }
+
+      refreshBalance();
+      return withdrawTxHash;
+    } finally {
+      setIsWithdrawing(false);
+    }
+  }, [tradingWalletAddress, mainWalletAddress, tradingWalletClient, settlementV2Address, publicClient, refreshBalance]);
 
   return {
     mainWalletAddress: mainWalletAddress,
@@ -704,6 +769,8 @@ export function usePerpetualV2(props?: UsePerpetualV2Props): UsePerpetualV2Retur
     isLoading: isBalanceLoading,
     isSigningOrder,
     isSubmittingOrder,
+    isDepositing,
+    isWithdrawing,
     isPending: false,
     isConfirming: false,
     error,

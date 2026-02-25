@@ -658,6 +658,8 @@
     "processing": "처리 중...",
     "confirming": "확인 중...",
     "transactionSent": "트랜잭션 전송됨",
+    "depositSuccess": "입금이 완료되었습니다!",
+    "withdrawSuccess": "출금이 완료되었습니다!",
     "notConnected": {
       "title": "지갑 연결",
       "description": "잔액을 확인하고 자금을 관리하려면 지갑을 연결하세요"
@@ -721,6 +723,7 @@
     "enterAmount": "금액을 입력하세요",
     "depositing": "ETH 입금 중...",
     "depositSuccess": "정산 컨트랙트에 성공적으로 입금되었습니다!",
+    "withdrawSuccess": "정산 컨트랙트에서 성공적으로 출금되었습니다!",
     "depositFailed": "입금 실패",
     "processing": "처리 중..."
   },
@@ -914,7 +917,13 @@
     "riskDistance": "리스크 거리",
     "safe": "안전",
     "positionValue": "포지션 가치",
-    "time": "시간"
+    "time": "시간",
+    "depositFirst": "먼저 입금해주세요",
+    "myPositions": "내 포지션",
+    "marketClose": "시장가 청산",
+    "enterLimitPrice": "지정가를 입력해주세요",
+    "tpPrice": "익절 가격",
+    "slPrice": "손절 가격"
   },
   "earnings": {
     "title": "수익 센터",

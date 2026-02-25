@@ -35,6 +35,9 @@ export const CONTRACTS = {
   USD1: (process.env.NEXT_PUBLIC_USD1_ADDRESS || "0xE5Cc3d23f446A000B903624f6a439DEe617dD6F3") as Address,
   WETH: (process.env.NEXT_PUBLIC_WETH_ADDRESS || "0x4200000000000000000000000000000000000006") as Address,
 
+  // SettlementV2 (Merkle Withdrawal System - Redeployed 2026-02-25, Ownable2Step)
+  SETTLEMENT_V2: (process.env.NEXT_PUBLIC_SETTLEMENT_V2_ADDRESS || "0x45c4f8c301569Bb073473D11aE526408934E2177") as Address,
+
   // Other contracts
   AMM: (process.env.NEXT_PUBLIC_AMM_ADDRESS || "0xfCaf1a4E6840D60C9551C05F9940AE5de9c07976") as Address,
   LENDING_POOL: (process.env.NEXT_PUBLIC_LENDING_POOL_ADDRESS || "0x7Ddb15B5E680D8a74FE44958d18387Bb3999C633") as Address,
@@ -261,6 +264,97 @@ export const ERC20_ABI = [
     outputs: [{ type: "bool" }],
     stateMutability: "nonpayable",
     type: "function",
+  },
+] as const;
+
+/**
+ * SettlementV2 ABI (Merkle Withdrawal System)
+ */
+export const SETTLEMENT_V2_ABI = [
+  {
+    inputs: [{ name: "amount", type: "uint256" }],
+    name: "deposit",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "to", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "depositFor",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "amount", type: "uint256" },
+      { name: "userEquity", type: "uint256" },
+      { name: "merkleProof", type: "bytes32[]" },
+      { name: "deadline", type: "uint256" },
+      { name: "signature", type: "bytes" },
+    ],
+    name: "withdraw",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "account", type: "address" }],
+    name: "userDeposits",
+    outputs: [{ type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "collateralToken",
+    outputs: [{ type: "address" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "currentStateRoot",
+    outputs: [{ type: "bytes32" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "platformSigner",
+    outputs: [{ type: "address" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "account", type: "address" }],
+    name: "withdrawalNonces",
+    outputs: [{ type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  // Events
+  {
+    anonymous: false,
+    inputs: [
+      { indexed: true, name: "user", type: "address" },
+      { indexed: false, name: "amount", type: "uint256" },
+    ],
+    name: "Deposited",
+    type: "event",
+  },
+  {
+    anonymous: false,
+    inputs: [
+      { indexed: true, name: "user", type: "address" },
+      { indexed: false, name: "amount", type: "uint256" },
+      { indexed: false, name: "nonce", type: "uint256" },
+    ],
+    name: "Withdrawn",
+    type: "event",
   },
 ] as const;
 

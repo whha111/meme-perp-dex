@@ -658,6 +658,8 @@
     "processing": "処理中...",
     "confirming": "確認中...",
     "transactionSent": "トランザクション送信済み",
+    "depositSuccess": "入金が完了しました！",
+    "withdrawSuccess": "出金が完了しました！",
     "notConnected": {
       "title": "ウォレットを接続",
       "description": "残高を確認し資金を管理するにはウォレットを接続してください"
@@ -721,6 +723,7 @@
     "enterAmount": "金額を入力してください",
     "depositing": "ETHを入金中...",
     "depositSuccess": "決済コントラクトへの入金に成功しました！",
+    "withdrawSuccess": "決済コントラクトからの出金に成功しました！",
     "depositFailed": "入金に失敗しました",
     "processing": "処理中..."
   },
@@ -914,7 +917,13 @@
     "riskDistance": "リスク距離",
     "safe": "安全",
     "positionValue": "ポジション価値",
-    "time": "時間"
+    "time": "時間",
+    "depositFirst": "先に入金してください",
+    "myPositions": "マイポジション",
+    "marketClose": "成行決済",
+    "enterLimitPrice": "指値を入力してください",
+    "tpPrice": "利確価格",
+    "slPrice": "損切価格"
   },
   "earnings": {
     "title": "収益センター",

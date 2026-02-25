@@ -773,6 +773,7 @@
     "enterAmount": "请输入金额",
     "depositing": "正在存入 ETH...",
     "depositSuccess": "成功存入结算合约！",
+    "withdrawSuccess": "成功从结算合约提现！",
     "depositFailed": "存入失败",
     "processing": "处理中..."
   },
@@ -976,7 +977,13 @@
     "riskDistance": "风险距离",
     "safe": "安全",
     "positionValue": "仓位价值",
-    "time": "时间"
+    "time": "时间",
+    "depositFirst": "请先充值",
+    "myPositions": "我的仓位",
+    "marketClose": "市价平仓",
+    "enterLimitPrice": "请输入限价",
+    "tpPrice": "止盈价格",
+    "slPrice": "止损价格"
   },
   "walletManagement": {
     "title": "钱包管理",
@@ -995,6 +1002,8 @@
     "processing": "处理中...",
     "confirming": "确认中...",
     "transactionSent": "交易已发送",
+    "depositSuccess": "成功存入结算合约！",
+    "withdrawSuccess": "成功从结算合约提现！",
     "notConnected": {
       "title": "请连接钱包",
       "description": "连接您的钱包以查看余额和管理资金"

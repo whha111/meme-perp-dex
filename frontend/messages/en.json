@@ -773,6 +773,7 @@
     "enterAmount": "Please enter an amount",
     "depositing": "Depositing ETH...",
     "depositSuccess": "Successfully deposited to Settlement!",
+    "withdrawSuccess": "Successfully withdrawn from Settlement!",
     "depositFailed": "Deposit failed",
     "processing": "Processing..."
   },
@@ -976,7 +977,13 @@
     "riskDistance": "Risk Distance",
     "safe": "Safe",
     "positionValue": "Position Value",
-    "time": "Time"
+    "time": "Time",
+    "depositFirst": "Deposit First",
+    "myPositions": "My Positions",
+    "marketClose": "Market Close",
+    "enterLimitPrice": "Please enter limit price",
+    "tpPrice": "TP Price",
+    "slPrice": "SL Price"
   },
   "walletManagement": {
     "title": "Wallet Management",
@@ -995,6 +1002,8 @@
     "processing": "Processing...",
     "confirming": "Confirming...",
     "transactionSent": "Transaction Sent",
+    "depositSuccess": "Deposit successful!",
+    "withdrawSuccess": "Withdrawal successful!",
     "notConnected": {
       "title": "Connect Wallet",
       "description": "Connect your wallet to view balances and manage funds"
