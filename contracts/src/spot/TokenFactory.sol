@@ -41,6 +41,8 @@ interface IMemeTokenV2 {
 interface IPriceFeedFactory {
     function addSupportedTokenFromFactory(address token, uint256 initialPrice) external;
     function updateTokenPriceFromFactory(address token, uint256 newPrice) external;
+    // P0-2: 毕业后通知 PriceFeed 设置 Uniswap V2 Pair
+    function setTokenUniswapPair(address token, address pair) external;
 }
 
 // [C-01/C-05] Helper library for price sync to avoid stack too deep
@@ -141,6 +143,12 @@ contract TokenFactory is Ownable, ReentrancyGuard, Pausable, ICurveEvents {
     // WETH 地址 (Base Sepolia)
     address public constant WETH = 0x4200000000000000000000000000000000000006;
 
+    // P0-2: 毕业后的 Uniswap V2 Pair 地址 (token => pair)
+    mapping(address => address) public uniswapPairs;
+
+    // P2-6: 重名代币检查 (symbol => used)
+    mapping(string => bool) private _symbolUsed;
+
     // 创建者累计收益 (token => 累计ETH)
     mapping(address => uint256) public creatorEarnings;
 
@@ -170,6 +178,7 @@ contract TokenFactory is Ownable, ReentrancyGuard, Pausable, ICurveEvents {
     error NoEarningsToClaim();       // 无收益可提取
     error ReferrerAlreadySet();      // 邀请人已设置
     error CannotReferSelf();         // 不能邀请自己
+    error SymbolAlreadyExists();     // P2-6: 代币符号已存在
 
     // ══════════════════════════════════════════════════════════════════════════════
     // EVENTS
@@ -231,6 +240,10 @@ contract TokenFactory is Ownable, ReentrancyGuard, Pausable, ICurveEvents {
         uint256 minTokensOut
     ) external payable nonReentrant whenNotPaused returns (address tokenAddress) {
         if (msg.value < serviceFee) revert InsufficientFee(msg.value, serviceFee);
+
+        // P2-6: 防止重名代币
+        if (_symbolUsed[symbol]) revert SymbolAlreadyExists();
+        _symbolUsed[symbol] = true;
 
         uint256 buyAmount = msg.value - serviceFee;
 
@@ -585,6 +598,13 @@ contract TokenFactory is Ownable, ReentrancyGuard, Pausable, ICurveEvents {
 
             address factory = IUniswapV2Router02(uniswapV2Router).factory();
             address pairAddress = IUniswapV2Factory(factory).getPair(tokenAddress, WETH);
+
+            // P0-2: 存储 Uniswap V2 Pair 地址并通知 PriceFeed
+            uniswapPairs[tokenAddress] = pairAddress;
+            if (priceFeed != address(0) && pairAddress != address(0)) {
+                // 通知 PriceFeed 设置 Uniswap Pair（毕业后价格源切换）
+                try IPriceFeedFactory(priceFeed).setTokenUniswapPair(tokenAddress, pairAddress) {} catch {}
+            }
 
             // 移除 Minter 权限
             IMemeTokenV2(tokenAddress).removeMinter(address(this));

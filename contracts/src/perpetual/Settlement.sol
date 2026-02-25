@@ -154,6 +154,19 @@ contract Settlement is Ownable, ReentrancyGuard, Pausable, EIP712 {
     uint256 public totalLockedMargin;
 
     // ============================================================
+    // ADL Timeout State (P1-4)
+    // ============================================================
+
+    /// @notice ADL 超时时间（5 分钟）— 撮合引擎未响应时的后备
+    uint256 public constant ADL_TIMEOUT = 5 minutes;
+
+    /// @notice ADL 是否处于激活状态（保险基金耗尽时激活）
+    bool public adlActive;
+
+    /// @notice ADL 上次触发时间
+    uint256 public lastADLTriggerTime;
+
+    // ============================================================
     // Events
     // ============================================================
 
@@ -177,6 +190,8 @@ contract Settlement is Ownable, ReentrancyGuard, Pausable, EIP712 {
     event InsuranceInjected(uint256 amount, uint256 timestamp);
     event EmergencyPaused(address indexed by, string reason);
     event EmergencyUnpaused(address indexed by);
+    event ForceADLExecuted(uint256 indexed pairId, uint256 exitPrice, address indexed executor);
+    event ADLResolved(address indexed by);
 
     // ============================================================
     // Errors
@@ -200,6 +215,8 @@ contract Settlement is Ownable, ReentrancyGuard, Pausable, EIP712 {
     error PositionLimitExceeded();
     error LeverageTooHigh();
     error PriceDeviationTooLarge();
+    error NoActiveADL();
+    error ADLTimeoutNotReached();
 
     // ============================================================
     // Constructor
@@ -507,6 +524,44 @@ contract Settlement is Ownable, ReentrancyGuard, Pausable, EIP712 {
     }
 
     // ============================================================
+    // Batch PnL Settlement (链下→链上同步)
+    // ============================================================
+
+    event BatchPnLSettled(uint256 transferCount, uint256 totalAmount, uint256 timestamp);
+
+    /**
+     * @notice 批量结算链下 PnL 到链上余额
+     * @dev 仅 authorizedMatcher 可调用。用于将链下撮合产生的盈亏同步到链上。
+     *      from[i] 的 available 减少 amounts[i]，to[i] 的 available 增加 amounts[i]。
+     *      这确保盈利用户可以从链上提取利润。
+     * @param from 亏损方地址数组（余额减少）
+     * @param to 盈利方地址数组（余额增加）
+     * @param amounts 转移金额数组（1e18 精度）
+     */
+    function batchSettlePnL(
+        address[] calldata from,
+        address[] calldata to,
+        uint256[] calldata amounts
+    ) external nonReentrant whenNotPaused {
+        if (!authorizedMatchers[msg.sender]) revert Unauthorized();
+        require(from.length == to.length && to.length == amounts.length, "Length mismatch");
+        require(from.length > 0, "Empty batch");
+        require(from.length <= 200, "Batch too large");
+
+        uint256 totalAmount;
+        for (uint256 i = 0; i < from.length; i++) {
+            require(amounts[i] > 0, "Zero amount");
+            require(balances[from[i]].available >= amounts[i], "Insufficient from balance");
+
+            balances[from[i]].available -= amounts[i];
+            balances[to[i]].available += amounts[i];
+            totalAmount += amounts[i];
+        }
+
+        emit BatchPnLSettled(from.length, totalAmount, block.timestamp);
+    }
+
+    // ============================================================
     // Matcher Functions
     // ============================================================
 
@@ -651,6 +706,49 @@ contract Settlement is Ownable, ReentrancyGuard, Pausable, EIP712 {
         for (uint256 i = 0; i < pairIds.length; i++) {
             if (pairedPositions[pairIds[i]].status == PositionStatus.ACTIVE) _closePair(pairIds[i], exitPrices[i]);
         }
+        // 匹配引擎已响应 ADL，重置状态
+        if (adlActive) {
+            adlActive = false;
+            emit ADLResolved(msg.sender);
+        }
+    }
+
+    /**
+     * @notice P1-4: 强制 ADL — 撮合引擎未响应时的后备
+     * @dev 当 ADL 被触发（保险基金耗尽）后 5 分钟，如果撮合引擎未执行 ADL，
+     *      任何人可调用此函数强制平仓指定仓位。使用链上存储的最新价格。
+     *      这是一个安全后备机制，确保系统不会因撮合引擎宕机而陷入僵局。
+     * @param pairId 要强制平仓的配对仓位 ID
+     */
+    function forceADL(uint256 pairId) external nonReentrant whenNotPaused {
+        if (!adlActive) revert NoActiveADL();
+        if (block.timestamp < lastADLTriggerTime + ADL_TIMEOUT) revert ADLTimeoutNotReached();
+
+        PairedPosition storage pos = pairedPositions[pairId];
+        if (pos.status != PositionStatus.ACTIVE) revert PositionNotActive();
+
+        uint256 exitPrice = tokenPrices[pos.token];
+        require(exitPrice > 0, "No price available");
+
+        _closePair(pairId, exitPrice);
+
+        // 如果保险基金已恢复（通过 funding fee 等），可以解除 ADL 状态
+        if (insuranceFund != address(0) && balances[insuranceFund].available > 0) {
+            adlActive = false;
+            emit ADLResolved(msg.sender);
+        }
+
+        emit ForceADLExecuted(pairId, exitPrice, msg.sender);
+    }
+
+    /**
+     * @notice 由授权 matcher 或 owner 手动解除 ADL 状态
+     * @dev 当 ADL 情况已通过其他方式解决时调用
+     */
+    function resolveADL() external {
+        if (!authorizedMatchers[msg.sender] && msg.sender != owner()) revert Unauthorized();
+        adlActive = false;
+        emit ADLResolved(msg.sender);
     }
 
     function _closePair(uint256 pairId, uint256 exitPrice) internal {
@@ -689,6 +787,9 @@ contract Settlement is Ownable, ReentrancyGuard, Pausable, EIP712 {
                 uint256 fundBal = balances[insuranceFund].available;
                 if (fundBal >= deficit) { balances[insuranceFund].available -= deficit; balances[pos.longTrader].available += deficit; }
                 else { if (fundBal > 0) { balances[insuranceFund].available = 0; balances[pos.longTrader].available += fundBal; deficit -= fundBal; }
+                    // P1-4: 激活 ADL 超时机制
+                    adlActive = true;
+                    lastADLTriggerTime = block.timestamp;
                     emit ADLTriggered(pos.pairId, 0, pos.longTrader, deficit, deficit); }
             }
         } else {
@@ -701,6 +802,9 @@ contract Settlement is Ownable, ReentrancyGuard, Pausable, EIP712 {
                 uint256 fundBal = balances[insuranceFund].available;
                 if (fundBal >= deficit) { balances[insuranceFund].available -= deficit; balances[pos.shortTrader].available += deficit; }
                 else { if (fundBal > 0) { balances[insuranceFund].available = 0; balances[pos.shortTrader].available += fundBal; deficit -= fundBal; }
+                    // P1-4: 激活 ADL 超时机制
+                    adlActive = true;
+                    lastADLTriggerTime = block.timestamp;
                     emit ADLTriggered(pos.pairId, 0, pos.shortTrader, deficit, deficit); }
             }
         }

@@ -4,10 +4,18 @@ pragma solidity ^0.8.24;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "../interfaces/IPriceFeed.sol";
 
+/// @notice Uniswap V2 Pair 接口（用于毕业后价格读取）
+interface IUniswapV2Pair {
+    function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
+    function token0() external view returns (address);
+    function token1() external view returns (address);
+}
+
 /**
  * @title PriceFeed
- * @notice 简化版价格合约 - 100%硬锚Bonding Curve现货价格
- * @dev 内盘合约价格直接使用TokenFactory的Bonding Curve价格，不做任何偏离
+ * @notice 价格合约 - 支持 Bonding Curve + Uniswap V2 双价格源
+ * @dev 毕业前：TokenFactory 调用 updateTokenPriceFromFactory 更新价格
+ *      毕业后：任何人可调用 updateTokenPriceFromUniswap 从 Uniswap V2 Pair 读取价格
  */
 contract PriceFeed is Ownable, IPriceFeed {
     // ============================================================
@@ -23,11 +31,18 @@ contract PriceFeed is Ownable, IPriceFeed {
     // TokenFactory 合约地址
     address public tokenFactory;
 
+    // WETH 地址（用于 Uniswap V2 价格计算中确定 reserve 顺序）
+    address public weth;
+
     // 多代币支持
     mapping(address => bool) public supportedTokens;
     mapping(address => uint256) public tokenLastPrice;
     mapping(address => uint256) public tokenLastUpdateTime;
     address[] public tokenList;
+
+    // P0-2: Uniswap V2 Pair 地址（毕业后价格源）
+    // token address => Uniswap V2 Pair address
+    mapping(address => address) public tokenUniswapPair;
 
     // ============================================================
     // Events
@@ -37,6 +52,8 @@ contract PriceFeed is Ownable, IPriceFeed {
     event TokenAdded(address indexed token);
     event TokenRemoved(address indexed token);
     event TokenFactorySet(address indexed tokenFactory);
+    event WETHSet(address indexed weth);
+    event UniswapPairSet(address indexed token, address indexed pair);
 
     // ============================================================
     // Errors
@@ -47,6 +64,8 @@ contract PriceFeed is Ownable, IPriceFeed {
     error ZeroAddress();
     error TokenNotSupported();
     error TokenAlreadySupported();
+    error NoUniswapPair();
+    error WETHNotSet();
 
     // ============================================================
     // Modifiers
@@ -75,6 +94,29 @@ contract PriceFeed is Ownable, IPriceFeed {
         if (_tokenFactory == address(0)) revert ZeroAddress();
         tokenFactory = _tokenFactory;
         emit TokenFactorySet(_tokenFactory);
+    }
+
+    /**
+     * @notice 设置 WETH 地址（用于 Uniswap V2 价格计算）
+     * @param _weth WETH 地址
+     */
+    function setWETH(address _weth) external onlyOwner {
+        if (_weth == address(0)) revert ZeroAddress();
+        weth = _weth;
+        emit WETHSet(_weth);
+    }
+
+    /**
+     * @notice 设置代币的 Uniswap V2 Pair 地址（毕业后价格源）
+     * @dev 只有 owner 或 TokenFactory 可以调用
+     * @param token 代币地址
+     * @param pair Uniswap V2 Pair 地址
+     */
+    function setTokenUniswapPair(address token, address pair) external {
+        if (msg.sender != owner() && msg.sender != tokenFactory) revert Unauthorized();
+        if (token == address(0) || pair == address(0)) revert ZeroAddress();
+        tokenUniswapPair[token] = pair;
+        emit UniswapPairSet(token, pair);
     }
 
     /**
@@ -154,6 +196,43 @@ contract PriceFeed is Ownable, IPriceFeed {
         tokenLastUpdateTime[token] = block.timestamp;
 
         emit TokenPriceUpdated(token, newPrice, block.timestamp);
+    }
+
+    /**
+     * @notice P0-2: 从 Uniswap V2 Pair 读取价格（毕业后价格源）
+     * @dev 无权限限制 — 任何人/Keeper 可调用刷新价格
+     *      价格计算: ETH_reserve / Token_reserve * 1e18 (ETH per Token, 18位精度)
+     * @param token 代币地址
+     */
+    function updateTokenPriceFromUniswap(address token) external {
+        if (!supportedTokens[token]) revert TokenNotSupported();
+        if (weth == address(0)) revert WETHNotSet();
+
+        address pair = tokenUniswapPair[token];
+        if (pair == address(0)) revert NoUniswapPair();
+
+        (uint112 reserve0, uint112 reserve1, ) = IUniswapV2Pair(pair).getReserves();
+        if (reserve0 == 0 || reserve1 == 0) revert InvalidPrice();
+
+        // Uniswap V2 中 token0 < token1（按地址字典序排列）
+        // 需要根据 WETH 和 token 的地址顺序确定 reserve 含义
+        uint256 price;
+        if (weth < token) {
+            // WETH 是 token0: reserve0 = WETH, reserve1 = MemeToken
+            // price(ETH/Token) = reserve0 / reserve1, 扩展到 1e18
+            price = (uint256(reserve0) * PRICE_PRECISION) / uint256(reserve1);
+        } else {
+            // WETH 是 token1: reserve0 = MemeToken, reserve1 = WETH
+            // price(ETH/Token) = reserve1 / reserve0, 扩展到 1e18
+            price = (uint256(reserve1) * PRICE_PRECISION) / uint256(reserve0);
+        }
+
+        if (price == 0) revert InvalidPrice();
+
+        tokenLastPrice[token] = price;
+        tokenLastUpdateTime[token] = block.timestamp;
+
+        emit TokenPriceUpdated(token, price, block.timestamp);
     }
 
     // ============================================================

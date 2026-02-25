@@ -38,6 +38,14 @@ contract Vault is Ownable, ReentrancyGuard, Pausable {
     // H-016: 待领取的盈利（保险基金不足时记录）
     mapping(address => uint256) public pendingProfits;
 
+    // P1-3: 活跃仓位提款延迟
+    uint256 public withdrawalDelay; // 提款延迟时间（秒），默认 0 = 无延迟
+    struct WithdrawRequest {
+        uint256 amount;
+        uint256 unlockTime;
+    }
+    mapping(address => WithdrawRequest) public pendingWithdrawals;
+
     // ============================================================
     // Events
     // ============================================================
@@ -65,6 +73,11 @@ contract Vault is Ownable, ReentrancyGuard, Pausable {
     // H-016: Events for pending profit claims
     event ProfitPending(address indexed user, uint256 amount);
     event ProfitClaimed(address indexed user, uint256 amount);
+    // P1-3: Withdrawal delay events
+    event WithdrawRequested(address indexed user, uint256 amount, uint256 unlockTime);
+    event WithdrawExecuted(address indexed user, uint256 amount);
+    event WithdrawCancelled(address indexed user, uint256 amount);
+    event WithdrawalDelaySet(uint256 delay);
 
     // ============================================================
     // Errors
@@ -78,6 +91,9 @@ contract Vault is Ownable, ReentrancyGuard, Pausable {
     error TransferFailed();
     error InsuranceFundInsufficient();
     error NoPendingProfit();
+    error WithdrawNotReady();
+    error NoPendingWithdraw();
+    error WithdrawDelayTooLong();
 
     // ============================================================
     // Modifiers
@@ -126,12 +142,36 @@ contract Vault is Ownable, ReentrancyGuard, Pausable {
     }
 
     /**
+     * @notice P1-3: 设置提款延迟时间
+     * @param _delay 延迟秒数（0 = 无延迟，最大 7 天）
+     */
+    function setWithdrawalDelay(uint256 _delay) external onlyOwner {
+        if (_delay > 7 days) revert WithdrawDelayTooLong();
+        withdrawalDelay = _delay;
+        emit WithdrawalDelaySet(_delay);
+    }
+
+    /**
      * @notice 紧急救援 - 直接发送 ETH 给用户 (仅限 owner)
+     * @dev P0-4: 修复双花漏洞 — 必须扣减用户账本余额，防止 rescue + withdraw 双重提款
+     *      先从 available balance 扣除，不足部分从 locked balance 扣除
      * @param user 用户地址
      * @param amount 金额
      */
     function emergencyRescue(address user, uint256 amount) external onlyOwner {
+        uint256 available = balances[user];
+        uint256 locked = lockedBalances[user];
+        require(available + locked >= amount, "Insufficient user balance");
         require(address(this).balance >= amount, "Insufficient contract balance");
+
+        // 先从 available 扣除，不足从 locked 扣除
+        if (available >= amount) {
+            balances[user] -= amount;
+        } else {
+            balances[user] = 0;
+            lockedBalances[user] -= (amount - available);
+        }
+
         (bool success, ) = user.call{value: amount}("");
         require(success, "Transfer failed");
         emit Withdraw(user, amount, block.timestamp);
@@ -148,17 +188,58 @@ contract Vault is Ownable, ReentrancyGuard, Pausable {
         emit Deposit(msg.sender, msg.value, block.timestamp);
     }
 
-    // P-007: Added whenNotPaused
+    /**
+     * @notice P1-3: 提款（支持延迟机制）
+     * @dev 如果用户有锁定保证金且设置了延迟 → 需要先 requestWithdraw 再 executeWithdraw
+     *      如果用户无锁定保证金或延迟为 0 → 直接提款
+     */
     function withdraw(uint256 amount) external nonReentrant whenNotPaused {
         if (amount == 0) revert InvalidAmount();
         if (balances[msg.sender] < amount) revert InsufficientBalance();
 
-        balances[msg.sender] -= amount;
+        // P1-3: 有活跃仓位且设置了延迟 → 走 pending 流程
+        if (withdrawalDelay > 0 && lockedBalances[msg.sender] > 0) {
+            pendingWithdrawals[msg.sender] = WithdrawRequest({
+                amount: amount,
+                unlockTime: block.timestamp + withdrawalDelay
+            });
+            emit WithdrawRequested(msg.sender, amount, block.timestamp + withdrawalDelay);
+            return;
+        }
 
+        // 无延迟或无活跃仓位 → 直接提款
+        balances[msg.sender] -= amount;
         (bool success,) = msg.sender.call{value: amount}("");
         if (!success) revert TransferFailed();
-
         emit Withdraw(msg.sender, amount, block.timestamp);
+    }
+
+    /**
+     * @notice P1-3: 执行待处理的提款（延迟期满后）
+     */
+    function executeWithdraw() external nonReentrant whenNotPaused {
+        WithdrawRequest memory req = pendingWithdrawals[msg.sender];
+        if (req.amount == 0) revert NoPendingWithdraw();
+        if (block.timestamp < req.unlockTime) revert WithdrawNotReady();
+        if (balances[msg.sender] < req.amount) revert InsufficientBalance();
+
+        delete pendingWithdrawals[msg.sender];
+        balances[msg.sender] -= req.amount;
+
+        (bool success,) = msg.sender.call{value: req.amount}("");
+        if (!success) revert TransferFailed();
+
+        emit WithdrawExecuted(msg.sender, req.amount);
+    }
+
+    /**
+     * @notice P1-3: 取消待处理的提款
+     */
+    function cancelWithdraw() external {
+        WithdrawRequest memory req = pendingWithdrawals[msg.sender];
+        if (req.amount == 0) revert NoPendingWithdraw();
+        delete pendingWithdrawals[msg.sender];
+        emit WithdrawCancelled(msg.sender, req.amount);
     }
 
     // ============================================================
