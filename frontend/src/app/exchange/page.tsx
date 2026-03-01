@@ -4,9 +4,11 @@ import React, { useState, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Navbar } from "@/components/layout/Navbar";
 import { TradingTerminal } from "@/components/common/TradingTerminal";
-import { useOnChainTokenList } from "@/hooks/common/useTokenList";
+import { TradingErrorBoundary } from "@/components/shared/TradingErrorBoundary";
 import { TokenSelector } from "@/components/spot/TokenSelector";
 import { useTranslations } from "next-intl";
+import { useTradingDataStore } from "@/lib/stores/tradingDataStore";
+import { useUnifiedWebSocket } from "@/hooks/common/useUnifiedWebSocket";
 
 function ExchangeContent() {
   const searchParams = useSearchParams();
@@ -14,8 +16,12 @@ function ExchangeContent() {
   const [mounted, setMounted] = useState(false);
   const t = useTranslations();
 
-  // 从链上获取代币列表
-  const { tokens, isLoading } = useOnChainTokenList();
+  // WSS 连接 (触发 get_all_tokens)
+  useUnifiedWebSocket({ enabled: true });
+
+  // 从 WSS 获取代币列表 (替代 useOnChainTokenList 的 400+ RPC 调用)
+  const tokens = useTradingDataStore(state => state.allTokens);
+  const isLoading = !useTradingDataStore(state => state.allTokensLoaded);
 
   // 从 URL 参数获取交易对符号
   const urlSymbol = searchParams.get("symbol");
@@ -63,17 +69,19 @@ function ExchangeContent() {
 
   // 把 TokenSelector 作为 headerSlot 注入到 TradingTerminal 顶栏
   return (
-    <TradingTerminal
-      symbol={symbol}
-      headerSlot={
-        <TokenSelector
-          tokens={tokens}
-          isLoading={isLoading}
-          selectedAddress={symbol}
-          onSelect={handleTokenSelect}
-        />
-      }
-    />
+    <TradingErrorBoundary module="SpotTradingTerminal">
+      <TradingTerminal
+        symbol={symbol}
+        headerSlot={
+          <TokenSelector
+            tokens={tokens}
+            isLoading={isLoading}
+            selectedAddress={symbol}
+            onSelect={handleTokenSelect}
+          />
+        }
+      />
+    </TradingErrorBoundary>
   );
 }
 

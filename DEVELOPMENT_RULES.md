@@ -4,6 +4,28 @@
 
 ---
 
+## ⚠️ 2026-03-01 全面审计结果
+
+**发现 48 个问题 (12 CRITICAL, 15 HIGH, 21 MEDIUM)**
+
+### 最严重的发现: 整个永续合约系统运行在虚拟余额上
+
+所有用户存款、提款、PnL结算、手续费、资金费、保险基金都是**纯内存操作**（mode2PnLAdjustments），
+没有任何链上资金支撑。SettlementV2 和 PerpVault 合约余额均为 0 ETH。
+
+**核心问题:**
+1. `POST /api/user/:trader/deposit` — 凭空创建余额，无链上验证 (server.ts L7812)
+2. `POST /api/user/:trader/withdraw` — 只减内存，不转真钱 (server.ts L7848)
+3. 做市商通过虚假 API 注入 6 ETH 幽灵流动性 (market-maker-all.ts L356)
+4. 前端 AccountBalance 组件存款/提款绕过链上合约
+5. 所有状态依赖 Redis，无链上可恢复性
+6. Go Keeper 读空 PostgreSQL，强平监控完全失效
+
+**完整清单**: `docs/ISSUES_AUDIT_REPORT.md`
+**修复计划**: `docs/SETTLEMENT_DESIGN.md`
+
+---
+
 ## 零、系统架构选择
 
 ### V1 架构 (PositionManager - 资金池模式)
@@ -527,9 +549,60 @@ cast send $SETTLEMENT_ADDRESS "setAuthorizedMatcher(address,bool)" $MATCHER_ADDR
 
 ---
 
-**最后更新**: 2026-02-25
+**最后更新**: 2026-03-01
 **下次修改前必须先读取本文件**
-**V2 Settlement 架构已添加！SettlementV2 (Merkle) 已部署！**
+**链上结算层已打通！SettlementV2 + PerpVault 完整管道已连接！**
+
+---
+
+## 十二、链上结算架构 — Off-chain/On-chain Settlement (2026-03-01)
+
+### 架构概述 (简化版 dYdX v3 模型)
+
+```
+用户存款 → SettlementV2 (WETH 托管)
+           ↓ 事件监听
+撮合引擎 (链下) → 订单撮合 + 仓位管理 + PnL 计算
+           ↓ 30s 批量结算
+PerpVault (GMX-style LP 池 = 保险基金)
+           ↓ 每小时
+Merkle 快照提交 → SettlementV2.updateStateRoot()
+           ↓
+用户提款 → Merkle proof + EIP-712 签名 → SettlementV2.withdraw()
+```
+
+### 合约地址 (Base Sepolia)
+
+| 合约 | 地址 | 角色 |
+|------|------|------|
+| SettlementV2 | `0x733EccCf612F70621c772D63334Cf5606d7a7C75` | 用户 WETH 托管 + Merkle 提款 |
+| PerpVault | `0x586FB78b8dB39d8D89C1Fd2Aa0c756C828e5251F` | LP 池 + 保险基金 + OI 管理 |
+| WETH | `0x4200000000000000000000000000000000000006` | 抵押品代币 |
+
+### 关键模块
+
+| 模块 | 文件 | 职责 |
+|------|------|------|
+| 批量结算队列 | `backend/src/matching/modules/perpVault.ts` | payable 调用排队, 30s 批量执行 |
+| 存款事件监听 | `backend/src/matching/server.ts` (L~5167) | SettlementV2 Deposited/DepositedFor → 余额同步 |
+| Merkle 快照 | `backend/src/matching/modules/snapshot.ts` | 每小时生成 Merkle root → 链上提交 |
+| 提款授权 | `backend/src/matching/modules/withdraw.ts` | EIP-712 签名 + nonce 链上同步 |
+| Keeper 仓位查询 | `backend/internal/keeper/liquidation.go` | HTTP 查询引擎 → 降级 PostgreSQL |
+
+### 运维引导 (Phase 0)
+
+```bash
+cd contracts
+forge script script/ConfigureSettlement.s.sol --rpc-url $BASE_SEPOLIA_RPC_URL --broadcast -vvv
+```
+
+### 余额不变量
+
+```
+SettlementV2.WETH >= sum(userDeposits) - sum(totalWithdrawn)
+PerpVault.balance >= 最低安全阈值 (2 ETH seed)
+engineWallet.balance >= 0.05 ETH (gas 预留)
+```
 
 ---
 

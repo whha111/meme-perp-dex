@@ -87,7 +87,7 @@ export function useOnChainTrades(
     setError(null);
 
     try {
-      const url = `${MATCHING_ENGINE_URL}/api/v1/spot/trades/${tokenAddress}?limit=100`;
+      const url = `${MATCHING_ENGINE_URL}/api/v1/spot/trades/${tokenAddress.toLowerCase()}?limit=100`;
       const response = await fetch(url);
 
       if (!response.ok) {
@@ -193,7 +193,7 @@ export function useOnChainTrades(
 
     return () => {
       unsubscribe();
-      ws.unsubscribe([normalizedToken]).catch(() => {});
+      ws.unsubscribe([normalizedToken]).catch((err) => console.warn("[OnChainTrades] Unsubscribe error:", err));
     };
   }, [tokenAddress, enabled]);
 
@@ -288,7 +288,7 @@ export function useOnChainTradeStream(
     return () => {
       unsubscribe();
       unsubscribeConnection();
-      ws.unsubscribe([normalizedToken]).catch(() => {});
+      ws.unsubscribe([normalizedToken]).catch((err) => console.warn("[OnChainTrades] Unsubscribe error:", err));
     };
   }, [tokenAddress, enabled, onTrade]);
 

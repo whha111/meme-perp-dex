@@ -4,6 +4,8 @@
  * 仅保留实际使用的端点和类型。
  */
 
+import { MATCHING_ENGINE_URL } from "@/config/api";
+
 // ============================================================
 // Types
 // ============================================================
@@ -52,7 +54,7 @@ class ApiClient {
   private baseUrl: string;
 
   constructor(baseUrl?: string) {
-    this.baseUrl = baseUrl || process.env.NEXT_PUBLIC_MATCHING_ENGINE_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8081";
+    this.baseUrl = baseUrl || MATCHING_ENGINE_URL;
   }
 
   async getInstruments(_instType?: string): Promise<Instrument[]> {
@@ -60,6 +62,10 @@ class ApiClient {
     return [];
   }
 
+  /**
+   * @deprecated Unused — WSS `all_market_stats` (tradingDataStore) is the primary source.
+   * Consumers (TokenList, InstrumentSelector) are not rendered anywhere.
+   */
   async getTickers(): Promise<Ticker[]> {
     try {
       const res = await fetch(`${this.baseUrl}/api/v1/market/tickers`);
@@ -69,7 +75,8 @@ class ApiClient {
         return json.data;
       }
       return [];
-    } catch {
+    } catch (err) {
+      console.warn("[ApiClient] getTickers failed:", err);
       return [];
     }
   }

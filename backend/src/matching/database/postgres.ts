@@ -212,7 +212,9 @@ export const OrderMirrorRepo = {
           updated_at = EXCLUDED.updated_at
       `;
     } catch (error: any) {
+      // P0-2: 写入失败不能静默 — 必须传播错误让调用方知道
       logger.error("Postgres", `Failed to upsert order ${order.id}: ${error.message}`);
+      throw error;
     }
   },
 
@@ -246,7 +248,9 @@ export const OrderMirrorRepo = {
         `;
       }
     } catch (error: any) {
+      // P0-2: 写入失败不能静默
       logger.error("Postgres", `Failed to update order ${orderId}: ${error.message}`);
+      throw error;
     }
   },
 

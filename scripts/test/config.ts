@@ -4,6 +4,10 @@
 import { type Address, type Hex } from "viem";
 import { baseSepolia } from "viem/chains";
 
+// AUDIT-FIX DP-C01: Read key from env
+const DEPLOYER_KEY = (process.env.DEPLOYER_PRIVATE_KEY || process.env.PRIVATE_KEY) as Hex;
+if (!DEPLOYER_KEY) { console.error("Set DEPLOYER_PRIVATE_KEY env var"); process.exit(1); }
+
 export const CONFIG = {
   // RPC
   RPC_URL: "https://base-sepolia.g.alchemy.com/v2/Dr8sMe-1MYIF7jBYuZZj8PMOPAAeJ16d",
@@ -21,7 +25,7 @@ export const CONFIG = {
   WALLETS_PATH: "/Users/qinlinqiu/Desktop/Namespace/scripts/market-maker/wallets.json",
 
   // Deployer (用作 Matcher)
-  DEPLOYER_KEY: "0xf9a07bb59ea400ef88bfbcf314d89f357c8580d1a4fb543e48cfb98b02b41d2c" as Hex,
+  DEPLOYER_KEY,
   DEPLOYER_ADDRESS: "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE" as Address,
 
   // 后端 API

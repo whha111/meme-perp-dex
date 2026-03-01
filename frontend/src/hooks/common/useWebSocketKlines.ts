@@ -47,7 +47,7 @@ export function useWebSocketKlines(
     try {
       setLoading(true);
       // 新 API: /api/v1/spot/klines/latest/{token}?resolution=1m&limit=100
-      const url = `${MATCHING_ENGINE_URL}/api/v1/spot/klines/latest/${token}?resolution=${interval}&limit=${limit}`;
+      const url = `${MATCHING_ENGINE_URL}/api/v1/spot/klines/latest/${token.toLowerCase()}?resolution=${interval}&limit=${limit}`;
       const res = await fetch(url);
 
       if (!res.ok) {

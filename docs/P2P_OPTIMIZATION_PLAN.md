@@ -1,6 +1,9 @@
 # P2P 永续合约优化方案
 
 > 最后更新: 2026-01-26
+>
+> **⚠️ 2026-03-01**: 此优化方案基于旧架构。系统已迁移到链下撮合 + PerpVault LP 池模式。
+> 详见 `docs/ARCHITECTURE.md` 和 `docs/ISSUES_AUDIT_REPORT.md`
 
 ## 目录
 

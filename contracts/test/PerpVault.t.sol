@@ -64,6 +64,14 @@ contract PerpVaultTest is Test {
         vm.prank(owner);
         vault.setVault(vaultContract);
 
+        // Restore old parameter values so existing test math stays correct
+        vm.prank(owner);
+        vault.setFees(30, 30);           // restore old 0.3% fees
+        vm.prank(owner);
+        vault.setMaxUtilization(8000);   // restore old 80%
+        vm.prank(owner);
+        vault.setAdlThreshold(9000);     // restore old 90%
+
         vm.deal(lp1, 1000 ether);
         vm.deal(lp2, 1000 ether);
         vm.deal(lp3, 500 ether);

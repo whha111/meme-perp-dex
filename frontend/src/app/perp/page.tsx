@@ -4,13 +4,12 @@ import React, { useState, useEffect, Suspense, useMemo } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Navbar } from "@/components/layout/Navbar";
 import { PerpetualTradingTerminal } from "@/components/perpetual/PerpetualTradingTerminal";
-import { useOnChainTokenList, OnChainToken } from "@/hooks/common/useTokenList";
+import { TradingErrorBoundary } from "@/components/shared/TradingErrorBoundary";
 import { useTranslations } from "next-intl";
-import { formatTimeAgo } from "@/utils/formatters";
 import { useETHPrice } from "@/hooks/common/useETHPrice";
 import { trackRender } from "@/lib/debug-render";
-import { useTradingDataStore } from "@/lib/stores/tradingDataStore";
-import { useUnifiedWebSocket, getWebSocketManager } from "@/hooks/common/useUnifiedWebSocket";
+import { useTradingDataStore, type WssOnChainToken } from "@/lib/stores/tradingDataStore";
+import { useUnifiedWebSocket } from "@/hooks/common/useUnifiedWebSocket";
 import { type Address } from "viem";
 
 // 榜单分类类型
@@ -115,28 +114,19 @@ function PerpContent() {
   const { price: ethPrice } = useETHPrice();
   const ETH_PRICE_USD = ethPrice || 2000;
 
-  // 从链上获取代币列表
-  const { tokens: onChainTokens, isLoading: isLoadingOnChain } = useOnChainTokenList();
-
-  // 通过 useUnifiedWebSocket 建立 WSS 连接
+  // WSS 连接 — get_all_tokens + subscribe_all_market_stats 已在 onopen 中自动请求
   const { isConnected: wsConnected } = useUnifiedWebSocket({ enabled: true });
 
-  // 当链上 token 列表就绪后，通过 WSS 批量订阅所有 token
-  useEffect(() => {
-    if (onChainTokens.length > 0 && wsConnected) {
-      const manager = getWebSocketManager();
-      if (manager) {
-        manager.subscribeAll(onChainTokens.map(t => t.address as Address));
-      }
-    }
-  }, [onChainTokens, wsConnected]);
+  // 从 WSS 获取代币列表 (替代 useOnChainTokenList 的 400+ RPC 调用)
+  const allTokens = useTradingDataStore(state => state.allTokens);
+  const allTokensLoaded = useTradingDataStore(state => state.allTokensLoaded);
 
-  // 代币列表直接使用链上数据
+  // 代币列表按创建时间排序
   const tokens = useMemo(() => {
-    return [...onChainTokens].sort((a, b) => b.createdAt - a.createdAt);
-  }, [onChainTokens]);
+    return [...allTokens].sort((a, b) => b.createdAt - a.createdAt);
+  }, [allTokens]);
 
-  const isLoading = isLoadingOnChain;
+  const isLoading = !allTokensLoaded;
 
   // 从 URL 参数获取交易对符号
   const urlSymbol = searchParams.get("symbol");
@@ -207,10 +197,12 @@ function PerpContent() {
   if (urlSymbol) {
     const isTokenAddress = urlSymbol.startsWith("0x") && urlSymbol.length === 42;
     return (
-      <PerpetualTradingTerminal
-        symbol={urlSymbol}
-        tokenAddress={isTokenAddress ? (urlSymbol as `0x${string}`) : undefined}
-      />
+      <TradingErrorBoundary module="PerpetualTradingTerminal">
+        <PerpetualTradingTerminal
+          symbol={urlSymbol}
+          tokenAddress={isTokenAddress ? (urlSymbol as `0x${string}`) : undefined}
+        />
+      </TradingErrorBoundary>
     );
   }
 
@@ -250,7 +242,8 @@ function PerpContent() {
               {/* 代币列表 */}
               <div className="bg-okx-bg-card border border-okx-border-primary rounded-lg divide-y divide-okx-border-primary">
                 {categoryTokens.map((token, index) => {
-                  const isOnChain = (token as any).isOnChain !== false;
+                  // OnChainToken 来自合约，始终在链上; isActive 判断池子状态
+                  const isOnChain = token.isActive !== false;
                   const canTrade = isOnChain && token.perpEnabled;
                   const statusTitle = !isOnChain
                     ? tPerp("notOnChain")

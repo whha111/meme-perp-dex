@@ -1,5 +1,9 @@
 # 智能合约接口文档
 
+> **⚠️ 2026-03-01 审计**: 15 个已部署合约中仅 4 个被实际使用 (TokenFactory, AMM, Router, PriceFeed)。
+> 永续合约相关的 8 个合约 (PositionManager, Settlement, Liquidation, FundingRate 等) 实质上是死代码。
+> 详见 `docs/ISSUES_AUDIT_REPORT.md`
+
 ## 目录
 1. [MemeToken](#1-memetoken)
 2. [LPToken](#2-lptoken)

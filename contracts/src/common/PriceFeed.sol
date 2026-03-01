@@ -307,20 +307,28 @@ contract PriceFeed is Ownable, IPriceFeed {
 
     /**
      * @notice 获取标记价格（Legacy接口，返回第一个代币的价格）
-     * @dev 向后兼容：返回 tokenList[0] 的价格
+     * @dev AUDIT-FIX SC-H05: 添加过期检查，与 getTokenMarkPrice 一致
      */
     function getMarkPrice() external view returns (uint256) {
         if (tokenList.length == 0) return 0;
-        return tokenLastPrice[tokenList[0]];
+        address token = tokenList[0];
+        if (maxPriceAge > 0 && tokenLastUpdateTime[token] > 0 && block.timestamp - tokenLastUpdateTime[token] > maxPriceAge) {
+            revert PriceStale();
+        }
+        return tokenLastPrice[token];
     }
 
     /**
      * @notice 获取现货价格（Legacy接口，返回第一个代币的价格）
-     * @dev 向后兼容：返回 tokenList[0] 的价格
+     * @dev AUDIT-FIX SC-H05: 添加过期检查
      */
     function getSpotPrice() external view returns (uint256) {
         if (tokenList.length == 0) return 0;
-        return tokenLastPrice[tokenList[0]];
+        address token = tokenList[0];
+        if (maxPriceAge > 0 && tokenLastUpdateTime[token] > 0 && block.timestamp - tokenLastUpdateTime[token] > maxPriceAge) {
+            revert PriceStale();
+        }
+        return tokenLastPrice[token];
     }
 
     /**

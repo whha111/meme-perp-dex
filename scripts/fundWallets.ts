@@ -23,8 +23,9 @@ import * as path from "path";
 
 const RPC_URL = "https://base-sepolia.g.alchemy.com/v2/Dr8sMe-1MYIF7jBYuZZj8PMOPAAeJ16d";
 
-// Deployer private key (from contracts/.env)
-const DEPLOYER_PRIVATE_KEY = "0xf9a07bb59ea400ef88bfbcf314d89f357c8580d1a4fb543e48cfb98b02b41d2c";
+// AUDIT-FIX DP-C01: Read key from env
+const DEPLOYER_PRIVATE_KEY = (process.env.DEPLOYER_PRIVATE_KEY || process.env.PRIVATE_KEY) as `0x${string}`;
+if (!DEPLOYER_PRIVATE_KEY) { console.error("Set DEPLOYER_PRIVATE_KEY env var"); process.exit(1); }
 
 // Amount to send to each wallet
 const AMOUNT_PER_WALLET = parseEther("0.01"); // 0.01 ETH per wallet

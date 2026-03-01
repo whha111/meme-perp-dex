@@ -149,7 +149,7 @@ export function useTradeStream(params?: {
   }, []);
 
   // [FIX F-H-04] Handle WebSocket trade events - 使用 ref 避免依赖变化
-  const handleTradeEvent = useCallback((message: any) => {
+  const handleTradeEvent = useCallback((message: { type: string; data?: TradeEventData; request_id?: string; error?: string; timestamp: number }) => {
     if (!message.data) return;
 
     const wsEvent = message.data as TradeEventData;

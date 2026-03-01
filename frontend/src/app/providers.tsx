@@ -1,5 +1,12 @@
 "use client";
 
+// Window 扩展 — WalletConnect 重复初始化警告抑制标记
+declare global {
+  interface Window {
+    __walletconnect_warned?: boolean;
+  }
+}
+
 import React, { useState, useEffect, Component, ErrorInfo, ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WagmiProvider } from "wagmi";
@@ -375,15 +382,15 @@ export function Providers({ children }: { children: React.ReactNode }) {
     // Suppress WalletConnect/AppKit initialization warnings in development
     if (isDev && typeof window !== 'undefined') {
       const originalWarn = console.warn;
-      console.warn = (...args: any[]) => {
-        const message = args[0]?.toString() || '';
+      console.warn = (...args: unknown[]) => {
+        const message = String(args[0] ?? '');
         // Suppress WalletConnect Core already initialized warnings
         if (message.includes('WalletConnect Core is already initialized') ||
             message.includes('Init() was called')) {
           // Only log once to avoid spam
-          if (!(window as any).__walletconnect_warned) {
+          if (!window.__walletconnect_warned) {
             console.info('[WalletConnect] Multiple initialization detected (normal in React Strict Mode)');
-            (window as any).__walletconnect_warned = true;
+            window.__walletconnect_warned = true;
           }
           return;
         }

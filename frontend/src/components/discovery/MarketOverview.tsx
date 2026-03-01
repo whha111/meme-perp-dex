@@ -9,16 +9,15 @@ import { InstrumentAssetData } from "@/lib/websocket";
 import { formatTimeAgo } from "@/utils/formatters";
 import { FilterPanel, FilterState, defaultFilterState } from "./FilterPanel";
 import { FAQPanel } from "./FAQPanel";
-import { useOnChainTokenList, OnChainToken } from "@/hooks/common/useTokenList";
 import { useETHPrice } from "@/hooks/common/useETHPrice";
 import { trackRender } from "@/lib/debug-render";
-import { useTradingDataStore, type TokenStats } from "@/lib/stores/tradingDataStore";
-import { useUnifiedWebSocket, getWebSocketManager } from "@/hooks/common/useUnifiedWebSocket";
+import { useTradingDataStore, type TokenStats, type WssOnChainToken } from "@/lib/stores/tradingDataStore";
+import { useUnifiedWebSocket } from "@/hooks/common/useUnifiedWebSocket";
 import { type Address } from "viem";
-import { apiClient, type Ticker } from "@/lib/api/client";
+// HTTP ticker fallback removed — all data via WSS
 
 
-function Column({ title, assets, noTokensText, ethPrice }: { title: string; assets: any[]; noTokensText: string; ethPrice: number }) {
+function Column({ title, assets, noTokensText, ethPrice }: { title: string; assets: InstrumentAssetData[]; noTokensText: string; ethPrice: number }) {
   return (
     <div className="flex-1 min-w-[320px] bg-okx-bg-primary">
       <div className="flex items-center justify-between mb-4 sticky top-[64px] bg-okx-bg-primary py-2 z-10">
@@ -204,47 +203,42 @@ export function MarketOverview() {
     return () => clearTimeout(timer);
   }, []);
 
-  // 通过 useUnifiedWebSocket 建立 WSS 连接（不订阅特定 token，仅建立连接）
+  // 通过 useUnifiedWebSocket 建立 WSS 连接
+  // all_market_stats 在 onopen 时自动订阅，无需逐个 token 订阅
   const { isConnected: wsConnected } = useUnifiedWebSocket({ enabled: true });
 
-  // 直接从链上获取代币列表
-  const { tokens: onChainTokens, isLoading: isLoadingOnChain } = useOnChainTokenList();
-
-  // 当链上 token 列表就绪后，通过 WSS 批量订阅所有 token 获取实时数据
-  useEffect(() => {
-    if (onChainTokens.length > 0 && wsConnected) {
-      const manager = getWebSocketManager();
-      if (manager) {
-        manager.subscribeAll(onChainTokens.map(t => t.address as Address));
-      }
-    }
-  }, [onChainTokens, wsConnected]);
+  // 从 WSS 获取代币列表 (替代 useOnChainTokenList 的 400+ RPC 调用)
+  const onChainTokens = useTradingDataStore(state => state.allTokens);
+  const isLoadingOnChain = !useTradingDataStore(state => state.allTokensLoaded);
 
   // 从 tradingDataStore 读取 WSS 推送的实时市场数据
-  const tokenStatsMap = useTradingDataStore(state => state.tokenStats);
-
-  // HTTP fallback: 当 WS 没有返回 tokenStats 数据时，从 HTTP API 获取 ticker
-  const [httpTickers, setHttpTickers] = useState<Ticker[]>([]);
-  const httpFallbackEnabled = tokenStatsMap.size === 0;
+  // ⚠️ 不能直接用 useTradingDataStore(s => s.tokenStats)：
+  // 66 个 token 每秒都有 WS 更新 → Map 引用每秒变 60+ 次 → 无限重渲染
+  // 解决方案：手动订阅 + 2 秒节流，首页列表不需要毫秒级实时更新
+  const tokenStatsMapRef = useRef<Map<Address, TokenStats>>(useTradingDataStore.getState().tokenStats);
+  const [statsVersion, setStatsVersion] = useState(0);
 
   useEffect(() => {
-    if (!httpFallbackEnabled) return;
+    let dirty = false;
 
-    const fetchTickers = async () => {
-      try {
-        const tickers = await apiClient.getTickers();
-        if (tickers.length > 0) {
-          setHttpTickers(tickers);
-        }
-      } catch (e) {
-        console.warn("[MarketOverview] HTTP ticker fallback failed:", e);
+    const unsubscribe = useTradingDataStore.subscribe((state) => {
+      tokenStatsMapRef.current = state.tokenStats;
+      dirty = true;
+    });
+
+    // 每 2 秒检查一次是否有新数据，有则触发一次 re-render
+    const interval = setInterval(() => {
+      if (dirty) {
+        dirty = false;
+        setStatsVersion(v => v + 1);
       }
-    };
+    }, 2000);
 
-    fetchTickers();
-    const interval = setInterval(fetchTickers, 30000);
-    return () => clearInterval(interval);
-  }, [httpFallbackEnabled]);
+    return () => {
+      unsubscribe();
+      clearInterval(interval);
+    };
+  }, []);
 
   // 解析 metadataURI 获取 logo
   // metadataURI 格式可能是：
@@ -299,7 +293,7 @@ export function MarketOverview() {
 
   // 将链上代币转换为 InstrumentAssetData 格式
   const onChainAssetsConverted: InstrumentAssetData[] = useMemo(() => {
-    return onChainTokens.map((token: OnChainToken) => {
+    return onChainTokens.map((token: WssOnChainToken) => {
       const priceFloat = parseFloat(token.price) || 0;
       const marketCapFloat = parseFloat(token.marketCap) || 0;
       const logoUrl = parseMetadataURI(token.metadataURI);
@@ -331,7 +325,7 @@ export function MarketOverview() {
       const addr = (onChain.instId || "").toLowerCase() as Address;
 
       // 1. 优先: WS 实时数据 (来自 Matching Engine 的 market_data)
-      const stats = tokenStatsMap.get(addr);
+      const stats = tokenStatsMapRef.current.get(addr);
       if (stats && (stats.volume24h !== "0" || stats.lastPrice !== "0")) {
         return {
           ...onChain,
@@ -341,30 +335,23 @@ export function MarketOverview() {
         };
       }
 
-      // 2. Fallback: HTTP ticker 数据 (来自 Go 后端 /api/v1/market/tickers)
-      const ticker = httpTickers.find(t => t.instId?.toLowerCase() === addr);
-      if (ticker) {
-        let change24h = 0;
-        if (ticker.open24h && ticker.last) {
-          const openVal = parseFloat(ticker.open24h);
-          const lastVal = parseFloat(ticker.last);
-          if (openVal > 0) {
-            change24h = ((lastVal - openVal) / openVal) * 100;
-          }
-        }
-        return {
-          ...onChain,
-          volume24h: ticker.volCcy24h || ticker.vol24h || onChain.volume24h,
-          priceChange24h: change24h || onChain.priceChange24h,
-        };
-      }
-
       return onChain;
     });
 
-    // 按创建时间排序（最新的在前）
-    return merged.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-  }, [onChainAssetsConverted, tokenStatsMap, httpTickers]);
+    // 排序: 有成交量的优先，其次按创建时间（最新的在前）
+    return merged.sort((a, b) => {
+      const aVol = parseFloat(a.volume24h || "0");
+      const bVol = parseFloat(b.volume24h || "0");
+      // 有成交量的排在前面
+      if (aVol > 0 && bVol === 0) return -1;
+      if (bVol > 0 && aVol === 0) return 1;
+      // 都有成交量时按成交量降序
+      if (aVol > 0 && bVol > 0) return bVol - aVol;
+      // 都无成交量时按创建时间降序
+      return (b.createdAt || 0) - (a.createdAt || 0);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- statsVersion 作为节流后的依赖代替 tokenStatsMap
+  }, [onChainAssetsConverted, statsVersion]);
 
   const isLoading = isLoadingOnChain;
 

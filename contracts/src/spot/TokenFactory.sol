@@ -206,6 +206,7 @@ contract TokenFactory is Ownable, ReentrancyGuard, Pausable, ICurveEvents {
     // P2P 借贷事件
     event LendingEnabled(address indexed token, uint256 ethReserve);
     event LendingPoolUpdated(address indexed oldLendingPool, address indexed newLendingPool);
+    event LiquidationUpdated(address indexed oldLiquidation, address indexed newLiquidation);
     // 费用分配事件
     event FeeDistributed(address indexed token, uint256 creatorFee, uint256 referrerFee, uint256 platformFee);
     event CreatorEarningsClaimed(address indexed token, address indexed creator, uint256 amount);
@@ -695,7 +696,9 @@ contract TokenFactory is Ownable, ReentrancyGuard, Pausable, ICurveEvents {
 
     function setLiquidation(address _liquidation) external onlyOwner {
         if (_liquidation == address(0)) revert InvalidAddress();
+        address old = liquidation;
         liquidation = _liquidation;
+        emit LiquidationUpdated(old, _liquidation);
     }
 
     /**

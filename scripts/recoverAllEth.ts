@@ -25,7 +25,9 @@ const WALLETS_PATH = "/Users/qinlinqiu/Desktop/Namespace/scripts/market-maker/wa
 
 // 目标钱包 - Deployer (从私钥推导的正确地址)
 const TARGET_ADDRESS = "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE" as Address;
-const DEPLOYER_KEY = "0xf9a07bb59ea400ef88bfbcf314d89f357c8580d1a4fb543e48cfb98b02b41d2c" as Hex;
+// AUDIT-FIX DP-C01: Read key from env
+const DEPLOYER_KEY = (process.env.DEPLOYER_PRIVATE_KEY || process.env.PRIVATE_KEY) as Hex;
+if (!DEPLOYER_KEY) { console.error("Set DEPLOYER_PRIVATE_KEY env var"); process.exit(1); }
 
 // 合约地址
 const SETTLEMENT_V3 = "0x2F0cb9cb3e96f0733557844e34C5152bFC887aA5" as Address;

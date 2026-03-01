@@ -186,7 +186,8 @@ func (k *FundingKeeper) settleFundingOnChain(ctx context.Context) error {
 		zap.Uint64("blockNumber", receipt.BlockNumber.Uint64()),
 		zap.Uint64("gasUsed", receipt.GasUsed))
 
-	k.settlementsExecuted++
+	// AUDIT-FIX GO-H07: 不在此处递增 settlementsExecuted
+	// settleFundingInDB() 末尾已递增一次，避免 on-chain 成功路径双重计数
 
 	// Also update local database for consistency
 	k.settleFundingInDB(ctx, time.Now().Truncate(4*time.Hour).UnixMilli())

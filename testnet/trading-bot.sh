@@ -44,7 +44,12 @@ BLUE='\033[0;34m'; CYAN='\033[0;36m'; MAGENTA='\033[0;35m'; NC='\033[0m'
 # ============================================================
 # Configuration
 # ============================================================
-DEPLOYER_KEY="${MEMEPERP_BLOCKCHAIN_PRIVATE_KEY:-0xf9a07bb59ea400ef88bfbcf314d89f357c8580d1a4fb543e48cfb98b02b41d2c}"
+# AUDIT-FIX DP-C01: Read key from env — no hardcoded fallback
+DEPLOYER_KEY="${MEMEPERP_BLOCKCHAIN_PRIVATE_KEY:-${DEPLOYER_PRIVATE_KEY:-}}"
+if [ -z "$DEPLOYER_KEY" ]; then
+    echo "ERROR: Set MEMEPERP_BLOCKCHAIN_PRIVATE_KEY or DEPLOYER_PRIVATE_KEY env var"
+    exit 1
+fi
 DEPLOYER_ADDRESS="0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
 
 MATCHING_ENGINE="http://localhost:${MATCHING_ENGINE_PORT:-8081}"

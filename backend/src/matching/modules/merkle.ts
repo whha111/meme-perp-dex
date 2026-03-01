@@ -249,13 +249,30 @@ export class MerkleTreeManager {
       return null;
     }
 
-    // Temporarily set as current and get proof
-    const originalSnapshot = this.currentSnapshot;
-    this.currentSnapshot = snapshot;
-    const proof = this.getProof(user);
-    this.currentSnapshot = originalSnapshot;
-
-    return proof;
+    // AUDIT-FIX ME-H02: 不再临时替换 currentSnapshot（并发请求会互相腐蚀）
+    // 直接从目标 snapshot 计算 proof，无需修改任何共享状态
+    const normalizedUser = user.toLowerCase() as Address;
+    const equityIndex = snapshot.equities.findIndex(
+      eq => eq.user.toLowerCase() === normalizedUser
+    );
+    if (equityIndex === -1) {
+      console.warn(`[Merkle] User ${user.slice(0, 10)} not in snapshot #${snapshotId}`);
+      return null;
+    }
+    const equity = snapshot.equities[equityIndex];
+    const leaf = calculateLeaf(equity.user, equity.equity);
+    const sortedLeaves = [...snapshot.leaves].sort();
+    const leafIndex = sortedLeaves.findIndex(l => l === leaf);
+    if (leafIndex === -1) return null;
+    const tree = buildMerkleTree(snapshot.leaves);
+    const proof = generateProof(tree, leafIndex);
+    return {
+      user: equity.user,
+      equity: equity.equity,
+      proof,
+      leaf,
+      root: snapshot.root,
+    };
   }
 
   /**

@@ -14,14 +14,13 @@
  *
  * 数据更新策略：
  * - 首次加载时从 API 获取数据
- * - 后续更新由 WebSocket 推送（通过 tradingDataStore）
- * - 仅在 WebSocket 断开时启用备用轮询
+ * - 定期轮询刷新 (30s) — 此数据为全市场持仓, WSS 不推送此视图
  */
 
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { RiskProgressBarCompact } from "./RiskProgressBar";
-import { useTradingDataStore } from "@/lib/stores/tradingDataStore";
+import { MATCHING_ENGINE_URL } from "@/config/api";
 
 interface PositionData {
   trader: string;
@@ -52,15 +51,13 @@ interface Props {
   apiUrl?: string;
 }
 
-export function AllPositions({ token, apiUrl = "http://localhost:8081" }: Props) {
+export function AllPositions({ token, apiUrl = MATCHING_ENGINE_URL }: Props) {
   const t = useTranslations("perp");
   const [data, setData] = useState<AllPositionsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"all" | "danger" | "warning" | "long" | "short">("all");
 
-  // WebSocket 连接状态 - 直接订阅单个字段避免对象引用变化
-  const wsConnected = useTradingDataStore((state) => state.wsConnected);
-  const fallbackIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // 获取持仓数据
   const fetchData = useCallback(async () => {
@@ -86,33 +83,15 @@ export function AllPositions({ token, apiUrl = "http://localhost:8081" }: Props)
     }
   }, [token, apiUrl]);
 
-  // 初始加载 - 只依赖 token，不依赖 fetchData
+  // 初始加载 + 30s 定期轮询 (全市场持仓数据仅 HTTP 可获取)
   useEffect(() => {
     fetchData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]); // 只在 token 变化时重新获取
-
-  // 备用轮询：仅在 WebSocket 断开时启用
-  useEffect(() => {
-    // 清除现有的轮询
-    if (fallbackIntervalRef.current) {
-      clearInterval(fallbackIntervalRef.current);
-      fallbackIntervalRef.current = null;
-    }
-
-    // 如果 WebSocket 断开，启用备用轮询（每30秒）
-    if (!wsConnected) {
-      console.log("[AllPositions] WebSocket disconnected, enabling fallback polling");
-      fallbackIntervalRef.current = setInterval(() => fetchData(), 30000); // 增加到30秒
-    }
-
+    pollIntervalRef.current = setInterval(() => fetchData(), 30000);
     return () => {
-      if (fallbackIntervalRef.current) {
-        clearInterval(fallbackIntervalRef.current);
-      }
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wsConnected]); // 只依赖 wsConnected，不依赖 fetchData
+  }, [token]);
 
   // 格式化价格 (Token/ETH, 1e18 精度) — 使用下标格式显示极小数
   const formatPrice = (price: string) => {

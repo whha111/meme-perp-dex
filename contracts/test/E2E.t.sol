@@ -105,6 +105,11 @@ contract E2ETest is Test {
         perpVault.setAuthorizedContract(matchingEngine, true);
         perpVault.setVault(address(mockVault));
 
+        // Restore old parameter values so existing test math stays correct
+        perpVault.setFees(30, 30);           // restore old 0.3% fees
+        perpVault.setMaxUtilization(8000);   // restore old 80%
+        perpVault.setAdlThreshold(9000);     // restore old 90%
+
         // Fund all actors
         vm.deal(lp1, 100 ether);
         vm.deal(lp2, 100 ether);

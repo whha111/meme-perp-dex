@@ -78,6 +78,10 @@ export interface PoolData {
   error: Error | null;
 }
 
+// Error log throttle: only log same error once per 60 seconds
+let _lastPoolStateErrorLog = 0;
+let _lastPoolStateErrorMsg = "";
+
 // Default data to return when not enabled or loading
 const DEFAULT_POOL_DATA: PoolData = {
   poolState: null,
@@ -96,7 +100,9 @@ const DEFAULT_POOL_DATA: PoolData = {
  */
 export function usePoolState(tokenAddress: string | undefined): PoolData {
   const isValidAddress = tokenAddress?.startsWith("0x") && tokenAddress.length === 42;
-  const address = isValidAddress ? tokenAddress as `0x${string}` : undefined;
+  // ⚠️ 必须小写化！URL 里的 mixed-case 地址可能 checksum 不合法，
+  // viem 严格校验会拒绝 → 合约调用返回 "0x" → marketCap = 0
+  const address = isValidAddress && tokenAddress ? tokenAddress.toLowerCase() as `0x${string}` : undefined;
   const isEnabled = !!address && !!TOKEN_FACTORY_ADDRESS;
 
   // Use ref to store previous result to avoid unnecessary re-renders
@@ -184,8 +190,17 @@ export function usePoolState(tokenAddress: string | undefined): PoolData {
     const priceResult = data[1];
 
     if (poolStateResult.status !== "success" || priceResult.status !== "success") {
-      const errDetail = `getPoolState: ${poolStateResult.status}${poolStateResult.status === 'failure' ? ` (${(poolStateResult as any).error?.message || (poolStateResult as any).error || 'unknown'})` : ''}, getCurrentPrice: ${priceResult.status}${priceResult.status === 'failure' ? ` (${(priceResult as any).error?.message || (priceResult as any).error || 'unknown'})` : ''}`;
-      console.error(`[usePoolState] ❌ Contract call failure:`, errDetail);
+      const getFailureMsg = (r: { status: string; error?: Error }) =>
+        r.status === "failure" ? ` (${r.error?.message || r.error || "unknown"})` : "";
+      const errDetail = `getPoolState: ${poolStateResult.status}${getFailureMsg(poolStateResult as { status: string; error?: Error })}, getCurrentPrice: ${priceResult.status}${getFailureMsg(priceResult as { status: string; error?: Error })}`;
+      // 节流: 相同错误 60 秒内只打印一次，避免刷屏
+      const now = Date.now();
+      const isSameError = errDetail === _lastPoolStateErrorMsg;
+      if (!isSameError || now - _lastPoolStateErrorLog > 60_000) {
+        console.warn(`[usePoolState] Contract call failure for ${address?.slice(0, 10)}:`, errDetail.slice(0, 120));
+        _lastPoolStateErrorLog = now;
+        _lastPoolStateErrorMsg = errDetail;
+      }
       return {
         ...DEFAULT_POOL_DATA,
         error: new Error(errDetail),

@@ -168,7 +168,9 @@ export function useTradingWallet(): UseTradingWalletReturn {
           error: null,
         });
         // 恢复时也向后端注册 session (服务器可能重启过, 不阻塞恢复流程)
-        registerSessionWithBackend(stored.signature).catch(() => {});
+        registerSessionWithBackend(stored.signature).catch((err) =>
+          console.warn("[TradingWallet] Session register failed:", err)
+        );
       } catch {
         // 存储数据损坏，清除
         clearTradingWallet(mainWallet);
@@ -232,11 +234,9 @@ export function useTradingWallet(): UseTradingWalletReturn {
       console.log(
         `[useTradingWallet] Wallet activated: ${wallet.address.slice(0, 10)}...`
       );
-    } catch (e: any) {
-      const msg =
-        e?.code === 4001 || e?.message?.includes("rejected")
-          ? "用户取消签名"
-          : e?.message || "激活失败";
+    } catch (e) {
+      const { isUserRejection, extractErrorMessage } = await import("@/lib/errors/errorDictionary");
+      const msg = isUserRejection(e) ? "用户取消签名" : extractErrorMessage(e, "激活失败");
       setState((prev) => ({ ...prev, isLoading: false, error: msg }));
     }
   }, [mainWallet, isConnected, signMessageAsync, signingMessage, chainId, publicClient]);

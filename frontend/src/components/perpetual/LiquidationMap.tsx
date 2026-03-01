@@ -9,6 +9,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { formatUnits } from "viem";
 import { useTranslations } from "next-intl";
+import { MATCHING_ENGINE_URL } from "@/config/api";
 
 interface LiquidationLevel {
   price: string;
@@ -32,7 +33,7 @@ interface Props {
   apiUrl?: string;
 }
 
-export function LiquidationMap({ token, apiUrl = "http://localhost:8081" }: Props) {
+export function LiquidationMap({ token, apiUrl = MATCHING_ENGINE_URL }: Props) {
   const t = useTranslations("perp");
   const [data, setData] = useState<LiquidationMapData | null>(null);
   const [loading, setLoading] = useState(true);

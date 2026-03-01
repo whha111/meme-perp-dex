@@ -17,7 +17,8 @@ database:
 
 redis:
   addr: "localhost:6379"
-  password: ""
+  # AUDIT-FIX DP-C03: Redis password MUST be set via env var
+  password: "${MEMEPERP_REDIS_PASSWORD}"
   db: 0
   pool_size: 10
 

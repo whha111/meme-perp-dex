@@ -11,7 +11,7 @@ import type { Address, Hex } from "viem";
 
 export const PORT = parseInt(process.env.PORT || "8081");
 export const RPC_URL = process.env.RPC_URL || "https://base-sepolia-rpc.publicnode.com";
-export const CHAIN_ID = 84532; // Base Sepolia
+export const CHAIN_ID = parseInt(process.env.CHAIN_ID || "84532"); // P2: 从环境变量读取
 
 // ============================================================
 // 合约地址
@@ -20,16 +20,18 @@ export const CHAIN_ID = 84532; // Base Sepolia
 export const MATCHER_PRIVATE_KEY = process.env.MATCHER_PRIVATE_KEY as Hex;
 export const SETTLEMENT_ADDRESS = process.env.SETTLEMENT_ADDRESS as Address;
 export const INSURANCE_FUND_ADDRESS = process.env.INSURANCE_FUND_ADDRESS as Address;
-export const TOKEN_FACTORY_ADDRESS = (process.env.TOKEN_FACTORY_ADDRESS || "0x583d35e9d407Ea03dE5A2139e792841353CB67b1") as Address;
-export const PRICE_FEED_ADDRESS = (process.env.PRICE_FEED_ADDRESS || "0xa97a1E55cFfF5C1e45Ac2c1D882717cDD4F44e01") as Address;
-export const VAULT_ADDRESS = (process.env.VAULT_ADDRESS || "0x780E415Ffd8104Ee2EECD7418A9227Bb92ebE294") as Address;
-export const POSITION_MANAGER_ADDRESS = (process.env.POSITION_MANAGER_ADDRESS || "0xbff432BfBc3505712BB727D3F61E869769DB5724") as Address;
-export const FUNDING_RATE_ADDRESS = (process.env.FUNDING_RATE_ADDRESS || "0x82D72703a089fE245763f365876d5445EDc8BA9e") as Address;
-export const LIQUIDATION_ADDRESS = (process.env.LIQUIDATION_ADDRESS || "0x80c720F87cd061B5952d1d84Ce900aa91CBB167B") as Address;
-export const LENDING_POOL_ADDRESS = (process.env.LENDING_POOL_ADDRESS || "0x7Ddb15B5E680D8a74FE44958d18387Bb3999C633") as Address;
-export const PERP_VAULT_ADDRESS = (process.env.PERP_VAULT_ADDRESS || "") as Address;
+export const TOKEN_FACTORY_ADDRESS = (process.env.TOKEN_FACTORY_ADDRESS || "0x757eF02C2233b8cE2161EE65Fb7D626776b8CB73") as Address;
+export const PRICE_FEED_ADDRESS = (process.env.PRICE_FEED_ADDRESS || "0xfB347BC4Cc61C7FdCD862ED212A0e3866d205112") as Address;
+export const VAULT_ADDRESS = (process.env.VAULT_ADDRESS || "0xcc4Fa8Df0686824F92d392Cb650057EA7D2EF46E") as Address;
+export const POSITION_MANAGER_ADDRESS = (process.env.POSITION_MANAGER_ADDRESS || "0x7611a924622B5f6bc4c2ECAAdB6DE078E741AcF6") as Address;
+export const FUNDING_RATE_ADDRESS = (process.env.FUNDING_RATE_ADDRESS || "0xD6DD3947F8d80A031b69eBd825Be2384E787dC46") as Address;
+export const LIQUIDATION_ADDRESS = (process.env.LIQUIDATION_ADDRESS || "0x6Fb6325094B24AE5f458f7a34C63BE30Da9aAECA") as Address;
+export const LENDING_POOL_ADDRESS = (process.env.LENDING_POOL_ADDRESS || "0x98a7665301C0dB32ceff957e1A2c505dF8384CA4") as Address;
+export const PERP_VAULT_ADDRESS = (process.env.PERP_VAULT_ADDRESS || "0x586FB78b8dB39d8D89C1Fd2Aa0c756C828e5251F") as Address;
+export const SETTLEMENT_V2_ADDRESS = process.env.SETTLEMENT_V2_ADDRESS as Address; // dYdX-style Merkle withdrawal contract
 export const COLLATERAL_TOKEN_ADDRESS = process.env.COLLATERAL_TOKEN_ADDRESS as Address;
 export const FEE_RECEIVER_ADDRESS = (process.env.FEE_RECEIVER_ADDRESS || "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE") as Address;
+export const LIQUIDATOR_BOT_ADDRESS = (process.env.LIQUIDATOR_BOT_ADDRESS || process.env.FEE_RECEIVER_ADDRESS || "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE") as Address;
 
 // ============================================================
 // 时间间隔配置 (毫秒)
@@ -40,9 +42,9 @@ export const DAILY_SETTLEMENT_INTERVAL_MS = 24 * 60 * 60 * 1000; // 24小时日�
 export const HEALTH_CHECK_INTERVAL_MS = parseInt(process.env.HEALTH_CHECK_INTERVAL_MS || "60000"); // 1分钟健康检查
 export const FUNDING_RATE_INTERVAL_MS = parseInt(process.env.FUNDING_RATE_INTERVAL_MS || "5000"); // 5秒更新资金费率
 export const SPOT_PRICE_SYNC_INTERVAL_MS = parseInt(process.env.SPOT_PRICE_SYNC_INTERVAL_MS || "1000"); // 1秒同步现货价格
-export const RISK_ENGINE_INTERVAL_MS = 100; // 100ms风险检查
-export const RISK_BROADCAST_INTERVAL_MS = 500; // 500ms风控广播
-export const REDIS_SYNC_CYCLES = 10; // 每10个周期(1秒)同步Redis
+export const RISK_ENGINE_INTERVAL_MS = parseInt(process.env.RISK_ENGINE_INTERVAL_MS || "100"); // 100ms风险检查
+export const RISK_BROADCAST_INTERVAL_MS = parseInt(process.env.RISK_BROADCAST_INTERVAL_MS || "500"); // 500ms风控广播
+export const REDIS_SYNC_CYCLES = parseInt(process.env.REDIS_SYNC_CYCLES || "10"); // 每10个周期(1秒)同步Redis
 
 // ============================================================
 // 精度配置 (ETH 本位)
@@ -70,10 +72,10 @@ export const PRECISION_MULTIPLIER = {
 
 export const TRADING = {
   MIN_LEVERAGE: 1n,
-  MAX_LEVERAGE: 100n,
+  MAX_LEVERAGE: 10n,   // P2: 同步 Phase 1 设计 — meme 币最大 10x (旧值 100x)
   MIN_MARGIN: 1n * 10n ** 15n, // 最小保证金 0.001 ETH (约 $2.5)
   MIN_POSITION_SIZE: 1n * 10n ** 15n, // 最小仓位 0.001 ETH (约 $2.5)
-  MAX_POSITION_SIZE: 1000n * PRECISION_MULTIPLIER.ETH, // 最大仓位 1000 ETH
+  MAX_POSITION_SIZE: 5n * PRECISION_MULTIPLIER.ETH, // P2: 同步 Phase 1 — 最大仓位 5 ETH (旧值 1000 ETH)
   TAKER_FEE_RATE: 5n,  // 0.05% = 5bp
   MAKER_FEE_RATE: 2n,  // 0.02% = 2bp
   BASE_MMR: 200n,      // 基础维持保证金率 2% = 200bp
@@ -84,9 +86,9 @@ export const TRADING = {
 // ============================================================
 
 export const FUNDING = {
-  BASE_INTERVAL_MS: 60 * 60 * 1000,    // 1小时基础周期
-  MIN_INTERVAL_MS: 15 * 60 * 1000,     // 最小15分钟
-  MAX_RATE: 300n,                       // 最大3% = 300bp
+  BASE_INTERVAL_MS: 15 * 60 * 1000,    // P2: 15分钟基础周期（同步链上 FundingRate.sol 设计）
+  MIN_INTERVAL_MS: 5 * 60 * 1000,      // 最小5分钟
+  MAX_RATE: 500n,                       // P2: 最大5% = 500bp（meme 币高波动需更大区间）
   VOLATILITY_MULTIPLIER: 1.5,           // 波动率乘数
   IMBALANCE_MULTIPLIER: 2,              // 不平衡乘数
 } as const;
@@ -126,6 +128,16 @@ export const SUPPORTED_TOKENS: Address[] = [
 // ============================================================
 
 export const SKIP_SIGNATURE_VERIFY = process.env.SKIP_SIGNATURE_VERIFY === "true";
+
+// ============================================================
+// 资金流控制
+// ============================================================
+
+/** Allow fake deposit API (POST /api/user/:trader/deposit). Set to "true" ONLY for testing. */
+export const ALLOW_FAKE_DEPOSIT = process.env.ALLOW_FAKE_DEPOSIT === "true";
+
+/** Reset mode2 PnL adjustments on startup (for fresh start after enabling real on-chain deposits). */
+export const RESET_MODE2_ON_START = process.env.RESET_MODE2_ON_START === "true";
 
 // ============================================================
 // EIP-712 签名配置

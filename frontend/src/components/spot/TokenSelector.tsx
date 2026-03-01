@@ -3,12 +3,12 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { ChevronDown, Search, X } from "lucide-react";
 import { useTranslations } from "next-intl";
-import type { OnChainToken } from "@/hooks/common/useTokenList";
+import type { WssOnChainToken } from "@/lib/stores/tradingDataStore";
 
 type FilterTab = "all" | "active" | "graduated";
 
 interface TokenSelectorProps {
-  tokens: OnChainToken[];
+  tokens: WssOnChainToken[];
   isLoading: boolean;
   selectedAddress: string | null;
   onSelect: (tokenAddress: string) => void;
@@ -243,7 +243,7 @@ function TokenRow({
   onSelect,
   formatPrice,
 }: {
-  token: OnChainToken;
+  token: WssOnChainToken;
   isSelected: boolean;
   onSelect: () => void;
   formatPrice: (p: string) => string;

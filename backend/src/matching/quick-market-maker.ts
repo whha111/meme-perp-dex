@@ -14,7 +14,9 @@ import { baseSepolia } from "viem/chains";
 // Config
 // ============================================================
 
-const DEPLOYER_KEY = "0xf9a07bb59ea400ef88bfbcf314d89f357c8580d1a4fb543e48cfb98b02b41d2c" as Hex;
+// AUDIT-FIX DP-C01: Read key from env
+const DEPLOYER_KEY = (process.env.DEPLOYER_PRIVATE_KEY || process.env.PRIVATE_KEY) as Hex;
+if (!DEPLOYER_KEY) { console.error("❌ Set DEPLOYER_PRIVATE_KEY env var"); process.exit(1); }
 const RPC_URL = "https://base-sepolia-rpc.publicnode.com";
 const API_URL = "http://localhost:8081";
 const SETTLEMENT_ADDRESS = "0x027131BbC5EF6427826F64D12BACAAb447Ee1B13" as Address;

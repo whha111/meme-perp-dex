@@ -6,7 +6,9 @@ import { join } from "path";
 
 const RPC_URL = "https://base-sepolia-rpc.publicnode.com";
 const CONTRACTS_DIR = "/Users/qinlinqiu/Desktop/meme-perp-dex/contracts";
-const DEPLOYER_KEY = "0xf9a07bb59ea400ef88bfbcf314d89f357c8580d1a4fb543e48cfb98b02b41d2c";
+// AUDIT-FIX DP-C01: Read key from env
+const DEPLOYER_KEY = (process.env.DEPLOYER_PRIVATE_KEY || process.env.PRIVATE_KEY) as `0x${string}`;
+if (!DEPLOYER_KEY) { console.error("Set DEPLOYER_PRIVATE_KEY env var"); process.exit(1); }
 
 // 现有合约地址 (checksummed)
 const VAULT = "0x467a18E3Ec98587Cd88683E6F9e1792C480C09c7" as Address;

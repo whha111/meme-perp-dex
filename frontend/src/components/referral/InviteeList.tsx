@@ -49,7 +49,7 @@ export function InviteeList({ address }: InviteeListProps) {
 
           // 如果后端返回了详细列表 (未来扩展)
           if (Array.isArray(r.level1ReferralDetails)) {
-            setInvitees(r.level1ReferralDetails.map((detail: any) => ({
+            setInvitees(r.level1ReferralDetails.map((detail: { address?: string; joinedAt?: string; totalVolume?: string; commissionGenerated?: string; isActive?: boolean }) => ({
               address: detail.address ? `${detail.address.slice(0, 6)}...${detail.address.slice(-4)}` : "Unknown",
               registeredAt: detail.joinedAt ? new Date(detail.joinedAt).toLocaleDateString() : "-",
               totalVolume: detail.totalVolume ? (Number(detail.totalVolume) / 1e18).toFixed(4) : "0",

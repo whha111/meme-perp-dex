@@ -185,7 +185,9 @@ export async function withLock<T>(
         return await fn();
       } finally {
         // 使用 Lua 脚本安全释放锁 (Redis 原子操作，非 JS eval)
-        await client.call("EVAL", RELEASE_LOCK_SCRIPT, 1, fullKey, lockValue).catch(() => {});
+        await client.call("EVAL", RELEASE_LOCK_SCRIPT, 1, fullKey, lockValue).catch((err) => {
+          logger.warn("Redis", `Lock release failed for ${fullKey}: ${err}`);
+        });
       }
     }
 
@@ -638,16 +640,22 @@ export const BalanceRepo = {
   },
 
   async freezeMargin(trader: Address, amount: bigint): Promise<boolean> {
-    const balance = await this.getOrCreate(trader);
-    if (balance.availableBalance < amount) {
-      return false;
-    }
+    // P0-2: 使用 try/catch 防止 update 失败导致 margin 双花
+    try {
+      const balance = await this.getOrCreate(trader);
+      if (balance.availableBalance < amount) {
+        return false;
+      }
 
-    await this.update(trader, {
-      availableBalance: balance.availableBalance - amount,
-      frozenMargin: balance.frozenMargin + amount,
-    });
-    return true;
+      await this.update(trader, {
+        availableBalance: balance.availableBalance - amount,
+        frozenMargin: balance.frozenMargin + amount,
+      });
+      return true;
+    } catch (err) {
+      logger.error("Redis", `freezeMargin failed for ${trader} (${amount}): ${err}`);
+      return false; // 失败时拒绝冻结，防止双花
+    }
   },
 
   async unfreezeMargin(trader: Address, amount: bigint): Promise<void> {

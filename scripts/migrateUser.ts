@@ -18,7 +18,9 @@ const NEW_PM = "0xa3AF42aa965FCBCC9f19b97b7223E881f7C534e0" as Address;
 const VAULT = "0x467a18E3Ec98587Cd88683E6F9e1792C480C09c7" as Address;
 const USER = "0xCAE244A3417e75699da37c0e7EadA6cB244AA2B7" as Address;
 
-const PRIVATE_KEY = "0xf9a07bb59ea400ef88bfbcf314d89f357c8580d1a4fb543e48cfb98b02b41d2c";
+// AUDIT-FIX DP-C01: Read key from env
+const PRIVATE_KEY = (process.env.DEPLOYER_PRIVATE_KEY || process.env.PRIVATE_KEY) as `0x${string}`;
+if (!PRIVATE_KEY) { console.error("Set DEPLOYER_PRIVATE_KEY env var"); process.exit(1); }
 
 const client = createPublicClient({
   chain: baseSepolia,

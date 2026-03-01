@@ -1,6 +1,9 @@
 # API 规范文档
 
 > 参考 Binance Futures API 和 OKX API v5 设计规范
+>
+> **⚠️ 2026-03-01**: `POST /api/user/:trader/deposit` 和 `withdraw` 是无鉴权虚假接口。
+> 详见 `docs/ISSUES_AUDIT_REPORT.md`
 
 ## 目录
 1. [通用规范](#一通用规范)

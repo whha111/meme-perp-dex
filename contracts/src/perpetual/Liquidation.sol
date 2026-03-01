@@ -85,6 +85,9 @@ contract Liquidation is Ownable, ReentrancyGuard {
     event LiquidatorRewardEnabled(address indexed token);
     event LiquidatorRewardRateUpdated(uint256 oldRate, uint256 newRate);
     event TokenFactoryUpdated(address indexed tokenFactory);
+    event LiquidationFailed(address indexed user, bytes reason);
+    event ADLQueueAdded(address indexed user);
+    event ADLQueueRemoved(address indexed user);
 
     // ============================================================
     // Errors
@@ -199,7 +202,9 @@ contract Liquidation is Ownable, ReentrancyGuard {
     function liquidateBatch(address[] calldata users) external nonReentrant {
         for (uint256 i = 0; i < users.length; i++) {
             if (positionManager.canLiquidate(users[i])) {
-                try this.liquidateSingle(users[i], msg.sender) {} catch {}
+                try this.liquidateSingle(users[i], msg.sender) {} catch (bytes memory reason) {
+                    emit LiquidationFailed(users[i], reason);
+                }
             }
         }
     }
@@ -289,9 +294,15 @@ contract Liquidation is Ownable, ReentrancyGuard {
                 insuranceFund = 0;
             }
 
-            // 穿仓时仅在奖励启用后给清算人最小奖励
-            if (effectiveRewardRate > 0 && pos.collateral > 0) {
+            // AUDIT-FIX SC-C02: 穿仓时只有保险基金仍有余额才支付清算奖励
+            // 用户已破产 (remainingValue < 0)，不能从用户余额中取款
+            // 奖励改为从保险基金支付，且限额为保险基金剩余额
+            if (effectiveRewardRate > 0 && insuranceFund > 0) {
                 liquidatorReward = pos.collateral / 20;
+                if (liquidatorReward > insuranceFund) {
+                    liquidatorReward = insuranceFund;
+                }
+                insuranceFund -= liquidatorReward;
                 vault.distributeLiquidation(user, msg.sender, liquidatorReward, 0);
             }
         }
@@ -310,7 +321,9 @@ contract Liquidation is Ownable, ReentrancyGuard {
     function liquidateBatchToken(address[] calldata users, address token) external nonReentrant {
         for (uint256 i = 0; i < users.length; i++) {
             if (positionManager.canLiquidateToken(users[i], token)) {
-                try this.liquidateSingleToken(users[i], token, msg.sender) {} catch {}
+                try this.liquidateSingleToken(users[i], token, msg.sender) {} catch (bytes memory reason) {
+                    emit LiquidationFailed(users[i], reason);
+                }
             }
         }
     }
@@ -420,7 +433,7 @@ contract Liquidation is Ownable, ReentrancyGuard {
      * @param user 用户地址
      * @param amount 盈利金额
      */
-    // P-003: Added nonReentrant to prevent reentrancy via user.call
+    // P-003: nonReentrant + strict CEI pattern (no state revert after external call)
     function payProfit(address user, uint256 amount) external nonReentrant {
         // 只允许 Vault 调用
         require(msg.sender == address(vault), "Only vault");
@@ -428,30 +441,29 @@ contract Liquidation is Ownable, ReentrancyGuard {
         if (amount == 0) return;
 
         if (insuranceFund >= amount) {
+            // Effects: update state BEFORE external call (CEI)
             insuranceFund -= amount;
 
-            // 直接转账给用户
+            // Interaction: transfer ETH — revert on failure (strict CEI, no silent rollback)
             (bool success,) = user.call{value: amount}("");
-            if (!success) {
-                // 如果转账失败，增加到用户 Vault 余额
-                // 这需要 Vault 有相应的方法，这里简化处理
-                insuranceFund += amount; // 退回保险基金
-            }
+            if (!success) revert TransferFailed();
 
             emit ProfitPaid(user, amount);
         } else {
             // 保险基金不足，触发 ADL
-            _handleInsuranceShortfall(amount - insuranceFund);
+            uint256 shortfall = amount - insuranceFund;
 
-            // 支付剩余可用的
+            // Effects: drain available funds BEFORE external call
             uint256 available = insuranceFund;
             insuranceFund = 0;
 
+            _handleInsuranceShortfall(shortfall);
+
+            // Interaction: transfer remaining — revert on failure
             if (available > 0) {
                 (bool success,) = user.call{value: available}("");
-                if (success) {
-                    emit ProfitPaid(user, available);
-                }
+                if (!success) revert TransferFailed();
+                emit ProfitPaid(user, available);
             }
         }
     }
@@ -791,6 +803,7 @@ contract Liquidation is Ownable, ReentrancyGuard {
         if (userADLIndex[user] == 0) {
             adlQueue.push(user);
             userADLIndex[user] = adlQueue.length;
+            emit ADLQueueAdded(user);
         }
     }
 
@@ -811,6 +824,7 @@ contract Liquidation is Ownable, ReentrancyGuard {
             }
             adlQueue.pop();
             delete userADLIndex[user];
+            emit ADLQueueRemoved(user);
         }
     }
 

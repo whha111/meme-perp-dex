@@ -40,7 +40,7 @@ export function RewardHistory({ address }: RewardHistoryProps) {
         const data = await res.json();
 
         if (data.commissions && Array.isArray(data.commissions)) {
-          setRewards(data.commissions.map((c: any) => ({
+          setRewards(data.commissions.map((c: { id?: string; level?: number; status?: string; referee?: string; tradeFee?: string; commissionAmount?: string; tradeId?: string; timestamp?: string }) => ({
             id: c.id || String(Math.random()),
             type: c.level === 2 ? "level2" : c.status === "withdrawn" ? "claim" : "level1",
             traderAddress: c.referee ? `${c.referee.slice(0, 6)}...${c.referee.slice(-4)}` : "",

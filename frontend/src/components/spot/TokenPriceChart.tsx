@@ -606,6 +606,16 @@ export function TokenPriceChart({ symbol, displaySymbol, className, latestTrade 
           },
         },
       },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: true,
+      },
+      kineticScroll: {
+        mouse: true,
+        touch: true,
+      },
     };
 
     const chart = createChart(chartContainerRef.current, chartOptions);

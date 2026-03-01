@@ -4,7 +4,9 @@
  * 用于上传代币 Logo 图片到 IPFS
  */
 
-const PINATA_JWT = process.env.NEXT_PUBLIC_PINATA_JWT;
+// P0-1: Pinata JWT 不能暴露在客户端 (NEXT_PUBLIC_ 前缀会被打包进浏览器 JS)
+// 上传功能通过 /api/upload 代理到后端，JWT 仅在服务端使用
+// 客户端只需要 gateway URL（公开可读，无需认证）
 const PINATA_GATEWAY = process.env.NEXT_PUBLIC_PINATA_GATEWAY || 'https://gateway.pinata.cloud/ipfs';
 
 export interface UploadResult {
@@ -15,16 +17,9 @@ export interface UploadResult {
 }
 
 /**
- * 上传文件到 IPFS (通过 Pinata)
+ * 上传文件到 IPFS (通过后端 API 代理，JWT 不暴露在客户端)
  */
 export async function uploadToIPFS(file: File): Promise<UploadResult> {
-  if (!PINATA_JWT) {
-    return {
-      success: false,
-      error: 'Pinata JWT 未配置',
-    };
-  }
-
   // 验证文件类型
   const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'];
   if (!allowedTypes.includes(file.type)) {
@@ -47,37 +42,19 @@ export async function uploadToIPFS(file: File): Promise<UploadResult> {
     const formData = new FormData();
     formData.append('file', file);
 
-    // 添加 Pinata 元数据
-    const metadata = JSON.stringify({
-      name: `token-logo-${Date.now()}`,
-      keyvalues: {
-        type: 'token-logo',
-        uploadedAt: new Date().toISOString(),
-      },
-    });
-    formData.append('pinataMetadata', metadata);
-
-    // 上传选项
-    const options = JSON.stringify({
-      cidVersion: 1,
-    });
-    formData.append('pinataOptions', options);
-
-    const response = await fetch('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+    // P0-1: 通过 Next.js API route 代理上传，JWT 仅在服务端使用
+    const response = await fetch('/api/upload', {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${PINATA_JWT}`,
-      },
       body: formData,
     });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.message || `上传失败: ${response.status}`);
+      throw new Error(errorData.error || `上传失败: ${response.status}`);
     }
 
     const data = await response.json();
-    const ipfsHash = data.IpfsHash;
+    const ipfsHash = data.ipfsHash;
 
     return {
       success: true,
@@ -94,45 +71,24 @@ export async function uploadToIPFS(file: File): Promise<UploadResult> {
 }
 
 /**
- * 上传 JSON 元数据到 IPFS
+ * 上传 JSON 元数据到 IPFS (通过后端 API 代理)
  */
 export async function uploadJSONToIPFS(data: Record<string, unknown>, name: string): Promise<UploadResult> {
-  if (!PINATA_JWT) {
-    return {
-      success: false,
-      error: 'Pinata JWT 未配置',
-    };
-  }
-
   try {
-    const response = await fetch('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
+    // P0-1: 通过 Next.js API route 代理上传，JWT 仅在服务端使用
+    const response = await fetch('/api/upload-json', {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${PINATA_JWT}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        pinataContent: data,
-        pinataMetadata: {
-          name,
-          keyvalues: {
-            type: 'token-metadata',
-            uploadedAt: new Date().toISOString(),
-          },
-        },
-        pinataOptions: {
-          cidVersion: 1,
-        },
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data, name }),
     });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.message || `上传失败: ${response.status}`);
+      throw new Error(errorData.error || `上传失败: ${response.status}`);
     }
 
     const result = await response.json();
-    const ipfsHash = result.IpfsHash;
+    const ipfsHash = result.ipfsHash;
 
     return {
       success: true,

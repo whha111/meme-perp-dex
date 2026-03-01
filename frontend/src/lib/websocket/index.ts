@@ -235,29 +235,33 @@ export function getWebSocketServices(): WebSocketServices {
  * 支持 snake_case 和 camelCase 两种格式
  */
 export function adaptInstrumentAssetResponse(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  response: any
+  response: Record<string, unknown>
 ): InstrumentAssetData {
+  // Helper: 安全读取 snake_case / camelCase 字段
+  const s = (a: string, b: string, fallback = ""): string =>
+    String(response[a] ?? response[b] ?? fallback);
+  const n = (a: string, b: string, fallback = 0): number =>
+    Number(response[a] ?? response[b] ?? fallback);
+
+  const instId = s("inst_id", "instId");
   return {
-    instId: response.inst_id || response.instId || "",
-    symbol:
-      response.symbol ||
-      (response.inst_id || response.instId || "").split("-")[0],
-    tokenAddress: response.token_address || response.tokenAddress,
-    poolAddress: response.pool_address || response.poolAddress,
-    creatorAddress: response.creator_address || response.creatorAddress,
-    currentPrice: response.current_price || response.currentPrice || "0",
-    fdv: response.fdv || "0",
-    volume24h: response.volume_24h || response.volume24h || "0",
-    priceChange24h: response.price_change_24h || response.priceChange24h || 0,
-    soldSupply: response.sold_supply || response.soldSupply,
-    totalSupply: response.total_supply || response.totalSupply,
-    isGraduated: response.is_graduated || response.isGraduated || false,
-    securityStatus: response.security_status || response.securityStatus,
-    createdAt: response.created_at || response.createdAt,
-    uniqueTraders: response.unique_traders || response.uniqueTraders || 0,
-    logo: response.logo_url || response.logoUrl || response.logo,
-    imageUrl: response.image_url || response.imageUrl,
+    instId,
+    symbol: s("symbol", "symbol") || instId.split("-")[0],
+    tokenAddress: s("token_address", "tokenAddress") || undefined,
+    poolAddress: s("pool_address", "poolAddress") || undefined,
+    creatorAddress: s("creator_address", "creatorAddress") || undefined,
+    currentPrice: s("current_price", "currentPrice", "0"),
+    fdv: s("fdv", "fdv", "0"),
+    volume24h: s("volume_24h", "volume24h", "0"),
+    priceChange24h: n("price_change_24h", "priceChange24h"),
+    soldSupply: s("sold_supply", "soldSupply") || undefined,
+    totalSupply: s("total_supply", "totalSupply") || undefined,
+    isGraduated: !!(response.is_graduated ?? response.isGraduated ?? false),
+    securityStatus: s("security_status", "securityStatus") || undefined,
+    createdAt: n("created_at", "createdAt") || undefined,
+    uniqueTraders: n("unique_traders", "uniqueTraders"),
+    logo: s("logo_url", "logoUrl") || (response.logo as string) || undefined,
+    imageUrl: s("image_url", "imageUrl") || undefined,
   };
 }
 

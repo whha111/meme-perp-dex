@@ -478,15 +478,11 @@ contract PerpVault is IPerpVault, Ownable, ReentrancyGuard, Pausable {
 
         totalProfitsPaid += actualPay;
 
-        // Send profit to Vault (Vault will credit trader's available balance)
-        if (vault != address(0)) {
-            (bool success,) = vault.call{value: actualPay}("");
-            if (!success) revert TransferFailed();
-        } else {
-            // Fallback: send directly to trader
-            (bool success,) = trader.call{value: actualPay}("");
-            if (!success) revert TransferFailed();
-        }
+        // AUDIT-FIX SC-C03: 利润必须直接发给 trader，不能经过 Vault
+        // Vault.receive() 会将 msg.value 记入 msg.sender (PerpVault) 而非 trader
+        // 导致利润永久卡在 PerpVault 的 Vault 账户中，trader 无法取出
+        (bool success,) = trader.call{value: actualPay}("");
+        if (!success) revert TransferFailed();
 
         if (actualPay < profitETH) {
             emit TraderProfitSettledPartial(trader, profitETH, actualPay);

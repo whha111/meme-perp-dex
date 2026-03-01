@@ -2519,9 +2519,14 @@ async function settleFunding(token: Address): Promise<void> {
   let totalCollected = 0n;
 
   // 遍历所有仓位 — 双边都收取
-  for (const [trader, positions] of userPositions.entries()) {
+  // AUDIT-FIX ME-C07: 只在锁外捕获 trader 列表，positions 必须在锁内重新读取
+  // 否则 handleClosePair 可能在锁获取前替换了 positions 数组引用
+  const traderList = [...userPositions.keys()];
+  for (const trader of traderList) {
     // P3-P2: per-trader 分布式锁 — 防止 funding 结算与 close/liquidation 并发竞态
     await withLock(`position:${trader}`, 5000, async () => {
+    // AUDIT-FIX ME-C07: 在锁内重新读取 positions，确保拿到最新引用
+    const positions = userPositions.get(trader) || [];
     for (const pos of positions) {
       if ((pos.token.toLowerCase() as Address) !== normalizedToken) continue;
 
@@ -6495,12 +6500,9 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
     // 市价单没有对手方时保持 PENDING 状态，加入订单簿，让用户在"当前委托"中看到
     // 用户可以自己决定是否撤销，撤销时会退还保证金
 
-    // P3-P2: Nonce update now inside withLock (see ~L6385). This is a no-op safety check.
-    // The actual nonce increment happens atomically inside the lock.
-    // Keep this as a belt-and-suspenders check.
-    if (nonceBigInt >= getUserNonce(trader)) {
-      userNonces.set(trader.toLowerCase() as Address, nonceBigInt + 1n);
-    }
+    // AUDIT-FIX ME-C14: Nonce update 已在 withLock 内 (L6437) 原子执行
+    // 删除此处锁外的冗余更新 — 它会与锁内更新竞争，可能导致 nonce 跳跃或重放
+    // （之前是 "belt-and-suspenders" 但实际上是 race condition 源头）
 
     console.log(`[API] Order submitted: ${order.id} (${matches.length} matches, postOnly=${postOnly}, timeInForce=${tif})`);
 
@@ -8049,8 +8051,11 @@ async function handleClosePair(req: Request, pairId: string): Promise<Response> 
 
     console.log(`[Close] pairId=${pairId} trader=${normalizedTrader.slice(0, 10)} ratio=${(closeRatioActual * 100).toFixed(2)}% isFullClose=${isFullClose}`);
 
-    // 计算平仓 PnL (按比例)
-    const totalUpnl = BigInt(position.unrealizedPnL);
+    // AUDIT-FIX ME-C05: 使用实时价格计算平仓PnL，而非存储的旧 unrealizedPnL
+    // position.unrealizedPnL 仅在定期价格更新时刷新，可能已过期
+    // 必须用 currentPrice (L8029) 实时计算，确保平仓结算金额准确
+    const entryPrice = BigInt(position.entryPrice || position.averageEntryPrice);
+    const totalUpnl = calculateUnrealizedPnL(currentSize, entryPrice, currentPrice, position.isLong);
     const closePnL = (totalUpnl * sizeToClose) / currentSize;
 
     // 计算释放的保证金 (按比例)
@@ -8669,7 +8674,8 @@ function calculateBankruptcyPrice(
  * 公式: PnL = Size × (MarkPrice - EntryPrice) / EntryPrice × Direction
  *
  * ETH 本位说明:
- * - size: Token 数量 (1e18)
+ * AUDIT-FIX ME-H11: size 是 ETH 名义价值，不是 Token 数量
+ * - size: ETH 名义价值 (1e18 精度), 即 tokenCount * entryPrice / 1e18
  * - entryPrice/currentPrice: ETH/Token (1e18)
  * - 返回值: ETH 盈亏 (1e18 精度)
  *
@@ -8679,7 +8685,7 @@ function calculateBankruptcyPrice(
  * 3. 多头价格上涨盈利，空头价格下跌盈利
  */
 function calculateUnrealizedPnL(
-  size: bigint,         // Token 数量 (1e18 精度)
+  size: bigint,         // ETH 名义价值 (1e18 精度)
   entryPrice: bigint,   // ETH/Token (1e18 精度)
   currentPrice: bigint, // ETH/Token (1e18 精度)
   isLong: boolean

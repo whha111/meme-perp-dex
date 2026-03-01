@@ -227,6 +227,18 @@ func validateConfig(cfg *Config) error {
 		if len(cfg.Security.AllowedOrigins) == 0 || (len(cfg.Security.AllowedOrigins) == 1 && cfg.Security.AllowedOrigins[0] == "*") {
 			errors = append(errors, "security.allowed_origins must be explicitly configured in production (not '*')")
 		}
+
+		// P2-59: Reject localhost defaults in production
+		for _, origin := range cfg.Security.AllowedOrigins {
+			if strings.Contains(origin, "localhost") || strings.Contains(origin, "127.0.0.1") {
+				errors = append(errors, "security.allowed_origins must not contain localhost in production")
+				break
+			}
+		}
+
+		if strings.Contains(cfg.MatchingEngine.URL, "localhost") || strings.Contains(cfg.MatchingEngine.URL, "127.0.0.1") {
+			errors = append(errors, "matching_engine.url must not be localhost in production")
+		}
 	}
 
 	// Validate blockchain configuration

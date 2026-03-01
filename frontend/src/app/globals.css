@@ -303,3 +303,12 @@ body {
     transform: scale(1);
   }
 }
+
+/* 最新成交入场动画 — 行背景短暂高亮 */
+@keyframes tradeFlash {
+  0% { background-color: rgba(255, 255, 255, 0.06); }
+  100% { background-color: transparent; }
+}
+.animate-trade-flash {
+  animation: tradeFlash 0.6s ease-out;
+}

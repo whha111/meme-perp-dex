@@ -6,6 +6,34 @@
 
 ---
 
+## ⚠️ 2026-03-01 紧急修复优先级
+
+**全面审计发现 48 个问题 (12 CRITICAL)**。以下修复必须在其他开发之前完成:
+
+### 🔴 P0 — 资金安全 (上线前必须)
+- [ ] 禁用/鉴权虚假存款 API (`POST /api/user/:trader/deposit`)
+- [ ] 禁用/鉴权虚假提款 API (`POST /api/user/:trader/withdraw`)
+- [ ] 前端 AccountBalance 存款调用 SettlementV2.deposit()
+- [ ] 前端 AccountBalance 提款调用 SettlementV2.withdraw() (Merkle proof)
+- [ ] 做市商脚本改用链上 SettlementV2.deposit()
+- [ ] Redis AOF 持久化 (docker-compose.yml)
+
+### 🟠 P1 — 核心功能
+- [ ] PerpVault 种子 LP 流动性 (运行 ConfigureSettlement.s.sol)
+- [ ] PnL 结算真正流经 PerpVault
+- [ ] 保险基金持久化 + 连接 PerpVault
+- [ ] 资金费差额纳入结算队列
+
+### 🟡 P2 — Keeper 修复
+- [ ] Manager 传入 matchingEngineURL
+- [ ] Keeper HTTP 查询引擎仓位
+- [ ] SL/TP 订单触发后提交交易
+- [ ] big.Int 字符串比较 bug
+
+**详见**: `docs/ISSUES_AUDIT_REPORT.md`
+
+---
+
 ## 当前状态
 
 ### 已完成
@@ -15,6 +43,11 @@
 - [x] 后端框架 (Go + Gin)
 - [x] 智能合约框架 (Foundry)
 - [x] 基础文档 (PRD, 架构设计)
+- [x] 现货交易 (TokenFactory + AMM + Router)
+- [x] 链下撮合引擎 (订单簿 + 撮合 + 仓位)
+- [x] PerpVault OI 追踪 (batch + nonce 管理)
+- [x] Merkle 快照模块 (snapshot.ts)
+- [x] 2026-03-01 全面代码审计 (48 issues found)
 
 ### 待清理
 

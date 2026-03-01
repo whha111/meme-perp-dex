@@ -452,6 +452,7 @@ export const SpotStatsRepo = {
     volume24h: string;
     high24h: string;
     low24h: string;
+    open24h: string;
     change24h: string;
     trades24h: number;
   } | null> {
@@ -465,6 +466,7 @@ export const SpotStatsRepo = {
       volume24h: data.volume24h,
       high24h: data.high24h,
       low24h: data.low24h,
+      open24h: data.open24h || "0",
       change24h: data.change24h,
       trades24h: parseInt(data.trades24h || "0"),
     };

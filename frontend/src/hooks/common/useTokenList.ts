@@ -105,29 +105,31 @@ export function useOnChainTokenList() {
               address: addr,
               abi: ERC20_ABI,
               functionName: "name",
-            }).catch(() => "Unknown"),
+            }).catch((err) => { console.warn("[useTokenList] name/symbol read failed:", err); return "Unknown"; }),
             publicClient.readContract({
               address: addr,
               abi: ERC20_ABI,
               functionName: "symbol",
-            }).catch(() => "???"),
+            }).catch((err) => { console.warn("[useTokenList] symbol read failed:", err); return "???"; }),
           ]);
 
-          const pool = poolState as any;
+          // viem 返回 struct 为 object 或 tuple — 用 Record 安全访问
+          const pool = poolState as Record<string, unknown>;
           const priceValue = price as bigint;
 
           // Pool state structure (12 fields)
           // [0] realETHReserve, [1] realTokenReserve, [2] soldTokens, [3] isGraduated,
           // [4] isActive, [5] creator, [6] createdAt, [7] metadataURI,
           // [8] graduationFailed, [9] graduationAttempts, [10] perpEnabled
-          const realETHReserve = pool.realETHReserve ?? pool[0] ?? 0n;
-          const soldTokens = pool.soldTokens ?? pool[2] ?? 0n;
-          const isGraduated = pool.isGraduated ?? pool[3] ?? false;
-          const isActive = pool.isActive ?? pool[4] ?? false;
-          const creator = pool.creator ?? pool[5] ?? "0x0";
-          const createdAt = pool.createdAt ?? pool[6] ?? 0n;
-          const metadataURI = pool.metadataURI ?? pool[7] ?? "";
-          const perpEnabled = pool.perpEnabled ?? pool[10] ?? false;
+          const poolArr = pool as unknown as Record<number, unknown>;
+          const realETHReserve = (pool.realETHReserve ?? poolArr[0] ?? 0n) as bigint;
+          const soldTokens = (pool.soldTokens ?? poolArr[2] ?? 0n) as bigint;
+          const isGraduated = (pool.isGraduated ?? poolArr[3] ?? false) as boolean;
+          const isActive = (pool.isActive ?? poolArr[4] ?? false) as boolean;
+          const creator = (pool.creator ?? poolArr[5] ?? "0x0") as string;
+          const createdAt = (pool.createdAt ?? poolArr[6] ?? 0n) as bigint;
+          const metadataURI = (pool.metadataURI ?? poolArr[7] ?? "") as string;
+          const perpEnabled = (pool.perpEnabled ?? poolArr[10] ?? false) as boolean;
 
           // Calculate market cap: price * total supply (1 billion tokens)
           const TOTAL_SUPPLY = 1_000_000_000n * 10n ** 18n;

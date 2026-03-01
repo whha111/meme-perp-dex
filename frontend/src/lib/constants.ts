@@ -82,10 +82,14 @@ export function verifyTXTRecord(txtValue: string, expectedWallet: string): boole
 
 /**
  * WebSocket 端点配置
+ * P1: 使用 config/api.ts 的集中配置，避免硬编码 localhost
+ * 生产环境 URL 通过 NEXT_PUBLIC_MATCHING_ENGINE_URL 环境变量配置
  */
 export const WEBSOCKET_ENDPOINTS = {
-  DEVELOPMENT: process.env.NEXT_PUBLIC_WEBSOCKET_URL || "ws://localhost:8081/ws",
-  PRODUCTION: "wss://api.domainfi.com/ws",
+  DEVELOPMENT: process.env.NEXT_PUBLIC_WEBSOCKET_URL ||
+    (process.env.NEXT_PUBLIC_MATCHING_ENGINE_URL || "http://localhost:8081").replace(/^http/, "ws") + "/ws",
+  PRODUCTION: process.env.NEXT_PUBLIC_WEBSOCKET_URL ||
+    (process.env.NEXT_PUBLIC_MATCHING_ENGINE_URL || "wss://api.domainfi.com").replace(/^http/, "ws") + "/ws",
 } as const;
 
 /**

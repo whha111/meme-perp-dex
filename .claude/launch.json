@@ -2,6 +2,20 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "matching-engine",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["run", "server.ts"],
+      "port": 8081,
+      "cwd": "backend/src/matching"
+    },
+    {
+      "name": "backend",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", "./cmd/api"],
+      "port": 8080,
+      "cwd": "backend"
+    },
+    {
       "name": "frontend",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],

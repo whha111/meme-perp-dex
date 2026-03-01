@@ -12,11 +12,13 @@ contracts/out/
 contracts/cache/
 contracts/broadcast/
 
-# Environment files
+# Environment files — AUDIT-FIX DP-C01/C02: catch ALL .env files at any depth
 .env
-.env.local
-.env.production
-.env*.local
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
 contracts/.env
 
 # IDE

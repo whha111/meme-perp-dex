@@ -9,13 +9,15 @@ import "../interfaces/IPriceFeed.sol";
 
 /**
  * @title FundingRate
- * @notice 资金费率合约 — Meme 币专用动态失衡模型
+ * @notice 资金费率合约 — Meme 币专用动态倾斜双边收取模型
  * @dev 核心逻辑：
  *      1. 每 15 分钟收取一次（可配置）
- *      2. 费率基于多空 OI 失衡度动态计算：skew = |longOI - shortOI| / totalOI
- *      3. 劣势方（OI 更大的一方）支付资金费
- *      4. 收取的资金费 100% 注入保险基金
- *      5. 50/50 平衡时资金费为 0（无成本）
+ *      2. 双边都收取：多头和空头都要付资金费
+ *      3. 费率动态倾斜：多数方费率更高，少数方费率更低
+ *         longRate  = baseFundingRate × (1 + skewFactor × imbalanceRatio)
+ *         shortRate = baseFundingRate × (1 - skewFactor × imbalanceRatio)
+ *      4. 收取的资金费 100% 注入保险基金（不在交易者间转移）
+ *      5. 50/50 平衡时双方费率相同 = baseFundingRate
  */
 contract FundingRate is Ownable {
     using Address for address payable;
@@ -42,6 +44,11 @@ contract FundingRate is Ownable {
 
     /// @notice 资金费 → 保险基金比例（默认 10000 = 100%）
     uint256 public toInsuranceRatio = 10000;
+
+    /// @notice 倾斜系数（默认 5000 = 50%），控制多数方/少数方费率差异
+    /// 公式: longRate = baseFundingRate * (1 + skewFactor * imbalance / PRECISION)
+    ///        shortRate = baseFundingRate * (1 - skewFactor * imbalance / PRECISION)
+    uint256 public skewFactor = 5000;
 
     // ============================================================
     // State Variables
@@ -89,6 +96,7 @@ contract FundingRate is Ownable {
     event BaseFundingRateUpdated(uint256 oldValue, uint256 newValue);
     event MaxFundingRateUpdated(uint256 oldValue, uint256 newValue);
     event ToInsuranceRatioUpdated(uint256 oldValue, uint256 newValue);
+    event SkewFactorUpdated(uint256 oldValue, uint256 newValue);
 
     // ============================================================
     // Errors
@@ -130,11 +138,13 @@ contract FundingRate is Ownable {
     // ============================================================
 
     /**
-     * @notice 收取资金费（动态失衡模型）
-     * @dev 任何人可调用。费率基于多空 OI 比例动态计算：
-     *      skew = (longOI - shortOI) / totalOI
-     *      effectiveRate = |skew| × baseFundingRateBps，上限 maxFundingRateBps
-     *      劣势方支付，100% 进保险基金
+     * @notice 收取资金费（双边收取 + 动态倾斜模型）
+     * @dev 任何人可调用。多头和空头都付费，费率根据 OI 失衡动态倾斜：
+     *      imbalance = (longOI - shortOI) / totalOI (range: [-1, 1])
+     *      longRate  = baseFundingRate * (1 + skewFactor * imbalance / BPS_PRECISION)
+     *      shortRate = baseFundingRate * (1 - skewFactor * imbalance / BPS_PRECISION)
+     *      多数方费率更高，少数方费率更低，但双方始终 > 0
+     *      全部资金费进入保险基金
      */
     function collectFunding() external {
         if (block.timestamp < lastFundingTime + fundingInterval) {
@@ -151,43 +161,63 @@ contract FundingRate is Ownable {
             return;
         }
 
-        // 计算失衡度 skew（精度 1e18）
-        // skew > 0: 多头占优（多头付费）
-        // skew < 0: 空头占优（空头付费）
-        int256 skew;
+        // 计算失衡度 imbalance（精度 PRECISION = 1e18）
+        // imbalance > 0: 多头占优 → 多头费率更高
+        // imbalance < 0: 空头占优 → 空头费率更高
+        int256 imbalance;
         if (totalLong >= totalShort) {
-            skew = int256(((totalLong - totalShort) * PRECISION) / totalOI);
+            imbalance = int256(((totalLong - totalShort) * PRECISION) / totalOI);
         } else {
-            skew = -int256(((totalShort - totalLong) * PRECISION) / totalOI);
+            imbalance = -int256(((totalShort - totalLong) * PRECISION) / totalOI);
         }
 
-        // 计算有效费率 = |skew| × baseFundingRateBps / BPS_PRECISION
-        uint256 absSkew = skew >= 0 ? uint256(skew) : uint256(-skew);
-        uint256 effectiveRateBps = (absSkew * baseFundingRateBps) / PRECISION;
+        // 计算双边费率（bps precision，乘以 PRECISION 避免截断）
+        // longRateScaled  = baseFundingRateBps * PRECISION * (BPS_PRECISION + skewFactor * imbalance / PRECISION) / BPS_PRECISION
+        // shortRateScaled = baseFundingRateBps * PRECISION * (BPS_PRECISION - skewFactor * imbalance / PRECISION) / BPS_PRECISION
+        uint256 baseScaled = baseFundingRateBps * PRECISION;
+        int256 skewAdjust = (int256(skewFactor) * imbalance) / int256(PRECISION);
+        // skewAdjust range: [-skewFactor, +skewFactor] (in BPS terms)
 
-        // 限制最大费率
-        if (effectiveRateBps > maxFundingRateBps) {
-            effectiveRateBps = maxFundingRateBps;
+        // longRate = base * (BPS + skewAdjust) / BPS
+        // shortRate = base * (BPS - skewAdjust) / BPS
+        uint256 longRateScaled;
+        uint256 shortRateScaled;
+
+        if (skewAdjust >= 0) {
+            longRateScaled = (baseScaled * (BPS_PRECISION + uint256(skewAdjust))) / BPS_PRECISION;
+            shortRateScaled = (baseScaled * (BPS_PRECISION - uint256(skewAdjust))) / BPS_PRECISION;
+        } else {
+            longRateScaled = (baseScaled * (BPS_PRECISION - uint256(-skewAdjust))) / BPS_PRECISION;
+            shortRateScaled = (baseScaled * (BPS_PRECISION + uint256(-skewAdjust))) / BPS_PRECISION;
         }
 
-        // 资金费 = 劣势方 OI × effectiveRate
-        // 劣势方是 OI 更大的一方
-        uint256 dominantOI = totalLong >= totalShort ? totalLong : totalShort;
-        uint256 fundingAmount = (dominantOI * effectiveRateBps) / BPS_PRECISION;
+        // Cap at maxFundingRate
+        uint256 maxRateScaled = maxFundingRateBps * PRECISION;
+        if (longRateScaled > maxRateScaled) longRateScaled = maxRateScaled;
+        if (shortRateScaled > maxRateScaled) shortRateScaled = maxRateScaled;
+
+        // 双边收取资金费
+        uint256 longFunding = (totalLong * longRateScaled) / (PRECISION * BPS_PRECISION);
+        uint256 shortFunding = (totalShort * shortRateScaled) / (PRECISION * BPS_PRECISION);
+        uint256 fundingAmount = longFunding + shortFunding;
 
         // 分配：100% 进保险基金（toInsuranceRatio = 10000）
         uint256 toInsurance = (fundingAmount * toInsuranceRatio) / BPS_PRECISION;
         uint256 toPlatform = fundingAmount - toInsurance;
 
-        // 更新余额
-        insuranceFundBalance += toInsurance;
-        riskReserveBalance += toPlatform;
+        // AUDIT-FIX SC-H03: 不再增加 insuranceFundBalance / riskReserveBalance
+        // collectFunding() 不是 payable，没有 ETH 转入合约
+        // 增加变量只会制造"幽灵"余额，导致 coverDeficit/emergencyWithdraw 高估可用资金
+        // 实际资金费结算由链下匹配引擎处理 (server.ts settleFunding)
+        // insuranceFundBalance += toInsurance;  // REMOVED — phantom accounting
+        // riskReserveBalance += toPlatform;     // REMOVED — phantom accounting
         totalFundingCollected += fundingAmount;
 
-        // 记录当前费率（带方向，供前端显示）
-        currentFundingRate = skew >= 0
-            ? int256(effectiveRateBps)   // 正 = 多头付费
-            : -int256(effectiveRateBps); // 负 = 空头付费
+        // 记录当前费率方向（正 = 多头费率更高，负 = 空头费率更高）
+        // 实际 bps 值 = longRateScaled / PRECISION
+        currentFundingRate = imbalance >= 0
+            ? int256(longRateScaled / PRECISION)    // 正 = 多头费率更高
+            : -int256(shortRateScaled / PRECISION); // 负 = 空头费率更高
 
         lastFundingTime = block.timestamp;
 
@@ -256,6 +286,12 @@ contract FundingRate is Ownable {
         if (_ratio > BPS_PRECISION) revert InvalidParameter();
         emit ToInsuranceRatioUpdated(toInsuranceRatio, _ratio);
         toInsuranceRatio = _ratio;
+    }
+
+    function setSkewFactor(uint256 _factor) external onlyOwner {
+        if (_factor > BPS_PRECISION) revert InvalidParameter(); // max 100%
+        emit SkewFactorUpdated(skewFactor, _factor);
+        skewFactor = _factor;
     }
 
     function setSuperAdmin(address newAdmin) external onlyOwner {

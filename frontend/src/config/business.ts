@@ -15,9 +15,13 @@ export const ENV_CONFIG = {
   
   // 合约地址（通过 contracts.ts 管理）
   
-  // API 配置 - 使用 config/api.ts 中的 MATCHING_ENGINE_URL
-  // 此处仅作为备用配置
-  API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8081",
+  // API 配置 — 已统一到 config/api.ts，此处保留向后兼容
+  // P1: 不再独立定义 localhost fallback，避免生产环境遗漏配置
+  // 使用方应导入 import { MATCHING_ENGINE_URL } from "@/config/api"
+  API_BASE_URL: process.env.NEXT_PUBLIC_API_BASE_URL ||
+    process.env.NEXT_PUBLIC_MATCHING_ENGINE_URL ||
+    process.env.NEXT_PUBLIC_API_URL ||
+    "http://localhost:8081",
 } as const;
 
 // ==================== 价格配置 ====================

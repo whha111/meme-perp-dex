@@ -1,5 +1,10 @@
 # 数据库设计文档
 
+> **⚠️ 2026-03-01 审计**: PostgreSQL 实际上是"幽灵数据库"。
+> 所有交易在 TypeScript 撮合引擎中完成，存储在 Redis/内存中。
+> 没有任何进程将撮合结果同步到 PostgreSQL。所有 Go 端 Repository 查询返回空/过期数据。
+> 这是 CRITICAL 级别问题。详见 `docs/ISSUES_AUDIT_REPORT.md`
+
 ## 概述
 
 本文档定义 MEME Perp DEX 的数据库架构设计，使用 PostgreSQL 作为主数据库，Redis 作为缓存和实时数据存储。

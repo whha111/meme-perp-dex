@@ -47,9 +47,9 @@ export function useHeatmapData(
 
       setData(json);
       setError(null);
-    } catch (err: any) {
+    } catch (err) {
       console.error("Failed to fetch heatmap data:", err);
-      setError(err.message || "Failed to load heatmap data");
+      setError(err instanceof Error ? err.message : "Failed to load heatmap data");
     } finally {
       setLoading(false);
     }

@@ -1,33 +1,68 @@
 {
   "network": "base-sepolia",
   "chainId": 84532,
-  "deployedAt": "2026-02-04",
+  "deployedAt": "2026-02-28",
   "contracts": {
     "TokenFactory": {
-      "address": "0x8de2Ce2a0f974b4CB00EC5B56BD89382690b5523",
-      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE",
-      "constructorArgs": {
-        "initialOwner": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE",
-        "feeReceiver": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE",
-        "uniswapV2Router": "0x8cFe327CEc66d1C090Dd72bd0FF11d690C33a2Eb"
-      }
+      "address": "0x757eF02C2233b8cE2161EE65Fb7D626776b8CB73",
+      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
     },
     "Settlement": {
-      "address": "0x027131BbC5EF6427826F64D12BACAAb447Ee1B13",
+      "address": "0x1660b3571fB04f16F70aea40ac0E908607061DBE",
+      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+    },
+    "SettlementV2": {
+      "address": "0x733EccCf612F70621c772D63334Cf5606d7a7C75",
       "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
     },
     "PriceFeed": {
-      "address": "0xa97a1E55cFfF5C1e45Ac2c1D882717cDD4F44e01",
+      "address": "0xfB347BC4Cc61C7FdCD862ED212A0e3866d205112",
       "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
     },
     "PositionManager": {
-      "address": "0xbff432BfBc3505712BB727D3F61E869769DB5724",
+      "address": "0x7611a924622B5f6bc4c2ECAAdB6DE078E741AcF6",
       "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
     },
     "Vault": {
-      "address": "0x780E415Ffd8104Ee2EECD7418A9227Bb92ebE294",
+      "address": "0xcc4Fa8Df0686824F92d392Cb650057EA7D2EF46E",
+      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+    },
+    "PerpVault": {
+      "address": "0x586FB78b8dB39d8D89C1Fd2Aa0c756C828e5251F",
+      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+    },
+    "InsuranceFund": {
+      "address": "0x93F63c2EEc4bF77FF301Cd14Ef4A392E58e33C69",
+      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+    },
+    "ContractRegistry": {
+      "address": "0x218A135F119AcAf00141b979cdFEf432f563437F",
+      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+    },
+    "FundingRate": {
+      "address": "0xD6DD3947F8d80A031b69eBd825Be2384E787dC46",
+      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+    },
+    "Liquidation": {
+      "address": "0x6Fb6325094B24AE5f458f7a34C63BE30Da9aAECA",
+      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+    },
+    "AMM": {
+      "address": "0x2c23046DC1595754528a10b8340F2AD8fdE05112",
+      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+    },
+    "LendingPool": {
+      "address": "0x98a7665301C0dB32ceff957e1A2c505dF8384CA4",
+      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+    },
+    "Router": {
+      "address": "0xF15197BA411b578dafC7936C241bE9DD725c22BE",
+      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+    },
+    "RiskManager": {
+      "address": "0x7fC37B0bD2c8c2646C9087A21e33e2A404AD7A39",
       "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
     }
   },
-  "explorer": "https://sepolia.basescan.org/address/0x8de2Ce2a0f974b4CB00EC5B56BD89382690b5523"
+  "explorer": "https://sepolia.basescan.org/address/0x757eF02C2233b8cE2161EE65Fb7D626776b8CB73"
 }

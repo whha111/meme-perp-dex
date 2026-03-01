@@ -1,5 +1,9 @@
 # MEME Perp DEX 后端对接文档
 
+> **⚠️ 2026-03-01 审计**: Go 后端 (API + Keeper) 读取的 PostgreSQL 表大部分为空。
+> 所有交易数据在 TypeScript 撮合引擎 (Redis/内存) 中，未同步到 PostgreSQL。
+> Keeper 强平监控和资金费结算因此完全失效。详见 `docs/ISSUES_AUDIT_REPORT.md`
+
 ## 目录
 1. [项目结构](#一项目结构)
 2. [快速开始](#二快速开始)

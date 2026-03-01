@@ -329,7 +329,7 @@ export function useExecuteSwap() {
           setSwapStatus(SwapStatus.TRANSACTION_PENDING);
           return { hash };
         }
-      } catch (error: any) {
+      } catch (error) {
         logError(error, 'useExecuteSwap:transaction');
         setSwapStatus(SwapStatus.FAILED);
         throw error;

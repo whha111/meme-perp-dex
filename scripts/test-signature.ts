@@ -6,10 +6,14 @@ import { createWalletClient, createPublicClient, http, type Address, type Hex, v
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
 
+// AUDIT-FIX DP-C01: Read key from env
+const TEST_PRIVATE_KEY = (process.env.DEPLOYER_PRIVATE_KEY || process.env.PRIVATE_KEY) as Hex;
+if (!TEST_PRIVATE_KEY) { console.error("Set DEPLOYER_PRIVATE_KEY env var"); process.exit(1); }
+
 const CONFIG = {
   RPC_URL: "https://base-sepolia.g.alchemy.com/v2/Dr8sMe-1MYIF7jBYuZZj8PMOPAAeJ16d",
   SETTLEMENT_ADDRESS: "0x8dd0De655628c0E8255e3d6c38c3DF2BE36e4D8d" as Address,
-  TEST_PRIVATE_KEY: "0xf9a07bb59ea400ef88bfbcf314d89f357c8580d1a4fb543e48cfb98b02b41d2c" as Hex,
+  TEST_PRIVATE_KEY,
 };
 
 const EIP712_DOMAIN = {

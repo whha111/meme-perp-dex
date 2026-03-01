@@ -22,8 +22,9 @@ const VAULT = "0x467a18E3Ec98587Cd88683E6F9e1792C480C09c7" as Address;
 const PRICE_FEED = "0xd69A4DB60cEc962A46C6B9Bc8CC0883081c4eFb7" as Address;
 const COP400 = "0x6Bf5C512a5714D610379b1EA0Dec0BEFb46888f7" as Address;
 
-// Deployer key (for testing)
-const PRIVATE_KEY = "0xf9a07bb59ea400ef88bfbcf314d89f357c8580d1a4fb543e48cfb98b02b41d2c";
+// AUDIT-FIX DP-C01: Read key from env
+const PRIVATE_KEY = (process.env.DEPLOYER_PRIVATE_KEY || process.env.PRIVATE_KEY) as `0x${string}`;
+if (!PRIVATE_KEY) { console.error("Set DEPLOYER_PRIVATE_KEY env var"); process.exit(1); }
 
 const LEVERAGE_PRECISION = 10000n;
 

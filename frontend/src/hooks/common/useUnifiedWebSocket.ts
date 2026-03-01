@@ -32,6 +32,7 @@ import {
   type InsuranceFundInfo,
   type RiskAlert,
   type UserBalance,
+  type WssOnChainToken,
 } from "@/lib/stores/tradingDataStore";
 
 import { WS_URL } from "@/config/api";
@@ -97,6 +98,11 @@ class WebSocketManager {
   private subscribedTraders: Set<Address> = new Set();
   private listeners: Set<(connected: boolean) => void> = new Set();
 
+  // Auth state for trader-specific WS subscriptions
+  private authenticatedTrader: Address | null = null;
+  private pendingAuthSignFn: ((msg: string) => Promise<string>) | null = null;
+  private pendingAuthTrader: Address | null = null;
+
   static getInstance(): WebSocketManager {
     if (!WebSocketManager.instance) {
       WebSocketManager.instance = new WebSocketManager();
@@ -131,6 +137,15 @@ class WebSocketManager {
 
         // Start heartbeat
         this.startPing();
+
+        // Request full token list via WSS (replaces 400+ RPC calls)
+        this.send({ type: "get_all_tokens" });
+
+        // Request all token info via WSS (no HTTP needed)
+        this.send({ type: "get_all_token_info" });
+
+        // Subscribe to all_market_stats for homepage volume/traders data
+        this.send({ type: "subscribe_all_market_stats" });
 
         // Resubscribe to all tokens and traders
         this.resubscribeAll();
@@ -196,6 +211,18 @@ class WebSocketManager {
       const store = useTradingDataStore.getState();
 
       switch (msg.type) {
+        // ── Auth ──────────────────────────────────────────────
+        case "auth_success":
+          // After auth, subscribe to trader-specific data
+          if (this.pendingAuthTrader) {
+            this.authenticatedTrader = this.pendingAuthTrader;
+            this.send({ type: "subscribe_trader", trader: this.pendingAuthTrader });
+            this.pendingAuthTrader = null;
+            this.pendingAuthSignFn = null;
+          }
+          break;
+
+        // ── Order Book ────────────────────────────────────────
         case "orderbook":
           if (msg.token && msg.data) {
             const obData = msg.data as OrderBookData;
@@ -203,6 +230,7 @@ class WebSocketManager {
           }
           break;
 
+        // ── Trade ─────────────────────────────────────────────
         case "trade":
           if (msg.token && msg.data) {
             const trade = msg.data as TradeData;
@@ -210,35 +238,61 @@ class WebSocketManager {
           }
           break;
 
+        // ── K-line ────────────────────────────────────────────
         case "kline":
-          // K线数据更新 - 由 useWebSocketKlines 单独处理
-          // 这里可以发出事件供图表组件使用
           break;
 
+        // ── Position (single update from subscribe_trader) ────
+        case "position": {
+          const posData = msg.data;
+          if (posData && typeof posData === "object") {
+            // Single position object from broadcastPosition
+            const pos = posData as PairedPosition;
+            if (pos.pairId) {
+              store.updatePosition(pos.pairId, pos);
+            }
+          }
+          if (Array.isArray(msg.data)) {
+            // Array from get_positions response
+            store.setPositions(msg.data as PairedPosition[]);
+          }
+          break;
+        }
+
+        // ── Position closed ───────────────────────────────────
+        case "position_closed": {
+          const closedPos = (msg.data ?? msg) as { pairId?: string; id?: string };
+          const closedId = closedPos.pairId || closedPos.id;
+          if (closedId) {
+            store.removePosition(closedId);
+          }
+          break;
+        }
+
+        // ── Legacy position_risks (keep for backward compat) ──
         case "position_risks":
           if (msg.positions) {
-            const positions = msg.positions as PairedPosition[];
-            store.setPositions(positions);
+            store.setPositions(msg.positions as PairedPosition[]);
           }
           break;
 
+        // ── Orders (single + batch from subscribe_trader) ─────
         case "orders":
-          if (msg.orders) {
+          if (msg.orders && Array.isArray(msg.orders)) {
+            // Batch: full pending orders list
             const orders = msg.orders as OrderInfo[];
             store.setPendingOrders(
               orders.filter(
                 (o) => o.status === "PENDING" || o.status === "PARTIALLY_FILLED"
+                    || o.status === "0" || o.status === "1"
               )
             );
-          }
-          break;
-
-        case "order_update":
-          if (msg.order) {
+          } else if (msg.order) {
+            // Single order update
             const order = msg.order as OrderInfo;
             if (
-              order.status === "PENDING" ||
-              order.status === "PARTIALLY_FILLED"
+              order.status === "PENDING" || order.status === "PARTIALLY_FILLED"
+              || order.status === "0" || order.status === "1"
             ) {
               store.updatePendingOrder(order.id, order);
             } else {
@@ -247,24 +301,27 @@ class WebSocketManager {
           }
           break;
 
-        case "balance":
-          if (msg.balance) {
-            const balance = msg.balance as {
-              available: string;
-              locked: string;
-              unrealizedPnL?: string;
-            };
+        // ── Balance (from subscribe_trader) ────────────────────
+        case "balance": {
+          // Server format: { data: { trader, totalBalance, availableBalance, usedMargin, unrealizedPnL, equity } }
+          // OR legacy: { balance: { available, locked, unrealizedPnL } }
+          const balData = (msg.data ?? msg.balance) as Record<string, string> | undefined;
+          if (balData) {
+            const available = BigInt(balData.availableBalance || balData.available || "0");
+            const locked = BigInt(balData.usedMargin || balData.locked || "0");
+            const unrealizedPnL = BigInt(balData.unrealizedPnL || "0");
+            const equity = BigInt(balData.equity || "0") || (available + locked + unrealizedPnL);
+            const walletBalance = BigInt(balData.totalBalance || balData.walletBalance || "0");
             store.setBalance({
-              available: BigInt(balance.available || "0"),
-              locked: BigInt(balance.locked || "0"),
-              unrealizedPnL: BigInt(balance.unrealizedPnL || "0"),
-              equity:
-                BigInt(balance.available || "0") +
-                BigInt(balance.locked || "0") +
-                BigInt(balance.unrealizedPnL || "0"),
+              available,
+              locked,
+              unrealizedPnL,
+              equity,
+              walletBalance,
             });
           }
           break;
+        }
 
         case "market_data":
           // 市场数据推送 - 包含价格、涨跌幅、24h统计等
@@ -293,6 +350,48 @@ class WebSocketManager {
           }
           break;
 
+        case "all_tokens":
+          // 完整代币列表 (替代 useOnChainTokenList 的 400+ RPC 调用)
+          if (msg.data && Array.isArray(msg.data)) {
+            store.setAllTokens(msg.data as WssOnChainToken[]);
+          }
+          break;
+
+        case "all_token_info":
+          if (msg.data && typeof msg.data === "object") {
+            store.setTokenInfoMap(msg.data as Record<string, { name: string; symbol: string }>);
+          }
+          break;
+
+        case "all_market_stats":
+          // 首页全量市场统计 — batch update (single store write, avoids 100+ re-renders)
+          if (msg.data && typeof msg.data === "object") {
+            const statsMap = msg.data as Record<string, {
+              lastPrice?: string;
+              volume24h?: string;
+              trades24h?: number;
+              priceChangePercent24h?: string;
+              high24h?: string;
+              low24h?: string;
+              openInterest?: string;
+            }>;
+            const entries = Object.entries(statsMap).map(([token, data]) => ({
+              token: token as Address,
+              stats: {
+                lastPrice: data.lastPrice || "0",
+                priceChange24h: "0",
+                priceChangePercent24h: data.priceChangePercent24h || "0",
+                high24h: data.high24h || "0",
+                low24h: data.low24h || "0",
+                volume24h: data.volume24h || "0",
+                trades24h: data.trades24h || 0,
+                openInterest: data.openInterest || "0",
+              },
+            }));
+            store.setTokenStatsBatch(entries);
+          }
+          break;
+
         case "funding_rate":
           if (msg.token) {
             store.setFundingRate(msg.token, {
@@ -306,6 +405,7 @@ class WebSocketManager {
           }
           break;
 
+        case "risk":
         case "risk_data":
           if (msg.insuranceFund) {
             store.setInsuranceFund(msg.insuranceFund as InsuranceFundInfo);
@@ -404,13 +504,17 @@ class WebSocketManager {
       this.sendSubscribe(token);
     });
 
-    // Resubscribe to traders
+    // Resubscribe to traders (risk data)
     this.subscribedTraders.forEach((trader) => {
       this.sendSubscribeRisk(trader);
     });
 
     // Subscribe to global risk data
     this.sendGlobalRiskSubscribe();
+
+    // Re-authenticate for trader-specific data (position/balance/orders)
+    this.authenticatedTrader = null; // Reset so reauthenticate will proceed
+    this.reauthenticate();
   }
 
   private send(message: object): void {
@@ -463,6 +567,50 @@ class WebSocketManager {
     this.send({
       type: "subscribe_global_risk",
     });
+  }
+
+  /**
+   * Authenticate with matching engine and subscribe to trader-specific data.
+   * Flow: auth → auth_success → subscribe_trader → position/balance/orders push
+   */
+  async authenticate(trader: Address, signMessage: (msg: string) => Promise<string>): Promise<void> {
+    const normalizedTrader = trader.toLowerCase() as Address;
+
+    // Already authenticated for this trader
+    if (this.authenticatedTrader === normalizedTrader) return;
+
+    this.pendingAuthTrader = normalizedTrader;
+    this.pendingAuthSignFn = signMessage;
+
+    if (this.ws?.readyState !== WebSocket.OPEN) return;
+
+    try {
+      const timestamp = Math.floor(Date.now() / 1000);
+      const message = `MemePerp WS Auth: ${normalizedTrader} at ${timestamp}`;
+      const signature = await signMessage(message);
+
+      this.send({ type: "auth", trader: normalizedTrader, signature, timestamp });
+    } catch (e) {
+      console.error("[UnifiedWS] Auth signing failed:", e);
+      this.pendingAuthTrader = null;
+      this.pendingAuthSignFn = null;
+    }
+  }
+
+  /**
+   * Re-authenticate after reconnect (if previously authenticated)
+   */
+  private async reauthenticate(): Promise<void> {
+    if (this.pendingAuthSignFn && this.pendingAuthTrader) {
+      try {
+        const timestamp = Math.floor(Date.now() / 1000);
+        const message = `MemePerp WS Auth: ${this.pendingAuthTrader} at ${timestamp}`;
+        const signature = await this.pendingAuthSignFn(message);
+        this.send({ type: "auth", trader: this.pendingAuthTrader, signature, timestamp });
+      } catch (e) {
+        console.error("[UnifiedWS] Re-auth failed:", e);
+      }
+    }
   }
 
   subscribe(token: Address): void {

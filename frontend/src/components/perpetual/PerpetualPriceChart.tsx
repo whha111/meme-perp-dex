@@ -364,6 +364,16 @@ export function PerpetualPriceChart({ tokenAddress, displaySymbol, className, cu
         vertLine: { color: 'rgba(128, 128, 128, 0.3)', style: 2, labelBackgroundColor: colors.background },
         horzLine: { color: 'rgba(128, 128, 128, 0.3)', style: 2, labelBackgroundColor: colors.background },
       },
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: true,
+      },
+      kineticScroll: {
+        mouse: true,
+        touch: true,
+      },
     };
 
     const chart = createChart(chartContainerRef.current, chartOptions);

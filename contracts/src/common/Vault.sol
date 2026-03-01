@@ -474,17 +474,14 @@ contract Vault is Ownable, ReentrancyGuard, Pausable {
         }
 
         // 从保险基金覆盖亏空（deficit 是超出保证金的部分）
+        // AUDIT-FIX SC-C04: 使用 IInsuranceFund 接口调用 coverDeficit()
+        // 旧代码用 insuranceFund.balance 做预检查（忽略 minReserve），且低级 call 丢弃返回值
+        // coverDeficit() 内部已正确处理 minReserve 和可用余额上限，直接信任其返回值
         if (deficit > 0 && insuranceFund != address(0)) {
-            uint256 fundBalance = insuranceFund.balance;
-            coveredDeficit = deficit > fundBalance ? fundBalance : deficit;
-
-            if (coveredDeficit > 0) {
-                (bool success,) = insuranceFund.call(
-                    abi.encodeWithSignature("coverDeficit(uint256)", coveredDeficit)
-                );
-                if (!success) {
-                    coveredDeficit = 0;
-                }
+            try IInsuranceFund(insuranceFund).coverDeficit(deficit) returns (uint256 covered) {
+                coveredDeficit = covered;
+            } catch {
+                coveredDeficit = 0;
             }
         }
 

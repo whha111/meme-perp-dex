@@ -1,5 +1,9 @@
 # 智能合约接口文档
 
+> **⚠️ 2026-03-01**: 15 个合约中仅 4 个被撮合引擎实际调用。
+> PositionManager, Liquidation, FundingRate, Vault 等已被引擎链下逻辑替代。
+> 详见 `docs/ISSUES_AUDIT_REPORT.md`
+
 ## 概述
 
 本文档定义 MEME Perp DEX 核心智能合约的接口规范。

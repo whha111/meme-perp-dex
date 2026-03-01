@@ -134,6 +134,19 @@ export async function getStatus(forceRefresh = false): Promise<InsuranceFundStat
     return cachedStatus;
   }
 
+  // AUDIT-FIX ME-H06: Guard against undefined INSURANCE_FUND_ADDRESS
+  if (!INSURANCE_FUND_ADDRESS) {
+    logger.warn("Insurance", "INSURANCE_FUND_ADDRESS not set — returning zero status");
+    return {
+      balance: 0n,
+      totalFundingReceived: 0n,
+      totalLiquidationReceived: 0n,
+      totalInjected: 0n,
+      netIncome: 0n,
+      healthLevel: "critical",
+    } as InsuranceFundStatus;
+  }
+
   try {
     // 并行读取所有状态
     const [balance, totalFunding, totalLiquidation, totalInjected] = await Promise.all([

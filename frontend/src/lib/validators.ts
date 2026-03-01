@@ -325,10 +325,10 @@ export function validateTradeParams(params: {
  * @param validator 验证器函数
  * @returns 错误信息或 null
  */
-export function getValidationError(
+export function getValidationError<T = unknown>(
   field: string,
-  value: any,
-  validator: (value: any) => boolean
+  value: T,
+  validator: (value: T) => boolean
 ): string | null {
   if (!validator(value)) {
     switch (field) {

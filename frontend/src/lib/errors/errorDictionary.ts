@@ -485,4 +485,34 @@ function parseErrorFromMessage(message: string): ErrorCode {
   return ErrorCode.UNKNOWN;
 }
 
+/**
+ * 从 unknown 类型安全地提取错误信息
+ * 兼容 wagmi/viem BaseError (shortMessage) 和标准 Error
+ */
+export function extractErrorMessage(err: unknown, fallback = "操作失败"): string {
+  if (err && typeof err === "object") {
+    // wagmi/viem BaseError — shortMessage 是面向用户的简短提示
+    if ("shortMessage" in err && typeof (err as Record<string, unknown>).shortMessage === "string") {
+      return (err as Record<string, unknown>).shortMessage as string;
+    }
+    if (err instanceof Error) return err.message;
+    if ("message" in err && typeof (err as Record<string, unknown>).message === "string") {
+      return (err as Record<string, unknown>).message as string;
+    }
+  }
+  if (typeof err === "string") return err;
+  return fallback;
+}
+
+/**
+ * 判断错误是否为用户主动取消操作 (MetaMask / WalletConnect reject)
+ */
+export function isUserRejection(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as Record<string, unknown>;
+  if (e.code === 4001) return true;
+  const msg = typeof e.message === "string" ? e.message : "";
+  return msg.includes("rejected") || msg.includes("denied") || msg.includes("cancelled");
+}
+
 export default ErrorCode;

@@ -1,5 +1,9 @@
 # 技术实现文档
 
+> **⚠️ 2026-03-01**: 清算、资金费率、订单撮合等系统已迁移到 TypeScript 撮合引擎 (链下)。
+> 链上合约 (Liquidation.sol, FundingRate.sol, PositionManager.sol) 实质上是死代码。
+> 详见 `docs/ISSUES_AUDIT_REPORT.md`
+
 ## 目录
 1. [价格系统](#一价格系统)
 2. [K线系统](#二k线系统)

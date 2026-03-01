@@ -190,6 +190,15 @@ contract Settlement is Ownable, ReentrancyGuard, Pausable, EIP712 {
     event InsuranceInjected(uint256 amount, uint256 timestamp);
     event EmergencyPaused(address indexed by, string reason);
     event EmergencyUnpaused(address indexed by);
+    // P3: Missing admin setter events
+    event WETHUpdated(address indexed oldWeth, address indexed newWeth);
+    event InsuranceFundUpdated(address indexed oldFund, address indexed newFund);
+    event FeeRateUpdated(uint256 oldRate, uint256 newRate);
+    event FeeReceiverUpdated(address indexed oldReceiver, address indexed newReceiver);
+    event FundingIntervalUpdated(uint256 oldInterval, uint256 newInterval);
+    event BaseFundingRateUpdated(uint256 oldRate, uint256 newRate);
+    event LegacyPositionManagerUpdated(address indexed oldPM, address indexed newPM);
+    event NonceIncremented(address indexed user, uint256 newNonce);
     event ForceADLExecuted(uint256 indexed pairId, uint256 exitPrice, address indexed executor);
     event ADLResolved(address indexed by);
 
@@ -436,6 +445,7 @@ contract Settlement is Ownable, ReentrancyGuard, Pausable, EIP712 {
 
     function incrementNonce() external {
         nonces[msg.sender]++;
+        emit NonceIncremented(msg.sender, nonces[msg.sender]);
     }
 
     function setSequentialNonceMode(bool enabled) external {
@@ -453,7 +463,9 @@ contract Settlement is Ownable, ReentrancyGuard, Pausable, EIP712 {
     }
 
     function setWETH(address _weth) external onlyOwner {
+        address old = weth;
         weth = _weth;
+        emit WETHUpdated(old, _weth);
     }
 
     function setAuthorizedMatcher(address matcher, bool authorized) external onlyOwner {
@@ -462,32 +474,44 @@ contract Settlement is Ownable, ReentrancyGuard, Pausable, EIP712 {
     }
 
     function setInsuranceFund(address _insuranceFund) external onlyOwner {
+        address old = insuranceFund;
         insuranceFund = _insuranceFund;
+        emit InsuranceFundUpdated(old, _insuranceFund);
     }
 
     function setFeeRate(uint256 _feeRate) external onlyOwner {
         require(_feeRate <= 100, "Fee too high");
+        uint256 old = feeRate;
         feeRate = _feeRate;
+        emit FeeRateUpdated(old, _feeRate);
     }
 
     function setFeeReceiver(address _feeReceiver) external onlyOwner {
+        address old = feeReceiver;
         feeReceiver = _feeReceiver;
+        emit FeeReceiverUpdated(old, _feeReceiver);
     }
 
     /// @notice 设置资金费率间隔（与 FundingRate.sol 对齐）
     function setFundingInterval(uint256 _interval) external onlyOwner {
         require(_interval >= 1 minutes && _interval <= 24 hours, "Out of range");
+        uint256 old = fundingInterval;
         fundingInterval = _interval;
+        emit FundingIntervalUpdated(old, _interval);
     }
 
     /// @notice 设置基础资金费率（bps）
     function setBaseFundingRate(uint256 _rateBps) external onlyOwner {
         require(_rateBps <= 100, "Max 1%");
+        uint256 old = baseFundingRateBps;
         baseFundingRateBps = _rateBps;
+        emit BaseFundingRateUpdated(old, _rateBps);
     }
 
     function setLegacyPositionManager(address _legacy) external onlyOwner {
+        address old = legacyPositionManager;
         legacyPositionManager = _legacy;
+        emit LegacyPositionManagerUpdated(old, _legacy);
     }
 
     function addSupportedToken(address token, uint8 decimals) external onlyOwner {

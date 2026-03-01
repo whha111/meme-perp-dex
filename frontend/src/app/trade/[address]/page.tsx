@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import { Navbar } from "@/components/layout/Navbar";
 import dynamic from "next/dynamic";
+import { TradingErrorBoundary } from "@/components/shared/TradingErrorBoundary";
 
 // 动态导入 TradingTerminal，禁用 SSR
 const TradingTerminal = dynamic(
@@ -51,7 +52,9 @@ export default function TokenTradePage() {
   return (
     <main className="min-h-screen bg-okx-bg-primary text-okx-text-primary">
       <Navbar />
-      <TradingTerminal symbol={symbol} />
+      <TradingErrorBoundary module="SpotTradingTerminal">
+        <TradingTerminal symbol={symbol} />
+      </TradingErrorBoundary>
     </main>
   );
 }
