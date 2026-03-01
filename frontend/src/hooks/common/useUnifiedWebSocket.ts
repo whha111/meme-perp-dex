@@ -46,7 +46,8 @@ const getWsUrl = (): string => WS_URL;
 // Reconnection config
 const INITIAL_RECONNECT_DELAY = 1000;
 const MAX_RECONNECT_DELAY = 30000;
-const MAX_RECONNECT_ATTEMPTS = 10;
+// AUDIT-FIX M-10: 增加重连上限并在达到上限后定期重试（不再永久放弃）
+const MAX_RECONNECT_ATTEMPTS = 30;
 
 // Heartbeat config
 const PING_INTERVAL = 30000; // 30 seconds
@@ -480,10 +481,15 @@ class WebSocketManager {
 
   private attemptReconnect(): void {
     if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-      console.error("[UnifiedWS] Max reconnect attempts reached");
+      // AUDIT-FIX M-10: 达到上限后不再永久放弃，而是 60 秒后重置计数器自动恢复
+      console.warn("[UnifiedWS] Max reconnect attempts reached, will retry in 60s");
       useTradingDataStore
         .getState()
-        .setWsError("Failed to connect after multiple attempts");
+        .setWsError("Connection lost. Retrying in 60s...");
+      setTimeout(() => {
+        this.reconnectAttempts = 0;
+        this.connect();
+      }, 60_000);
       return;
     }
 

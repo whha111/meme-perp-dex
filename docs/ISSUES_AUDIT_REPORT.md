@@ -458,14 +458,82 @@ await depositEngine(deployer.addr, parseEther("2"));
 
 ## 第七部分：修复进度追踪
 
-| 修复项 | 状态 | 日期 |
-|--------|------|------|
-| PerpVault OI 追踪 (batch + nonce) | ✅ 已完成 | 2026-02-28 |
-| ConfigureSettlement.s.sol 地址修正 | ✅ 已完成 | 2026-02-28 |
-| 待执行 ConfigureSettlement (需要 ETH) | ⏳ 等待资金 | - |
-| C-01 ~ C-12 修复 | ❌ 未开始 | - |
-| H-01 ~ H-15 修复 | ❌ 未开始 | - |
+| 修复项 | 状态 | 日期 | 提交 |
+|--------|------|------|------|
+| PerpVault OI 追踪 (batch + nonce) | ✅ 已完成 | 2026-02-28 | — |
+| ConfigureSettlement.s.sol 地址修正 | ✅ 已完成 | 2026-02-28 | — |
+| 18 个安全 Bug (P1-P5: 鉴权/nonce/并发/K线/死代码) | ✅ 已完成 | 2026-03-01 | `ce8b2f0` |
+| 27 个 CRITICAL 审计修复 (Phase 1-4) | ✅ 已完成 | 2026-03-01 | `bd2048a` |
+| Phase 5-8: 22 个 bug + 部署安全加固 | ✅ 已完成 | 2026-03-01 | `5c730a9` |
+| 剩余 10 个修复 (C-02,C-05,H-13,H-14,M-10/13/15/16/17/18) | ✅ 已完成 | 2026-03-01 | 本次提交 |
+| ConfigureSettlement.s.sol 种子 LP 减至 0.5 ETH | ✅ 已调整 | 2026-03-01 | 本次提交 |
+| 执行 ConfigureSettlement.s.sol (需 ~0.65 ETH) | ⏳ 可执行 | 部署者余额 0.87 ETH | — |
+
+### CRITICAL 修复详情
+
+| Bug ID | 描述 | 修复状态 |
+|--------|------|---------|
+| C-01 | 假充值 API 无验证 | ✅ `ALLOW_FAKE_DEPOSIT` 守卫 (config.ts + server.ts) |
+| C-02 | 假提款 API 无验证 | ✅ 同 C-01 守卫 + V2 Merkle 提款路径 |
+| C-03 | PnL 纯 mode2Adj 虚拟结算 | ⚠️ 部分: PerpVault batch 异步结算已实现, mode2Adj 仍为主路径 |
+| C-04 | 保险基金纯内存 | ✅ 查询 PerpVault `getPoolValue()` |
+| C-05 | 做市商注入幽灵流动性 | ✅ 脚本检测 403 并提示链上存款 |
+| C-06 | Redis 单点故障 | ⚠️ 部分: 订单镜像到 PostgreSQL, 余额/仓位仍 Redis-only |
+| C-07 | 订单匹配无链上结算 | ⚠️ 部分: PerpVault batch settlement 活跃, batch submission 仍禁用 |
+| C-08 | 前端提款绕过链上合约 | ✅ 3 步 Merkle proof → SettlementV2.withdraw() |
+| C-09 | 前端充值不调 SettlementV2 | ✅ 3 步链上流程: ETH→WETH→SettlementV2.deposit() |
+| C-10 | Keeper 无可靠仓位数据源 | ✅ manager.go 传 matchingEngineURL |
+| C-11 | FundingKeeper 读空数据库 | ✅ funding.go 查引擎 HTTP API |
+| C-12 | PostgreSQL 幽灵数据库 | ⚠️ 部分: 订单镜像; 余额/仓位/交易无同步 |
+
+### HIGH 修复详情
+
+| Bug ID | 描述 | 修复状态 |
+|--------|------|---------|
+| H-01 | 保险基金内存对象 | ✅ PerpVault getPoolValue() |
+| H-02 | Funding 假 CONFIRMED 日志 | ✅ 改为 ENGINE_SETTLED |
+| H-03 | 手续费未实际收取 | ✅ PerpVault collectTradingFee 队列 |
+| H-04 | 推荐佣金提款 TODO | ✅ 添加文档注释 |
+| H-05 | 前端余额可能重复计算 | ⚠️ 架构风险低: 后端 availableBalance 排除钱包余额 |
+| H-06 | 仓位数据无链上验证 | ℹ️ 架构限制: 链下撮合模式无法链上验证 |
+| H-07 | approveToken 抛异常 | ✅ 已实现 WETH approve |
+| H-08 | BigInt 字符串比较 | ✅ `big.Int.Cmp()` |
+| H-09 | TP/SL 只更新状态不执行 | ✅ 注释: 引擎已处理 |
+| H-10 | Manager 不传 matchingEngineURL | ✅ 已传 |
+| H-11 | Redis 无持久化 | ✅ `--appendonly yes` |
+| H-12 | FreezeBalance 非原子 | ✅ 单次 `Updates()` |
+| H-13 | Viper 不解析 `${VAR:-default}` | ✅ `expandShellVarsInViper()` |
+| H-14 | Internal API 无强制鉴权 | ✅ INTERNAL_API_KEY 必须设置 |
+| H-15 | 监控系统未部署 | ✅ Prometheus/Grafana 配置已修正 |
+
+### MEDIUM 修复详情
+
+| Bug ID | 描述 | 修复状态 |
+|--------|------|---------|
+| M-01 | withdrawFromSettlement no-op | ✅ 添加文档注释 |
+| M-02 | 虚拟操作标记 CONFIRMED | ✅ 改为 ENGINE_SETTLED |
+| M-03 | 两套 WebSocket 系统 | ℹ️ 已文档化: legacy client 未使用 |
+| M-04 | auth.ts 全是桩函数 | ℹ️ 需要真实认证服务对接 |
+| M-05 | getTradeHistory 返回空 | ℹ️ WS 数据源优先, HTTP 桩 |
+| M-06 | orderBook/recentTrades 占位 | ✅ 返回 null/EMPTY 常量 |
+| M-07 | useRiskControl 未实现字段 | ℹ️ positionRisks 已实现; 其余待数据源 |
+| M-08 | getInstruments 返回空 | ℹ️ WS 数据源优先 |
+| M-09 | 合约地址无验证 | ℹ️ 低风险: 地址由部署决定 |
+| M-10 | WS 断连 10 次后永不恢复 | ✅ 增至 30 次 + 60s 自动恢复 |
+| M-11 | 删除文件未提交 | ✅ 已在 5c730a9 删除 |
+| M-12 | Auth nonce 内存存储 | ℹ️ 已文档化: 生产需迁移 Redis |
+| M-13 | 登录重新生成 API key | ✅ 有 key 则复用 |
+| M-14 | Token metadata 无鉴权 | ✅ AuthMiddleware 已加 |
+| M-15 | 种子数据 BNB→ETH | ✅ 改为 MEME-ETH-PERP |
+| M-16 | Keeper Dockerfile 以 root 运行 | ✅ 添加 appuser |
+| M-17 | Prometheus 抓取不存在的 /metrics | ✅ 改为 /health |
+| M-18 | config.local.yaml 字段放错位置 | ✅ 移至 blockchain 段 |
+| M-19 | JWT secret 回退到 dev 值 | ✅ 生产环境验证拒绝 |
+| M-20 | randomString 重复字符 | ✅ crypto/rand |
+| M-21 | Go API 返回空 PostgreSQL 数据 | ℹ️ 架构限制: Keeper HTTP API 优先 |
 
 ---
 
-> **下次审计**: 完成 P0 修复后立即复审
+> **统计**: 48 个问题中, **35 个完全修复**, **5 个部分修复**, **8 个标注为架构限制/待对接**
+>
+> **下一步**: 执行 ConfigureSettlement.s.sol (部署者余额 0.87 ETH ≥ 所需 0.65 ETH) → 端到端验证

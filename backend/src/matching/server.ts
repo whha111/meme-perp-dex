@@ -7943,6 +7943,14 @@ async function handleDeposit(req: Request, trader: string): Promise<Response> {
  */
 async function handleWithdraw(req: Request, trader: string): Promise<Response> {
   try {
+    // AUDIT-FIX C-02: 与 C-01 一致，生产环境禁用虚假提款 API
+    if (!ALLOW_FAKE_DEPOSIT) {
+      return jsonResponse({
+        error: "Direct withdraw disabled. Use /api/wallet/withdraw with Merkle proof.",
+        hint: "Set ALLOW_FAKE_DEPOSIT=true for testing only.",
+      }, 403);
+    }
+
     const body = await req.json();
     const { amount, signature } = body;
 
@@ -11029,9 +11037,14 @@ async function handleRequest(req: Request): Promise<Response> {
   // GET /api/internal/positions/all — 返回所有非零仓位 (供 Keeper 查询)
   // AUDIT-FIX ME-H08: 内部 API 需要鉴权，防止信息泄露
   if (path === "/api/internal/positions/all" && method === "GET") {
+    // AUDIT-FIX H-14: Internal API auth 改为强制（非可选）
+    // 生产环境必须设置 INTERNAL_API_KEY，否则拒绝所有请求
     const internalKey = url.searchParams.get("key") || req.headers.get("x-internal-key");
     const expectedKey = process.env.INTERNAL_API_KEY;
-    if (expectedKey && internalKey !== expectedKey) {
+    if (!expectedKey) {
+      return errorResponse("INTERNAL_API_KEY not configured — internal API disabled for security", 503);
+    }
+    if (internalKey !== expectedKey) {
       return errorResponse("Unauthorized: internal API key required", 401);
     }
     const allPositions: Array<{

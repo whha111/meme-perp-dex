@@ -255,9 +255,12 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		})
 		return
 	} else {
-		// User exists, regenerate API credentials
-		user.APIKey = generateAPIKey()
-		user.APISecret = generateAPISecret()
+		// AUDIT-FIX M-13: Reuse existing API key/secret if present (don't invalidate active sessions)
+		// Only regenerate if they are empty (e.g., migrated user with no API credentials)
+		if user.APIKey == "" || user.APISecret == "" {
+			user.APIKey = generateAPIKey()
+			user.APISecret = generateAPISecret()
+		}
 
 		if err := h.userRepo.Update(user); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{

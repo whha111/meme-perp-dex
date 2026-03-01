@@ -236,12 +236,19 @@ async function enginePrice(token: Address): Promise<bigint> {
   } catch { return 0n; }
 }
 
+// AUDIT-FIX C-05: 做市商必须通过 SettlementV2 链上存款，不再调用虚假 deposit API
+// 生产环境: ALLOW_FAKE_DEPOSIT=false → 此函数的 API 调用返回 403
+// 测试环境: ALLOW_FAKE_DEPOSIT=true → 仍可使用（仅限开发）
 async function depositEngine(addr: Address, amt: bigint) {
   try {
-    await fetch(`${API_URL}/api/user/${addr.toLowerCase()}/deposit`, {
+    const res = await fetch(`${API_URL}/api/user/${addr.toLowerCase()}/deposit`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ amount: amt.toString() }),
     });
+    if (res.status === 403) {
+      console.warn(`⚠️ Fake deposit disabled for ${addr.slice(0, 10)}. Use SettlementV2.deposit() on-chain.`);
+      console.warn(`   Run: cast send $SETTLEMENT_V2 "deposit(address,uint256)" $WETH ${amt} --rpc-url $RPC`);
+    }
   } catch {}
 }
 

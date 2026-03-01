@@ -32,7 +32,8 @@ contract ConfigureSettlement is Script {
     address constant SHIB = 0x0724863BD88e1F4919c85294149ae87209E917Da;
 
     // ── Configuration ──
-    uint256 constant SEED_LP_ETH = 2 ether;
+    // Reduced from 2 ETH to 0.5 ETH — deployer wallet has ~0.87 ETH (needs gas reserve)
+    uint256 constant SEED_LP_ETH = 0.5 ether;
     uint256 constant MAX_OI_PER_TOKEN = 10 ether;
     uint256 constant DEPOSIT_CAP_PER_USER = 10 ether;
     uint256 constant DEPOSIT_CAP_TOTAL = 100 ether;
