@@ -45,13 +45,12 @@ function loadExtendedWallets(): ExtendedWalletsFile {
 /**
  * Load and merge wallets from both sources.
  *
- * Strategy: Extended wallets have more ETH (~0.035-0.088 each), so they are
- * used first for both spot and perp. Main wallets are used as overflow.
+ * Strategy: Main wallets have ~0.003 ETH each (funded and reliable).
+ * Extended wallets are used as overflow only if needed.
  *
  * Allocation:
- * - Extended wallets 0..(spotCount-1)        → spot group (funded, on-chain tx)
- * - Extended wallets spotCount..(spot+perp-1) → perp group (deposit + sign)
- * - If extended exhausted, fill from main wallets
+ * - Main wallets first → spot + perp groups (funded, on-chain tx)
+ * - Extended wallets as overflow if main exhausted
  */
 export function loadWallets(
   spotCount: number = WALLET_GROUPS.spot.count,
@@ -61,10 +60,10 @@ export function loadWallets(
   const extendedFile = loadExtendedWallets();
   const extendedWallets = extendedFile.wallets;
 
-  // Pool: extended first (funded), then main as overflow
+  // Pool: main first (funded ~0.003 ETH each), then extended as overflow
   const allSources = [
-    ...extendedWallets.map(w => ({ address: w.address, privateKey: w.privateKey })),
     ...mainWallets.map(w => ({ address: w.address, privateKey: w.privateKey })),
+    ...extendedWallets.map(w => ({ address: w.address, privateKey: w.privateKey })),
   ];
 
   const wallets: StressWallet[] = [];
@@ -96,7 +95,7 @@ export function loadWallets(
 
   const spotLoaded = wallets.filter(w => w.group === "spot").length;
   const perpLoaded = wallets.filter(w => w.group === "perp").length;
-  console.log(`[WalletManager] Loaded ${wallets.length} wallets (${spotLoaded} spot + ${perpLoaded} perp) from ${Math.min(idx, extendedWallets.length)} extended + ${Math.max(0, idx - extendedWallets.length)} main`);
+  console.log(`[WalletManager] Loaded ${wallets.length} wallets (${spotLoaded} spot + ${perpLoaded} perp) from ${Math.min(idx, mainWallets.length)} main + ${Math.max(0, idx - mainWallets.length)} extended`);
   return wallets;
 }
 

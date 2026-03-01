@@ -19,6 +19,10 @@ export interface SpotStats {
   buys: number;
   sells: number;
   creates: number;
+  graduations: number;
+  priceFeedSyncs: number;
+  priceVerifications: number;
+  priceVerificationFailures: number;
   failures: number;
   startTime: number;
 }
@@ -30,7 +34,8 @@ export class SpotEngine {
   private wallets: StressWallet[] = [];
   private knownTokens: Address[] = [];
   private busyWallets: Set<Address> = new Set(); // Prevent concurrent txs from same wallet
-  readonly stats: SpotStats = { totalRounds: 0, buys: 0, sells: 0, creates: 0, failures: 0, startTime: 0 };
+  private graduatedTokens: Set<Address> = new Set(); // Track graduated tokens to skip
+  readonly stats: SpotStats = { totalRounds: 0, buys: 0, sells: 0, creates: 0, graduations: 0, priceFeedSyncs: 0, priceVerifications: 0, priceVerificationFailures: 0, failures: 0, startTime: 0 };
 
   constructor(wallets: StressWallet[]) {
     this.wallets = wallets;
@@ -104,7 +109,11 @@ export class SpotEngine {
     if (this.knownTokens.length === 0) return;
 
     const pool = getRpcPool();
-    const token = this.knownTokens[randInt(0, this.knownTokens.length - 1)];
+    // Pick a non-graduated token
+    const activeTokens = this.knownTokens.filter(t => !this.graduatedTokens.has(t));
+    if (activeTokens.length === 0) return;
+    const token = activeTokens[randInt(0, activeTokens.length - 1)];
+
     const ethAmount = parseEther(
       (SPOT_CONFIG.minBuyEth + Math.random() * (SPOT_CONFIG.maxBuyEth - SPOT_CONFIG.minBuyEth)).toFixed(6)
     );
@@ -120,6 +129,19 @@ export class SpotEngine {
       }
       return;
     }
+
+    // Read price before buy (for verification)
+    let priceBefore = 0n;
+    try {
+      priceBefore = await pool.call(() =>
+        pool.httpClient.readContract({
+          address: CONTRACTS.tokenFactory,
+          abi: TOKEN_FACTORY_ABI,
+          functionName: "getCurrentPrice",
+          args: [token],
+        })
+      ) as bigint;
+    } catch {}
 
     const walletClient = pool.createWallet(wallet.privateKey);
     const account = privateKeyToAccount(wallet.privateKey);
@@ -138,6 +160,33 @@ export class SpotEngine {
 
     await pool.call(() => pool.httpClient.waitForTransactionReceipt({ hash }));
     this.stats.buys++;
+
+    // Price verification: buying should increase price (bonding curve)
+    if (priceBefore > 0n) {
+      try {
+        const priceAfter = await pool.call(() =>
+          pool.httpClient.readContract({
+            address: CONTRACTS.tokenFactory,
+            abi: TOKEN_FACTORY_ABI,
+            functionName: "getCurrentPrice",
+            args: [token],
+          })
+        ) as bigint;
+
+        this.stats.priceVerifications++;
+        if (priceAfter < priceBefore) {
+          this.stats.priceVerificationFailures++;
+          console.warn(`[Spot] ⚠️ Price DECREASED after buy: ${priceBefore} → ${priceAfter} for ${token.slice(0, 10)}`);
+        }
+      } catch {}
+    }
+
+    // Graduation detection: check if token graduated after buy
+    await this.checkGraduation(token);
+
+    // NOTE: PriceFeed sync is automatic — TokenFactory.buy() internally calls
+    // PriceFeed.updateTokenPriceFromFactory() (onlyTokenFactory modifier).
+
     console.log(`[Spot] W${wallet.index} BUY ${formatEther(ethAmount)} ETH → ${token.slice(0, 10)}...`);
   }
 
@@ -145,7 +194,10 @@ export class SpotEngine {
     if (this.knownTokens.length === 0) return;
 
     const pool = getRpcPool();
-    const token = this.knownTokens[randInt(0, this.knownTokens.length - 1)];
+    // Pick a non-graduated token (graduated tokens trade on AMM, not TokenFactory)
+    const activeTokens = this.knownTokens.filter(t => !this.graduatedTokens.has(t));
+    if (activeTokens.length === 0) return;
+    const token = activeTokens[randInt(0, activeTokens.length - 1)];
 
     // Check token balance
     const tokenBalance = await pool.call(() =>
@@ -168,8 +220,8 @@ export class SpotEngine {
     const walletClient = pool.createWallet(wallet.privateKey);
     const account = privateKeyToAccount(wallet.privateKey);
 
-    // Approve
-    await pool.call(() =>
+    // Approve (must wait for receipt before selling)
+    const approveHash = await pool.call(() =>
       walletClient.writeContract({
         chain: baseSepolia,
         address: token,
@@ -179,6 +231,7 @@ export class SpotEngine {
         account,
       })
     );
+    await pool.call(() => pool.httpClient.waitForTransactionReceipt({ hash: approveHash }));
 
     // Sell
     const hash = await pool.call(() =>
@@ -194,6 +247,9 @@ export class SpotEngine {
 
     await pool.call(() => pool.httpClient.waitForTransactionReceipt({ hash }));
     this.stats.sells++;
+
+    // NOTE: PriceFeed sync is automatic — TokenFactory.sell() internally calls it.
+
     console.log(`[Spot] W${wallet.index} SELL ${formatEther(sellAmount)} tokens ${token.slice(0, 10)}...`);
   }
 
@@ -201,6 +257,16 @@ export class SpotEngine {
     const pool = getRpcPool();
     const walletClient = pool.createWallet(wallet.privateKey);
     const account = privateKeyToAccount(wallet.privateKey);
+
+    // Check balance (need 0.001 ETH liquidity + gas)
+    const balance = await pool.call(() =>
+      pool.httpClient.getBalance({ address: wallet.address })
+    );
+    if (balance < parseEther("0.0015")) {
+      // Not enough for create — do a buy instead
+      await this.executeBuy(wallet);
+      return;
+    }
 
     const id = Date.now().toString(36);
     const name = `StressToken_${id}`;
@@ -223,10 +289,43 @@ export class SpotEngine {
       this.stats.creates++;
       console.log(`[Spot] W${wallet.index} CREATE ${symbol} tx:${hash.slice(0, 12)}...`);
 
-      // Refresh token list after creation
+      // Refresh token list after creation to get the new token address
       await this.refreshTokenList();
+
+      // NOTE: PriceFeed sync is automatic — TokenFactory.createToken() calls
+      // PriceFeed.addSupportedTokenFromFactory() internally (onlyTokenFactory).
+      this.stats.priceFeedSyncs++;
     } catch (err: any) {
       this.stats.failures++;
+    }
+  }
+
+  // NOTE: syncPriceFeed removed — TokenFactory.buy/sell/createToken internally calls
+  // PriceFeed.updateTokenPriceFromFactory() via the onlyTokenFactory modifier.
+  // External wallets CANNOT call this function (it will revert).
+
+  /** Check if a token has graduated from bonding curve → AMM */
+  private async checkGraduation(token: Address): Promise<void> {
+    if (this.graduatedTokens.has(token)) return;
+
+    try {
+      const pool = getRpcPool();
+      const poolState = await pool.call(() =>
+        pool.httpClient.readContract({
+          address: CONTRACTS.tokenFactory,
+          abi: TOKEN_FACTORY_ABI,
+          functionName: "getPoolState",
+          args: [token],
+        })
+      ) as { isGraduated: boolean; isActive: boolean; realTokenReserve: bigint };
+
+      if (poolState.isGraduated) {
+        this.graduatedTokens.add(token);
+        this.stats.graduations++;
+        console.log(`[Spot] 🎓 Token ${token.slice(0, 10)}... GRADUATED — removing from active trading`);
+      }
+    } catch {
+      // Ignore — will recheck next round
     }
   }
 

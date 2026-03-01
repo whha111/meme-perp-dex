@@ -12,8 +12,9 @@ import { privateKeyToAccount } from "viem/accounts";
 import { getRpcPool } from "../utils/rpc-pool.js";
 import { type StressWallet, pickRandom, randInt, randBigInt } from "../utils/wallet-manager.js";
 import {
-  CONTRACTS, SETTLEMENT_ABI, PERP_CONFIG, MATCHING_ENGINE,
-  EIP712_DOMAIN, ORDER_TYPES, TOKEN_FACTORY_ABI,
+  CONTRACTS, SETTLEMENT_V2_ABI, PERP_CONFIG, MATCHING_ENGINE,
+  EIP712_DOMAIN, ORDER_TYPES, TOKEN_FACTORY_ABI, PERP_VAULT_ABI,
+  WETH_ADDRESS, WETH_ABI,
 } from "../config.js";
 
 // ── Types ──────────────────────────────────────────────────────
@@ -23,6 +24,10 @@ export interface PerpStats {
   ordersSubmitted: number;
   ordersMatched: number;
   deposits: number;
+  withdrawals: number;
+  withdrawalFailures: number;
+  lifecycleChecks: number;
+  lifecycleFailures: number;
   failures: number;
   startTime: number;
 }
@@ -34,7 +39,7 @@ export class PerpEngine {
   private wallets: StressWallet[] = [];
   private tradableTokens: Address[] = [];
   private localNonces: Map<Address, bigint> = new Map();
-  readonly stats: PerpStats = { totalRounds: 0, ordersSubmitted: 0, ordersMatched: 0, deposits: 0, failures: 0, startTime: 0 };
+  readonly stats: PerpStats = { totalRounds: 0, ordersSubmitted: 0, ordersMatched: 0, deposits: 0, withdrawals: 0, withdrawalFailures: 0, lifecycleChecks: 0, lifecycleFailures: 0, failures: 0, startTime: 0 };
 
   constructor(wallets: StressWallet[]) {
     this.wallets = wallets;
@@ -48,9 +53,17 @@ export class PerpEngine {
     await this.refreshTokenList();
     await this.syncAllNonces();
 
+    // Clean up any positions left over from previous test runs.
+    // Old positions lock up margin, starving new orders of collateral.
+    await this.closeAllExistingPositions();
+
     // Bulk deposit: move most of each wallet's ETH into Settlement upfront
     // This prevents the matching engine from trying to auto-deposit (it doesn't have our keys)
     await this.bulkDepositAll();
+
+    // Explicitly sync all wallet balances with the matching engine.
+    // Event listeners may miss deposits during rapid parallel execution.
+    await this.syncEngineBalances();
 
     console.log(`[PerpEngine] Started with ${this.wallets.length} wallets, ${this.tradableTokens.length} tokens`);
 
@@ -135,13 +148,34 @@ export class PerpEngine {
       }
     }
 
-    // Refresh tokens every 100 rounds
-    if (this.stats.totalRounds % 100 === 0) {
+    // Withdrawal test: every 10 rounds, 20% chance (was: every 50 rounds, 5%)
+    // Lowered threshold so it triggers in short 15-20 min tests (~9-30 rounds)
+    if (this.stats.totalRounds % 10 === 0 && Math.random() < 0.20) {
+      try {
+        await this.executeWithdrawalTest();
+      } catch (err: any) {
+        console.error(`[PerpEngine] Withdrawal test error: ${err.message?.slice(0, 100)}`);
+        this.stats.withdrawalFailures++;
+      }
+    }
+
+    // Full lifecycle verification: every 20 rounds (was: 100 — too slow for short tests)
+    if (this.stats.totalRounds % 20 === 0) {
+      try {
+        await this.verifyFullCycle();
+      } catch (err: any) {
+        console.error(`[PerpEngine] Lifecycle check error: ${err.message?.slice(0, 100)}`);
+        this.stats.lifecycleFailures++;
+      }
+    }
+
+    // Refresh tokens every 30 rounds (was 100 — too slow for short tests)
+    if (this.stats.totalRounds % 30 === 0) {
       await this.refreshTokenList();
     }
 
-    // Re-sync nonces every 50 rounds
-    if (this.stats.totalRounds % 50 === 0) {
+    // Re-sync nonces every 20 rounds (was 50)
+    if (this.stats.totalRounds % 20 === 0) {
       await this.syncAllNonces();
     }
   }
@@ -223,38 +257,113 @@ export class PerpEngine {
     console.log(`[Perp] W${longWallet.index}↑ W${shortWallet.index}↓ ${formatEther(size)}ETH ${lev} → ${token.slice(0, 10)}...`);
   }
 
-  /** Submit a close order (market order in opposite direction) */
+  /**
+   * Close a position using the direct close API (POST /api/position/:pairId/close).
+   *
+   * This does NOT require new margin — the engine directly settles the PnL
+   * and releases collateral. Much better for stress testing with limited funds.
+   *
+   * Reads positions from the matching engine HTTP API (off-chain source of truth),
+   * NOT from the on-chain PositionManager.
+   */
   private async submitCloseOrder(wallet: StressWallet, token: Address): Promise<void> {
-    const pool = getRpcPool();
-
-    // Read existing position
     try {
-      const position = await pool.call(() =>
-        pool.httpClient.readContract({
-          address: CONTRACTS.positionManager,
-          abi: [{ inputs: [{ name: "user", type: "address" }, { name: "token", type: "address" }], name: "getPositionByToken", outputs: [{ components: [{ name: "size", type: "uint256" }, { name: "collateral", type: "uint256" }, { name: "avgPrice", type: "uint256" }, { name: "isLong", type: "bool" }, { name: "lastFundingIndex", type: "uint256" }, { name: "openTimestamp", type: "uint256" }], type: "tuple" }], stateMutability: "view", type: "function" }] as const,
-          functionName: "getPositionByToken",
-          args: [wallet.address, token],
-        })
+      const resp = await fetch(`${MATCHING_ENGINE.url}/api/user/${wallet.address}/positions`);
+      const positions = await resp.json() as Array<{
+        pairId: string;
+        token: string;
+        isLong: boolean;
+        size: string;
+        collateral: string;
+        entryPrice: string;
+      }>;
+
+      if (!Array.isArray(positions)) return;
+
+      // Find position for this specific token
+      const position = positions.find(
+        p => p.token.toLowerCase() === token.toLowerCase() && BigInt(p.size || "0") > 0n
       );
 
-      if (position.size === 0n) return; // No position to close
+      if (!position || !position.pairId) return;
 
-      // Use limit order at current price for closing (avoids eating book depth)
-      const closePrice = await this.getTokenPrice(token);
-      const closeOrderType = closePrice > 0n ? 1 : 0;
-      const result = await this.submitOrder(
-        wallet, token, !position.isLong, position.size, 10000n, closeOrderType, closePrice
-      );
+      // Use direct close API (no margin required!)
+      const account = privateKeyToAccount(wallet.privateKey);
+      const closeMessage = `Close pair ${position.pairId} for ${wallet.address.toLowerCase()}`;
+      const signature = await account.signMessage({ message: closeMessage });
 
+      const closeResp = await fetch(`${MATCHING_ENGINE.url}/api/position/${position.pairId}/close`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trader: wallet.address,
+          closeRatio: 1,
+          signature,
+        }),
+      });
+
+      const result = await closeResp.json() as { success?: boolean; error?: string };
       if (result.success) {
-        this.stats.ordersSubmitted++;
-        if (result.matched) this.stats.ordersMatched++;
-        console.log(`[Perp] W${wallet.index} CLOSE ${position.isLong ? "LONG" : "SHORT"} ${formatEther(position.size)}ETH`);
+        this.stats.ordersMatched++;
+        console.log(`[Perp] W${wallet.index} CLOSE ${position.isLong ? "LONG" : "SHORT"} ${formatEther(BigInt(position.size))}ETH via close API`);
+      } else if (result.error) {
+        if (this.stats.failures < 20) {
+          console.error(`[PerpEngine] W${wallet.index} close failed: ${result.error?.slice(0, 80)}`);
+        }
+        this.stats.failures++;
       }
     } catch {
-      // Position might not exist, skip
+      // Position might not exist or engine unreachable, skip
     }
+  }
+
+  /**
+   * Close ALL existing positions at startup to free margin for new orders.
+   * Called once before the main trading loop begins.
+   */
+  async closeAllExistingPositions(): Promise<void> {
+    console.log("[PerpEngine] Closing all existing positions to free margin...");
+    let closed = 0;
+
+    for (const wallet of this.wallets) {
+      try {
+        const resp = await fetch(`${MATCHING_ENGINE.url}/api/user/${wallet.address}/positions`);
+        const positions = await resp.json() as Array<{
+          pairId: string;
+          token: string;
+          isLong: boolean;
+          size: string;
+        }>;
+
+        if (!Array.isArray(positions)) continue;
+
+        for (const pos of positions) {
+          if (BigInt(pos.size || "0") === 0n || !pos.pairId) continue;
+
+          try {
+            const account = privateKeyToAccount(wallet.privateKey);
+            const closeMessage = `Close pair ${pos.pairId} for ${wallet.address.toLowerCase()}`;
+            const signature = await account.signMessage({ message: closeMessage });
+
+            const closeResp = await fetch(`${MATCHING_ENGINE.url}/api/position/${pos.pairId}/close`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ trader: wallet.address, closeRatio: 1, signature }),
+            });
+
+            const result = await closeResp.json() as { success?: boolean; error?: string };
+            if (result.success) {
+              closed++;
+              console.log(`[PerpEngine] Closed W${wallet.index} ${pos.isLong ? "LONG" : "SHORT"} ${formatEther(BigInt(pos.size))}ETH ${pos.token.slice(0, 10)}`);
+            } else {
+              console.warn(`[PerpEngine] Failed to close W${wallet.index}: ${result.error?.slice(0, 60)}`);
+            }
+          } catch {}
+        }
+      } catch {}
+    }
+
+    console.log(`[PerpEngine] Closed ${closed} existing positions`);
   }
 
   /** Sign and submit an order to the matching engine */
@@ -335,149 +444,311 @@ export class PerpEngine {
     return { success: false, matched: false };
   }
 
-  /** Ensure wallet has enough margin in Settlement contract */
+  /**
+   * Ensure wallet has enough margin in SettlementV2 contract.
+   *
+   * V2 deposit flow (3-step):
+   *   1. ETH → WETH (wrap via WETH.deposit{value})
+   *   2. WETH.approve(SettlementV2, amount)
+   *   3. SettlementV2.deposit(amount)  — WETH transferred from wallet to contract
+   *
+   * SettlementV2 stores balances in 1e18 precision (same as WETH, no conversion needed).
+   */
   private async ensureDeposit(wallet: StressWallet, requiredMargin: bigint): Promise<void> {
     const pool = getRpcPool();
 
-    const balance = await pool.call(() =>
-      pool.httpClient.readContract({
-        address: CONTRACTS.settlement,
-        abi: SETTLEMENT_ABI,
-        functionName: "getUserBalance",
-        args: [wallet.address],
-      })
-    );
+    // Read existing SettlementV2 deposit (1e18 precision, no conversion needed)
+    let available = 0n;
+    try {
+      const deposits = await pool.call(() =>
+        pool.httpClient.readContract({
+          address: CONTRACTS.settlementV2,
+          abi: SETTLEMENT_V2_ABI,
+          functionName: "userDeposits",
+          args: [wallet.address],
+        })
+      );
+      available = deposits as bigint;
+    } catch {}
 
-    // Settlement uses 6-decimal precision internally; convert to 18-decimal for comparison
-    const SETTLEMENT_TO_ETH = 10n ** 12n;
-    const rawAvailable = (balance as any)[0] ?? (balance as any).available ?? 0n;
-    const available = rawAvailable * SETTLEMENT_TO_ETH;
+    // Also check matching engine balance (may include PnL adjustments)
+    const engineBalance = await this.getAvailableBalance(wallet);
+    if (engineBalance >= requiredMargin) return;
 
-    if (available >= requiredMargin) return;
+    // Need to deposit (keep amounts low — wallets have ~0.003 ETH)
+    // Use BigInt-native comparison (Math.min doesn't work with BigInt)
+    const minAvail = available < engineBalance ? available : engineBalance;
+    const depositAmount = requiredMargin > minAvail
+      ? requiredMargin + parseEther("0.0003")
+      : parseEther("0.0005"); // Minimum deposit
 
-    // Need to deposit (depositAmount is in 18-decimal ETH, depositETH handles conversion)
-    const depositAmount = requiredMargin - available + parseEther("0.001");
     const walletClient = pool.createWallet(wallet.privateKey);
     const account = privateKeyToAccount(wallet.privateKey);
 
-    // Check ETH balance
+    // Check ETH balance (need deposit + gas for 3 txns)
     const ethBalance = await pool.call(() =>
       pool.httpClient.getBalance({ address: wallet.address })
     );
 
-    if (ethBalance < depositAmount + parseEther("0.0005")) {
+    const gasBuffer = parseEther("0.0003"); // ~0.0003 ETH for 3 txns gas (Base Sepolia gas is cheap)
+    if (ethBalance < depositAmount + gasBuffer) {
       if (this.stats.totalRounds <= 2) {
-        console.log(`[Perp] W${wallet.index} skip deposit: ethBalance=${formatEther(ethBalance)} < need=${formatEther(depositAmount + parseEther("0.0005"))}`);
+        console.log(`[Perp] W${wallet.index} skip deposit: ethBalance=${formatEther(ethBalance)} < need=${formatEther(depositAmount + gasBuffer)}`);
       }
       return;
     }
 
-    const hash = await pool.call(() =>
+    // Step 1: Wrap ETH → WETH
+    const wrapHash = await pool.call(() =>
       walletClient.writeContract({
         chain: baseSepolia,
-        address: CONTRACTS.settlement,
-        abi: SETTLEMENT_ABI,
-        functionName: "depositETH",
+        address: WETH_ADDRESS,
+        abi: WETH_ABI,
+        functionName: "deposit",
         args: [],
         value: depositAmount,
         account,
       })
     );
+    await pool.call(() => pool.httpClient.waitForTransactionReceipt({ hash: wrapHash }));
 
-    await pool.call(() => pool.httpClient.waitForTransactionReceipt({ hash }));
+    // Step 2: Approve WETH for SettlementV2
+    const approveHash = await pool.call(() =>
+      walletClient.writeContract({
+        chain: baseSepolia,
+        address: WETH_ADDRESS,
+        abi: WETH_ABI,
+        functionName: "approve",
+        args: [CONTRACTS.settlementV2, depositAmount],
+        account,
+      })
+    );
+    await pool.call(() => pool.httpClient.waitForTransactionReceipt({ hash: approveHash }));
+
+    // Step 3: Deposit WETH into SettlementV2
+    const depositHash = await pool.call(() =>
+      walletClient.writeContract({
+        chain: baseSepolia,
+        address: CONTRACTS.settlementV2,
+        abi: SETTLEMENT_V2_ABI,
+        functionName: "deposit",
+        args: [depositAmount],
+        account,
+      })
+    );
+    await pool.call(() => pool.httpClient.waitForTransactionReceipt({ hash: depositHash }));
+
     this.stats.deposits++;
-    console.log(`[Perp] W${wallet.index} DEPOSIT ${formatEther(depositAmount)} ETH to Settlement`);
+    console.log(`[Perp] W${wallet.index} DEPOSIT ${formatEther(depositAmount)} ETH to SettlementV2 (3-step)`);
 
-    // Sync balance with matching engine so it picks up the new deposit
+    // Explicitly sync with matching engine — event listener may lag
     try {
       await fetch(`${MATCHING_ENGINE.url}/api/balance/sync`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ trader: wallet.address }),
       });
-    } catch {} // Non-critical — matching engine will sync on next order
+    } catch {}
+
+    // Brief wait for engine to process the sync
+    await new Promise(r => setTimeout(r, 1000));
   }
 
   /**
-   * Bulk deposit: move ~80% of each wallet's ETH into Settlement at startup.
-   * This prevents the matching engine's autoDepositIfNeeded from trying to
-   * deposit from wallets it doesn't control (no private key access).
+   * Bulk deposit: move ~80% of each wallet's ETH into SettlementV2 at startup.
+   *
+   * V2 flow for each wallet:
+   *   1. Check existing SettlementV2 userDeposits (1e18, no conversion)
+   *   2. Skip if already has enough deposited
+   *   3. Otherwise: wrap ETH → approve WETH → deposit to SettlementV2
+   *
+   * Processes wallets in PARALLEL batches of CONCURRENT_DEPOSITS to reduce
+   * startup time from ~30 min (serial) to ~2-3 min for 200 wallets.
    */
   private async bulkDepositAll(): Promise<void> {
     const pool = getRpcPool();
-    const GAS_RESERVE = parseEther("0.003"); // Keep 0.003 ETH for gas
+    const GAS_RESERVE = parseEther("0.0005"); // Keep 0.0005 ETH for gas (Base Sepolia gas is very cheap)
+    const CONCURRENT_DEPOSITS = 10; // Process 10 wallets in parallel per batch
 
     let deposited = 0;
-    for (const wallet of this.wallets) {
-      try {
-        const ethBalance = await pool.call(() =>
-          pool.httpClient.getBalance({ address: wallet.address })
-        );
+    let skipped = 0;
+    let lowBalance = 0;
 
-        // Check existing Settlement balance (6-decimal → 18-decimal conversion)
-        const SETTLEMENT_TO_ETH = 10n ** 12n;
-        let existingAvailable = 0n;
-        try {
-          const bal = await pool.call(() =>
-            pool.httpClient.readContract({
-              address: CONTRACTS.settlement,
-              abi: SETTLEMENT_ABI,
-              functionName: "getUserBalance",
-              args: [wallet.address],
-            })
-          );
-          existingAvailable = ((bal as any)[0] ?? 0n) * SETTLEMENT_TO_ETH;
-        } catch {}
+    // Split wallets into batches of CONCURRENT_DEPOSITS
+    const batches: StressWallet[][] = [];
+    for (let i = 0; i < this.wallets.length; i += CONCURRENT_DEPOSITS) {
+      batches.push(this.wallets.slice(i, i + CONCURRENT_DEPOSITS));
+    }
 
-        // Skip if already has >0.01 ETH in Settlement
-        if (existingAvailable > parseEther("0.01")) {
-          console.log(`[Perp] W${wallet.index} already has ${formatEther(existingAvailable)} ETH in Settlement, skip deposit`);
-          deposited++;
-          continue;
+    console.log(`[PerpEngine] Bulk deposit: ${this.wallets.length} wallets in ${batches.length} batches (${CONCURRENT_DEPOSITS} concurrent)`);
+
+    for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+      if (!this.running) break;
+
+      const batch = batches[batchIdx];
+
+      // Process entire batch concurrently
+      const results = await Promise.allSettled(
+        batch.map(wallet => this.depositSingleWallet(pool, wallet, GAS_RESERVE))
+      );
+
+      // Tally results
+      for (const r of results) {
+        if (r.status === "fulfilled") {
+          if (r.value === "deposited") deposited++;
+          else if (r.value === "skipped") { deposited++; skipped++; }
+          else if (r.value === "low_balance") lowBalance++;
         }
+        // "rejected" = error already logged inside depositSingleWallet
+      }
 
-        // Deposit: balance - gas reserve
-        if (ethBalance <= GAS_RESERVE) {
-          console.log(`[Perp] W${wallet.index} skip bulk deposit: balance=${formatEther(ethBalance)} < gas reserve`);
-          continue;
-        }
+      const done = Math.min((batchIdx + 1) * CONCURRENT_DEPOSITS, this.wallets.length);
+      console.log(`[Perp] Bulk deposit batch ${batchIdx + 1}/${batches.length} done (${done}/${this.wallets.length} wallets processed)`);
 
-        const depositAmount = ethBalance - GAS_RESERVE;
-        const walletClient = pool.createWallet(wallet.privateKey);
-        const account = privateKeyToAccount(wallet.privateKey);
+      // Small delay between batches for RPC rate limit + event processing
+      if (batchIdx < batches.length - 1) {
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
 
-        const hash = await pool.call(() =>
-          walletClient.writeContract({
-            chain: baseSepolia,
-            address: CONTRACTS.settlement,
-            abi: SETTLEMENT_ABI,
-            functionName: "depositETH",
-            args: [],
-            value: depositAmount,
-            account,
-          })
-        );
+    console.log(`[PerpEngine] Bulk deposit complete: ${deposited} deposited (${skipped} already had funds), ${lowBalance} low balance, out of ${this.wallets.length} wallets`);
+  }
 
-        await pool.call(() => pool.httpClient.waitForTransactionReceipt({ hash }));
+  /**
+   * Sync all wallet balances with the matching engine after bulk deposits.
+   *
+   * The engine detects deposits via SettlementV2 `Deposited` event listeners,
+   * but rapid parallel deposits (200 wallets × 3 txns) can overwhelm the WSS
+   * event processor. This explicit sync ensures every wallet's on-chain deposit
+   * is reflected in the engine's in-memory balance before trading begins.
+   *
+   * Uses POST /api/balance/sync { trader } — calls syncUserBalanceFromChain()
+   * inside the matching engine, which reads SettlementV2.userDeposits(trader)
+   * and reconciles with the engine's Redis balance.
+   */
+  private async syncEngineBalances(): Promise<void> {
+    const BATCH_SIZE = 20; // 20 concurrent sync calls per batch
+    let synced = 0;
+    let failed = 0;
 
-        // Sync with matching engine
-        try {
-          await fetch(`${MATCHING_ENGINE.url}/api/balance/sync`, {
+    console.log(`[PerpEngine] Syncing ${this.wallets.length} wallet balances with matching engine...`);
+
+    for (let i = 0; i < this.wallets.length; i += BATCH_SIZE) {
+      if (!this.running) break;
+
+      const batch = this.wallets.slice(i, i + BATCH_SIZE);
+
+      const results = await Promise.allSettled(
+        batch.map(async (wallet) => {
+          const resp = await fetch(`${MATCHING_ENGINE.url}/api/balance/sync`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ trader: wallet.address }),
           });
-        } catch {}
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          return resp.json();
+        })
+      );
 
-        deposited++;
-        this.stats.deposits++;
-        console.log(`[Perp] W${wallet.index} BULK DEPOSIT ${formatEther(depositAmount)} ETH to Settlement`);
-      } catch (err: any) {
-        console.error(`[Perp] W${wallet.index} bulk deposit failed: ${err.message?.slice(0, 80)}`);
+      for (const r of results) {
+        if (r.status === "fulfilled") synced++;
+        else failed++;
+      }
+
+      // Brief pause between batches to avoid overwhelming the engine
+      if (i + BATCH_SIZE < this.wallets.length) {
+        await new Promise(r => setTimeout(r, 500));
       }
     }
 
-    console.log(`[PerpEngine] Bulk deposit complete: ${deposited}/${this.wallets.length} wallets deposited`);
+    console.log(`[PerpEngine] Engine balance sync complete: ${synced} synced, ${failed} failed out of ${this.wallets.length} wallets`);
+  }
+
+  /** Deposit a single wallet's ETH into SettlementV2 (3-step on-chain flow). */
+  private async depositSingleWallet(
+    pool: ReturnType<typeof getRpcPool>,
+    wallet: StressWallet,
+    gasReserve: bigint,
+  ): Promise<"deposited" | "skipped" | "low_balance"> {
+    const ethBalance = await pool.call(() =>
+      pool.httpClient.getBalance({ address: wallet.address })
+    );
+
+    // Check existing SettlementV2 deposit (1e18 precision, no conversion needed)
+    let existingDeposit = 0n;
+    try {
+      existingDeposit = await pool.call(() =>
+        pool.httpClient.readContract({
+          address: CONTRACTS.settlementV2,
+          abi: SETTLEMENT_V2_ABI,
+          functionName: "userDeposits",
+          args: [wallet.address],
+        })
+      ) as bigint;
+    } catch {}
+
+    // Skip if already has any meaningful deposit (>= minSizeEth from config)
+    const minDeposit = parseEther(PERP_CONFIG.minSizeEth.toString());
+    if (existingDeposit >= minDeposit) {
+      // Trigger engine to sync chain balance
+      try {
+        await fetch(`${MATCHING_ENGINE.url}/api/user/${wallet.address}/balance`).catch(() => {});
+      } catch {}
+      return "skipped";
+    }
+
+    // Need enough ETH for deposit + 3 txns gas
+    if (ethBalance <= gasReserve) {
+      return "low_balance";
+    }
+
+    const depositAmount = ethBalance - gasReserve;
+    const walletClient = pool.createWallet(wallet.privateKey);
+    const account = privateKeyToAccount(wallet.privateKey);
+
+    // Step 1: Wrap ETH → WETH
+    const wrapHash = await pool.call(() =>
+      walletClient.writeContract({
+        chain: baseSepolia,
+        address: WETH_ADDRESS,
+        abi: WETH_ABI,
+        functionName: "deposit",
+        args: [],
+        value: depositAmount,
+        account,
+      })
+    );
+    await pool.call(() => pool.httpClient.waitForTransactionReceipt({ hash: wrapHash }));
+
+    // Step 2: Approve WETH for SettlementV2
+    const approveHash = await pool.call(() =>
+      walletClient.writeContract({
+        chain: baseSepolia,
+        address: WETH_ADDRESS,
+        abi: WETH_ABI,
+        functionName: "approve",
+        args: [CONTRACTS.settlementV2, depositAmount],
+        account,
+      })
+    );
+    await pool.call(() => pool.httpClient.waitForTransactionReceipt({ hash: approveHash }));
+
+    // Step 3: Deposit WETH into SettlementV2
+    const depositHash = await pool.call(() =>
+      walletClient.writeContract({
+        chain: baseSepolia,
+        address: CONTRACTS.settlementV2,
+        abi: SETTLEMENT_V2_ABI,
+        functionName: "deposit",
+        args: [depositAmount],
+        account,
+      })
+    );
+    await pool.call(() => pool.httpClient.waitForTransactionReceipt({ hash: depositHash }));
+
+    this.stats.deposits++;
+    console.log(`[Perp] W${wallet.index} BULK DEPOSIT ${formatEther(depositAmount)} ETH to SettlementV2`);
+    return "deposited";
   }
 
   // ── Limit Order Placement (Order Book Depth) ──────────────
@@ -589,19 +860,10 @@ export class PerpEngine {
       }
     } catch {}
 
-    // Fallback: on-chain Settlement nonces
-    const pool = getRpcPool();
-    try {
-      const nonce = await pool.call(() =>
-        pool.httpClient.readContract({
-          address: CONTRACTS.settlement,
-          abi: SETTLEMENT_ABI,
-          functionName: "nonces",
-          args: [wallet.address],
-        })
-      );
-      this.localNonces.set(wallet.address, nonce as bigint);
-    } catch {}
+    // Fallback: on-chain SettlementV2 withdrawal nonces (not order nonces — those are engine-only)
+    // Order nonces are managed entirely by the matching engine, not on-chain.
+    // If engine API fails, default to 0 (engine will reject and we'll re-sync)
+    console.warn(`[PerpEngine] W${wallet.index} nonce sync: engine API failed, defaulting to 0`);
   }
 
   private async syncAllNonces(): Promise<void> {
@@ -627,24 +889,16 @@ export class PerpEngine {
       return;
     }
 
-    // Fallback: batch on-chain reads
-    const pool = getRpcPool();
-    const calls = this.wallets.map(w => () =>
-      pool.httpClient.readContract({
-        address: CONTRACTS.settlement,
-        abi: SETTLEMENT_ABI,
-        functionName: "nonces",
-        args: [w.address],
-      })
-    );
-
-    const results = await pool.batchRead(calls);
-    results.forEach((r, i) => {
-      if (r.success && r.result != null) {
-        this.localNonces.set(this.wallets[i].address, r.result as bigint);
+    // Fallback: order nonces are engine-only (not on-chain), initialize unsynced wallets to 0
+    // The engine will reject stale nonces and we'll re-sync from the API on failure
+    let initialized = 0;
+    for (const w of this.wallets) {
+      if (!this.localNonces.has(w.address)) {
+        this.localNonces.set(w.address, 0n);
+        initialized++;
       }
-    });
-    console.log(`[PerpEngine] Synced ${results.filter(r => r.success).length}/${this.wallets.length} nonces from chain`);
+    }
+    console.log(`[PerpEngine] Engine API synced ${apiSynced}, initialized ${initialized} wallets to nonce 0`);
   }
 
   private async refreshTokenList(): Promise<void> {
@@ -660,5 +914,204 @@ export class PerpEngine {
       );
       this.tradableTokens = tokens as Address[];
     } catch {}
+  }
+
+  // ── Withdrawal Testing ──────────────────────────────────────
+
+  /**
+   * Test Merkle proof withdrawal flow:
+   *   1. Pick a random wallet with engine balance > 0.005 ETH
+   *   2. POST /api/wallet/withdraw → get Merkle proof + EIP-712 sig
+   *   3. Call SettlementV2.withdraw() on-chain with proof
+   *   4. Verify WETH arrived in wallet
+   */
+  private async executeWithdrawalTest(): Promise<void> {
+    // Find a wallet with enough balance
+    const candidates = [];
+    for (const wallet of pickRandom(this.wallets, Math.min(10, this.wallets.length))) {
+      const balance = await this.getAvailableBalance(wallet);
+      if (balance > parseEther("0.005")) {
+        candidates.push({ wallet, balance });
+      }
+    }
+
+    if (candidates.length === 0) {
+      console.log("[PerpEngine] No wallets with sufficient balance for withdrawal test");
+      return;
+    }
+
+    const { wallet, balance } = candidates[0];
+    const withdrawAmount = parseEther("0.002"); // Small test withdrawal
+
+    console.log(`[PerpEngine] 🔄 Withdrawal test: W${wallet.index} withdrawing ${formatEther(withdrawAmount)} ETH...`);
+
+    // Step 1: Request withdrawal from matching engine (gets Merkle proof + sig)
+    try {
+      const account = privateKeyToAccount(wallet.privateKey);
+      const message = `Withdraw ${withdrawAmount.toString()} for ${wallet.address.toLowerCase()}`;
+      const traderSig = await account.signMessage({ message });
+
+      const resp = await fetch(`${MATCHING_ENGINE.url}/api/wallet/withdraw`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trader: wallet.address,
+          amount: withdrawAmount.toString(),
+          token: WETH_ADDRESS,
+          signature: traderSig,
+        }),
+      });
+
+      const result = await resp.json() as {
+        success?: boolean;
+        authorization?: {
+          merkleProof: string[];
+          signature: string;
+          deadline: string;
+          userEquity: string;
+        };
+        error?: string;
+      };
+
+      if (!result.success || !result.authorization) {
+        console.log(`[PerpEngine] Withdrawal request rejected: ${result.error || "no authorization"}`);
+        // This is expected if no Merkle snapshot has been submitted yet
+        return;
+      }
+
+      // Step 2: Submit withdrawal on-chain
+      const pool = getRpcPool();
+      const walletClient = pool.createWallet(wallet.privateKey);
+
+      const wethBefore = await pool.call(() =>
+        pool.httpClient.readContract({
+          address: WETH_ADDRESS,
+          abi: WETH_ABI,
+          functionName: "balanceOf",
+          args: [wallet.address],
+        })
+      ) as bigint;
+
+      const txHash = await pool.call(() =>
+        walletClient.writeContract({
+          chain: baseSepolia,
+          address: CONTRACTS.settlementV2,
+          abi: SETTLEMENT_V2_ABI,
+          functionName: "withdraw",
+          args: [
+            withdrawAmount,
+            BigInt(result.authorization!.userEquity),
+            result.authorization!.merkleProof as `0x${string}`[],
+            BigInt(result.authorization!.deadline),
+            result.authorization!.signature as `0x${string}`,
+          ],
+          account,
+        })
+      );
+
+      await pool.call(() => pool.httpClient.waitForTransactionReceipt({ hash: txHash }));
+
+      // Step 3: Verify WETH arrived
+      const wethAfter = await pool.call(() =>
+        pool.httpClient.readContract({
+          address: WETH_ADDRESS,
+          abi: WETH_ABI,
+          functionName: "balanceOf",
+          args: [wallet.address],
+        })
+      ) as bigint;
+
+      const received = wethAfter - wethBefore;
+      if (received >= withdrawAmount) {
+        this.stats.withdrawals++;
+        console.log(`[PerpEngine] ✅ Withdrawal SUCCESS: W${wallet.index} received ${formatEther(received)} WETH`);
+      } else {
+        this.stats.withdrawalFailures++;
+        console.error(`[PerpEngine] ⚠️ Withdrawal MISMATCH: expected ${formatEther(withdrawAmount)}, got ${formatEther(received)}`);
+      }
+    } catch (err: any) {
+      this.stats.withdrawalFailures++;
+      console.error(`[PerpEngine] ❌ Withdrawal test failed: ${err.message?.slice(0, 120)}`);
+    }
+  }
+
+  // ── Full Lifecycle Verification ─────────────────────────────
+
+  /**
+   * Verify on-chain state matches engine state:
+   *   1. SettlementV2.userDeposits(wallet) — total deposited on-chain
+   *   2. Matching engine balance — available + locked
+   *   3. PerpVault.getPoolValue() — LP pool health
+   *   4. PerpVault.getTotalOI() — OI consistency
+   */
+  private async verifyFullCycle(): Promise<void> {
+    const pool = getRpcPool();
+    this.stats.lifecycleChecks++;
+
+    // Sample 5 random wallets for state verification
+    const sample = pickRandom(this.wallets, Math.min(5, this.wallets.length));
+    let mismatches = 0;
+
+    for (const wallet of sample) {
+      try {
+        // On-chain deposits
+        const chainDeposit = await pool.call(() =>
+          pool.httpClient.readContract({
+            address: CONTRACTS.settlementV2,
+            abi: SETTLEMENT_V2_ABI,
+            functionName: "userDeposits",
+            args: [wallet.address],
+          })
+        ) as bigint;
+
+        // Engine balance
+        const engineBalance = await this.getAvailableBalance(wallet);
+
+        // Drift check: engine balance can be higher (PnL gains via mode2Adj) or lower (open positions, losses)
+        // But should never be wildly different from chain deposits
+        const drift = engineBalance > chainDeposit
+          ? engineBalance - chainDeposit
+          : chainDeposit - engineBalance;
+
+        // Allow up to 50% drift (mode2Adj for PnL is expected)
+        const maxDrift = chainDeposit > 0n ? chainDeposit / 2n : parseEther("0.5");
+        if (drift > maxDrift && chainDeposit > parseEther("0.001")) {
+          mismatches++;
+          console.warn(`[PerpEngine] ⚠️ W${wallet.index} drift: chain=${formatEther(chainDeposit)} engine=${formatEther(engineBalance)} drift=${formatEther(drift)}`);
+        }
+      } catch {}
+    }
+
+    // PerpVault health check
+    try {
+      const poolValue = await pool.call(() =>
+        pool.httpClient.readContract({
+          address: CONTRACTS.perpVault,
+          abi: PERP_VAULT_ABI,
+          functionName: "getPoolValue",
+        })
+      ) as bigint;
+
+      const totalOI = await pool.call(() =>
+        pool.httpClient.readContract({
+          address: CONTRACTS.perpVault,
+          abi: PERP_VAULT_ABI,
+          functionName: "getTotalOI",
+        })
+      ) as bigint;
+
+      if (poolValue === 0n) {
+        console.error(`[PerpEngine] 🚨 CRITICAL: PerpVault poolValue is ZERO!`);
+        mismatches++;
+      }
+
+      console.log(`[PerpEngine] 📊 Lifecycle check: PerpVault poolValue=${formatEther(poolValue)} totalOI=${formatEther(totalOI)} mismatches=${mismatches}`);
+    } catch (err: any) {
+      console.error(`[PerpEngine] PerpVault check failed: ${err.message?.slice(0, 80)}`);
+    }
+
+    if (mismatches > 0) {
+      this.stats.lifecycleFailures++;
+    }
   }
 }
