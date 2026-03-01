@@ -31,17 +31,8 @@ blockchain:
   chain_id: 84532  # Base Sepolia
 
   # Contract addresses (Redeployed 2026-02-28)
+  # AUDIT-FIX M-18: All contract addresses belong here, NOT under matching_engine
   position_address: "0x7611a924622B5f6bc4c2ECAAdB6DE078E741AcF6"
-
-matching_engine:
-  # Matching Engine (TypeScript service) URL — the ONLY field MatchingEngineConfig reads
-  url: "http://localhost:8081"
-
-# AUDIT-FIX M-18: Contract addresses belong under "blockchain", not "matching_engine"
-# The Go struct MatchingEngineConfig only has a "URL" field — all other fields below
-# were silently ignored when placed under matching_engine.
-blockchain:
-  # Contract addresses (Redeployed 2026-02-28) — extends blockchain section from config.yaml
   router_address: "0xF15197BA411b578dafC7936C241bE9DD725c22BE"
   vault_address: "0xcc4Fa8Df0686824F92d392Cb650057EA7D2EF46E"
   amm_address: "0x2c23046DC1595754528a10b8340F2AD8fdE05112"
@@ -57,6 +48,10 @@ blockchain:
   start_block: 0
   confirm_blocks: 1
   poll_interval: 1s
+
+matching_engine:
+  # Matching Engine (TypeScript service) URL — the ONLY field MatchingEngineConfig reads
+  url: "http://localhost:8081"
 
 jwt:
   secret: "dev-jwt-secret-at-least-32-characters-long-for-testing"

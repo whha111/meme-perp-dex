@@ -8190,8 +8190,7 @@ async function handleClosePair(req: Request, pairId: string): Promise<Response> 
         timestamp: closeTrade.timestamp, type: "close",
       }).catch(e => console.error("[DB] Failed to save close trade:", e));
 
-      // ✅ 记录 SETTLE_PNL 账单
-      const balance = getUserBalance(normalizedTrader);
+      // ✅ 记录 SETTLE_PNL 账单 (reuse `balance` from L8113 — same Map reference)
       try {
         await RedisSettlementLogRepo.create({
           userAddress: normalizedTrader,
