@@ -430,7 +430,7 @@ export class MatchingEngine {
    * 旧方法兼容
    */
   configurePriceFeed(rpcUrl: string, priceFeedAddress: Address): void {
-    this.configurePriceSource(rpcUrl, "0x8de2Ce2a0f974b4CB00EC5B56BD89382690b5523" as Address, priceFeedAddress);
+    this.configurePriceSource(rpcUrl, "0xd05A38E6C2a39762De453D90a670ED0Af65ff2f8" as Address, priceFeedAddress);
   }
 
   // ETH 本位系统: 不再需要 ETH/USD 价格转换

@@ -582,7 +582,7 @@ export async function backfillHistoricalTrades(
   // Always use publicnode.com for backfill - Alchemy free tier only allows 10 blocks!
   const RPC_URL = "https://base-sepolia-rpc.publicnode.com";
   // 使用部署的 TokenFactory 地址
-  const TOKEN_FACTORY_ADDRESS = (process.env.TOKEN_FACTORY_ADDRESS || "0x8de2Ce2a0f974b4CB00EC5B56BD89382690b5523") as Address;
+  const TOKEN_FACTORY_ADDRESS = (process.env.TOKEN_FACTORY_ADDRESS || "0xd05A38E6C2a39762De453D90a670ED0Af65ff2f8") as Address;
 
   logger.info("SpotHistory", `Using TokenFactory: ${TOKEN_FACTORY_ADDRESS}`);
 

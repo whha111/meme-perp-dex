@@ -24,7 +24,9 @@ import {
   type Hex,
   type Hash,
 } from "viem";
-import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
+import { privateKeyToAccount } from "viem/accounts";
+import { readFileSync } from "fs";
+import { resolve } from "path";
 import { baseSepolia } from "viem/chains";
 
 // ============================================================
@@ -35,30 +37,34 @@ const RPC_URL = "https://sepolia.base.org";
 const API_URL = "http://localhost:8081";
 const CHAIN_ID = 84532;
 
-// AUDIT-FIX DP-C01/C05: Read private key from env, never hardcode
-const DEPLOYER_KEY = (process.env.DEPLOYER_PRIVATE_KEY || process.env.PRIVATE_KEY) as Hex;
-if (!DEPLOYER_KEY) {
-  console.error("❌ DEPLOYER_PRIVATE_KEY or PRIVATE_KEY env var is required");
-  process.exit(1);
-}
-const SETTLEMENT = (process.env.SETTLEMENT_ADDRESS || "0x7611a924622B5f6bc4c2ECAAdB6DE078E741AcF6") as Address;
-const TOKEN_FACTORY = (process.env.TOKEN_FACTORY_ADDRESS || "0x757eF02C2233b8cE2161EE65Fb7D626776b8CB73") as Address;
+// AUDIT-FIX DP-C01/C05: Deployer key from env (optional — can use pre-funded wallets)
+const DEPLOYER_KEY = (process.env.DEPLOYER_PRIVATE_KEY || process.env.PRIVATE_KEY) as Hex | undefined;
+// EIP-712 verifyingContract MUST match matching engine's SETTLEMENT_ADDRESS (V1)
+const SETTLEMENT = (process.env.SETTLEMENT_ADDRESS || "0x1660b3571fB04f16F70aea40ac0E908607061DBE") as Address;
+const SETTLEMENT_V2 = (process.env.SETTLEMENT_V2_ADDRESS || "0x733EccCf612F70621c772D63334Cf5606d7a7C75") as Address;
+const WETH_ADDRESS = "0x4200000000000000000000000000000000000006" as Address;
+const TOKEN_FACTORY = (process.env.TOKEN_FACTORY_ADDRESS || "0xd05A38E6C2a39762De453D90a670ED0Af65ff2f8") as Address;
 
 const TOKENS: [string, Address][] = [
-  ["DOGE", "0x1BC7c612e55b8CC8e24aA4041FAC3732d50C4C6F"],
-  ["PEPE", "0x0d0156063c5f805805d5324af69932FB790819D5"],
-  ["SHIB", "0x0724863BD88e1F4919c85294149ae87209E917Da"],
+  ["DOGE", "0x736f32BcAF09c2C5B469D5e46E9E645bFdDb49aC"],
+  ["PEPE", "0x0e85a2602Cb589Ed4b50E32093e0a21eFCD278AF"],
+  ["SHIB", "0xC78486166D6915bA3D285e69435A90421a72eD28"],
 ];
 
+// Pre-funded wallets from main-wallets.json (no deployer funding needed)
+const MAIN_WALLETS_PATH = resolve(import.meta.dir, "../backend/src/matching/main-wallets.json");
+const SPOT_WALLET_COUNT = 10;   // Use top 10 richest wallets for spot
+const PERP_WALLET_COUNT = 5;    // Use next 5 richest for perp
+const PERP_DEPOSIT_ETH = 0.02;  // Each perp wallet deposits this much into SettlementV2
+
 // Speed knobs
-const WALLET_COUNT = 12;
-const TRADE_INTERVAL = 300;  // ms between trades per token loop (target: 3.3/s per token)
-const TRADE_ETH_MIN = 0.005;
-const TRADE_ETH_MAX = 0.035;
+const TRADE_INTERVAL = 500;  // ms between trades per token loop
+const TRADE_ETH_MIN = 0.001;
+const TRADE_ETH_MAX = 0.005;
 const SELL_FRACTION_MIN = 20;  // sell 20-80% of tracked balance
 const SELL_FRACTION_MAX = 80;
 const PERP_INTERVAL = 30_000;
-const PERP_LEVELS = 8;
+const PERP_LEVELS = 2;
 const STATS_INTERVAL = 60_000;
 
 // ============================================================
@@ -81,6 +87,18 @@ const ORDER_TYPES = {
     { name: "orderType", type: "uint8" },
   ],
 } as const;
+
+const WETH_ABI = [
+  { inputs: [], name: "deposit", outputs: [], stateMutability: "payable", type: "function" },
+  { inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], name: "approve", outputs: [{ type: "bool" }], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ name: "account", type: "address" }], name: "balanceOf", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
+  { inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }], name: "allowance", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
+] as const;
+
+const SV2_ABI = [
+  { inputs: [{ name: "amount", type: "uint256" }], name: "deposit", outputs: [], stateMutability: "nonpayable", type: "function" },
+  { inputs: [{ name: "user", type: "address" }], name: "userBalances", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
+] as const;
 
 const LEV_PREC = 10000n;
 
@@ -107,7 +125,8 @@ function mkW(key: Hex): W {
   return { key, addr: acc.address, acc, cli: createWalletClient({ account: acc, chain: baseSepolia, transport }), nonce: -1, busy: false };
 }
 
-const deployer = mkW(DEPLOYER_KEY);
+// Load pre-funded wallets sorted by balance (will be determined in setup)
+let deployer: W;
 let wallets: W[] = [];
 let perpWs: W[] = [];
 const perpNonces = new Map<string, bigint>();
@@ -236,20 +255,34 @@ async function enginePrice(token: Address): Promise<bigint> {
   } catch { return 0n; }
 }
 
-// AUDIT-FIX C-05: 做市商必须通过 SettlementV2 链上存款，不再调用虚假 deposit API
-// 生产环境: ALLOW_FAKE_DEPOSIT=false → 此函数的 API 调用返回 403
-// 测试环境: ALLOW_FAKE_DEPOSIT=true → 仍可使用（仅限开发）
-async function depositEngine(addr: Address, amt: bigint) {
+// Real on-chain deposit: ETH → WETH (wrap) → approve → SettlementV2.deposit()
+async function depositOnChain(w: W, amt: bigint) {
   try {
-    const res = await fetch(`${API_URL}/api/user/${addr.toLowerCase()}/deposit`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ amount: amt.toString() }),
-    });
-    if (res.status === 403) {
-      console.warn(`⚠️ Fake deposit disabled for ${addr.slice(0, 10)}. Use SettlementV2.deposit() on-chain.`);
-      console.warn(`   Run: cast send $SETTLEMENT_V2 "deposit(address,uint256)" $WETH ${amt} --rpc-url $RPC`);
-    }
-  } catch {}
+    // Step 1: Wrap ETH → WETH
+    log("DEPOSIT", "1️⃣", `${w.addr.slice(0, 10)} wrapping ${formatEther(amt)} ETH → WETH`);
+    const n1 = bumpNonce(w);
+    const h1 = await w.cli.writeContract({ address: WETH_ADDRESS, abi: WETH_ABI, functionName: "deposit", value: amt, nonce: n1 });
+    await pub.waitForTransactionReceipt({ hash: h1, timeout: 60_000 });
+
+    // Step 2: Approve SettlementV2 to spend WETH
+    log("DEPOSIT", "2️⃣", `${w.addr.slice(0, 10)} approving SettlementV2`);
+    const n2 = bumpNonce(w);
+    const h2 = await w.cli.writeContract({ address: WETH_ADDRESS, abi: WETH_ABI, functionName: "approve", args: [SETTLEMENT_V2, amt], nonce: n2 });
+    await pub.waitForTransactionReceipt({ hash: h2, timeout: 60_000 });
+
+    // Step 3: Deposit into SettlementV2
+    log("DEPOSIT", "3️⃣", `${w.addr.slice(0, 10)} depositing ${formatEther(amt)} WETH into SettlementV2`);
+    const n3 = bumpNonce(w);
+    const h3 = await w.cli.writeContract({ address: SETTLEMENT_V2, abi: SV2_ABI, functionName: "deposit", args: [amt], nonce: n3 });
+    await pub.waitForTransactionReceipt({ hash: h3, timeout: 60_000 });
+
+    log("DEPOSIT", "✅", `${w.addr.slice(0, 10)} deposited ${formatEther(amt)} WETH`);
+    return true;
+  } catch (e: any) {
+    log("DEPOSIT", "❌", `${w.addr.slice(0, 10)} failed: ${e.message?.slice(0, 120)}`);
+    await syncNonce(w);
+    return false;
+  }
 }
 
 async function submitOrder(w: W, p: { token: Address; isLong: boolean; size: bigint; leverage: bigint; price: bigint; orderType: number }) {
@@ -279,40 +312,39 @@ async function submitOrder(w: W, p: { token: Address; isLong: boolean; size: big
 
 async function setup() {
   log("SETUP", "⚡", "═══ HIGH-FREQUENCY MARKET MAKER ═══");
-  const bal = await pub.getBalance({ address: deployer.addr });
-  log("SETUP", "💰", `Deployer: ${formatEther(bal)} ETH`);
 
-  await syncNonce(deployer);
+  // Load pre-funded wallets from main-wallets.json (no deployer needed)
+  log("SETUP", "📂", `Loading wallets from main-wallets.json`);
+  const rawWallets: { address: string; privateKey: string }[] = JSON.parse(readFileSync(MAIN_WALLETS_PATH, "utf-8"));
 
-  // Create wallets
-  wallets = Array.from({ length: WALLET_COUNT }, () => mkW(generatePrivateKey()));
-  perpWs = Array.from({ length: 8 }, () => mkW(generatePrivateKey()));
-  log("SETUP", "👛", `${wallets.length} spot + ${perpWs.length} perp wallets`);
-
-  // Fund ALL wallets using deployer's sequential nonce
-  log("SETUP", "💸", "Funding (parallel send, batch confirm)...");
-  const hashes: Hash[] = [];
-  const allW = [...wallets, ...perpWs];
-  for (const w of wallets) {
-    try {
-      const n = bumpNonce(deployer);
-      const h = await deployer.cli.sendTransaction({ to: w.addr, value: parseEther("0.5"), nonce: n });
-      hashes.push(h);
-    } catch {}
+  // Check balances in parallel batches and sort by richest
+  log("SETUP", "💰", `Checking balances of ${rawWallets.length} wallets...`);
+  const withBal: { key: Hex; addr: Address; bal: bigint }[] = [];
+  for (let i = 0; i < rawWallets.length; i += 20) {
+    const batch = rawWallets.slice(i, i + 20);
+    const results = await Promise.allSettled(batch.map(w => pub.getBalance({ address: w.address as Address })));
+    for (let j = 0; j < batch.length; j++) {
+      const bal = results[j].status === "fulfilled" ? (results[j] as PromiseFulfilledResult<bigint>).value : 0n;
+      if (bal > parseEther("0.003")) withBal.push({ key: batch[j].privateKey as Hex, addr: batch[j].address as Address, bal });
+    }
   }
-  for (const w of perpWs) {
-    try {
-      const n = bumpNonce(deployer);
-      const h = await deployer.cli.sendTransaction({ to: w.addr, value: parseEther("0.02"), nonce: n });
-      hashes.push(h);
-    } catch {}
+  withBal.sort((a, b) => (b.bal > a.bal ? 1 : b.bal < a.bal ? -1 : 0));
+  log("SETUP", "💰", `Found ${withBal.length} wallets with > 0.003 ETH (total: ${formatEther(withBal.reduce((s, w) => s + w.bal, 0n))} ETH)`);
+
+  if (withBal.length < SPOT_WALLET_COUNT + PERP_WALLET_COUNT) {
+    log("SETUP", "❌", `Need ${SPOT_WALLET_COUNT + PERP_WALLET_COUNT} wallets, only ${withBal.length} available`);
+    process.exit(1);
   }
-  // Wait for all funding txs in parallel
-  log("SETUP", "⏳", `Waiting for ${hashes.length} funding txs...`);
-  await Promise.allSettled(hashes.map(h => pub.waitForTransactionReceipt({ hash: h, timeout: 60_000 })));
-  log("SETUP", "✅", "Funded");
+
+  // Richest → perp (need ETH for on-chain deposit), rest → spot
+  perpWs = withBal.slice(0, PERP_WALLET_COUNT).map(w => mkW(w.key));
+  wallets = withBal.slice(PERP_WALLET_COUNT, PERP_WALLET_COUNT + SPOT_WALLET_COUNT).map(w => mkW(w.key));
+  deployer = perpWs[0]; // Richest wallet is deployer
+  log("SETUP", "👛", `${wallets.length} spot + ${perpWs.length} perp wallets (pre-funded, no deployer transfer needed)`);
+  for (const w of perpWs) log("SETUP", "💰", `  Perp: ${w.addr.slice(0, 10)} = ${formatEther(withBal.find(x => x.addr === w.addr)?.bal || 0n)} ETH`);
 
   // Sync all nonces
+  const allW = [...wallets, ...perpWs];
   await Promise.all(allW.map(w => syncNonce(w)));
 
   // Pre-approve all tokens — send all approve txs, then wait in batch
@@ -342,9 +374,9 @@ async function setup() {
     for (const w of wallets) {
       try {
         const n = bumpNonce(w);
-        const h = await w.cli.writeContract({ address: TOKEN_FACTORY, abi: TF_ABI, functionName: "buy", args: [token, 0n], value: parseEther("0.015"), nonce: n });
+        const h = await w.cli.writeContract({ address: TOKEN_FACTORY, abi: TF_ABI, functionName: "buy", args: [token, 0n], value: parseEther("0.001"), nonce: n });
         seedHashes.push(h);
-        addHolding(w, token, parseEther("0.015") * 1000000n); // rough estimate
+        addHolding(w, token, parseEther("0.001") * 1000000n); // rough estimate
       } catch {}
     }
   }
@@ -362,12 +394,27 @@ async function setup() {
   log("SETUP", "✅", "Seeded (balances synced)");
 
   // Final nonce sync
-  await Promise.all([deployer, ...wallets].map(w => syncNonce(w)));
+  await Promise.all([...wallets, ...perpWs].map(w => syncNonce(w)));
 
-  // Engine deposits
-  log("SETUP", "🏦", "Engine deposits...");
-  for (const w of perpWs) await depositEngine(w.addr, parseEther("0.5"));
-  await depositEngine(deployer.addr, parseEther("2"));
+  // On-chain SettlementV2 deposits for perp wallets (3-step: wrap → approve → deposit)
+  log("SETUP", "🏦", "On-chain SettlementV2 deposits (3-step chain flow)...");
+  for (const w of perpWs) {
+    await depositOnChain(w, parseEther(PERP_DEPOSIT_ETH.toString()));
+  }
+
+  // Wait for engine to detect deposit events via watchContractEvent
+  log("SETUP", "⏳", "Waiting 15s for engine to process deposit events...");
+  await sleep(15_000);
+
+  // Verify engine credited the deposits
+  for (const w of perpWs) {
+    try {
+      const r = await fetch(`${API_URL}/api/user/${w.addr.toLowerCase()}/balance`);
+      const d = (await r.json()) as any;
+      const avail = d.availableBalance || d.data?.availableBalance || "0";
+      log("SETUP", "💳", `${w.addr.slice(0, 10)} engine balance: ${(Number(avail) / 1e18).toFixed(6)} ETH`);
+    } catch {}
+  }
 
   // Reset stats
   nBuy = 0; nSell = 0; nFail = 0; nPerpOk = 0; nPerpFill = 0;

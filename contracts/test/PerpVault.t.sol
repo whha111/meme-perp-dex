@@ -314,13 +314,13 @@ contract PerpVaultTest is Test {
         uint256 poolBefore = vault.getPoolValue();
 
         // Trader profits 2 ETH
-        uint256 vaultBalanceBefore = vaultContract.balance;
+        uint256 traderBalBefore = trader1.balance;
         vm.prank(matchingEngine);
         vault.settleTraderProfit(trader1, 2 ether);
 
         // Pool should decrease by 2 ETH
         assertEq(vault.getPoolValue(), poolBefore - 2 ether, "Pool reduced by profit");
-        assertEq(vaultContract.balance - vaultBalanceBefore, 2 ether, "Vault receives profit");
+        assertEq(trader1.balance - traderBalBefore, 2 ether, "Trader receives profit");
         // Share price drops: (10-2) * 1e18 / totalShares
         assertEq(vault.getSharePrice(), ((poolBefore - 2 ether) * PRECISION) / totalSharesNow);
     }
@@ -331,13 +331,13 @@ contract PerpVaultTest is Test {
         vault.deposit{value: 1 ether}();
 
         // Request 2 ETH profit but pool only has 1 ETH → partial payment
-        uint256 vaultBalBefore = vaultContract.balance;
+        uint256 traderBalBefore = trader1.balance;
         vm.prank(matchingEngine);
         vault.settleTraderProfit(trader1, 2 ether);
 
         // Should have paid all available balance
         assertEq(address(vault).balance, 0, "Pool drained for ADL");
-        assertEq(vaultContract.balance - vaultBalBefore, 1 ether, "Vault received partial");
+        assertEq(trader1.balance - traderBalBefore, 1 ether, "Trader received partial");
     }
 
     // C2: ADL — settleTraderProfit reverts only when pool is completely empty
@@ -1262,11 +1262,12 @@ contract PerpVaultTest is Test {
         vault.deposit{value: 5 ether}();
 
         // Try to settle 10 ETH but pool only has 5
+        uint256 traderBalBefore = trader1.balance;
         vm.prank(matchingEngine);
         vault.settleTraderProfit(trader1, 10 ether);
 
         assertEq(address(vault).balance, 0, "Pool fully drained");
-        assertEq(vaultContract.balance, 5 ether, "Vault got partial payment");
+        assertEq(trader1.balance - traderBalBefore, 5 ether, "Trader got partial payment");
     }
 
     function test_C2_extendedStats() public {

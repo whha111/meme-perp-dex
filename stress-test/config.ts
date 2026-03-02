@@ -34,11 +34,11 @@ export const CHAIN = {
 export const CONTRACTS = {
   settlement: "0x1660b3571fB04f16F70aea40ac0E908607061DBE" as Address,       // Settlement V1
   settlementV2: "0x733EccCf612F70621c772D63334Cf5606d7a7C75" as Address,     // SettlementV2 (dYdX-style Merkle)
-  tokenFactory: "0x757eF02C2233b8cE2161EE65Fb7D626776b8CB73" as Address,      // Spot trading (TokenFactory)
-  perpTokenFactory: "0x757eF02C2233b8cE2161EE65Fb7D626776b8CB73" as Address,  // Same as tokenFactory (unified)
+  tokenFactory: "0xd05A38E6C2a39762De453D90a670ED0Af65ff2f8" as Address,      // Spot trading (TokenFactory)
+  perpTokenFactory: "0xd05A38E6C2a39762De453D90a670ED0Af65ff2f8" as Address,  // Same as tokenFactory (unified)
   positionManager: "0x7611a924622B5f6bc4c2ECAAdB6DE078E741AcF6" as Address,
-  priceFeed: "0xfB347BC4Cc61C7FdCD862ED212A0e3866d205112" as Address,
-  liquidation: "0x6Fb6325094B24AE5f458f7a34C63BE30Da9aAECA" as Address,
+  priceFeed: "0x8A57904F9b9392dAB4163a6c372Df1c4Cdd1eb36" as Address,
+  liquidation: "0x53a5A82C95F3816179F9268002b1a2e4B5455CF4" as Address,
   insuranceFund: "0x93F63c2EEc4bF77FF301Cd14Ef4A392E58e33C69" as Address,
   fundingRate: "0xD6DD3947F8d80A031b69eBd825Be2384E787dC46" as Address,
   vault: "0xcc4Fa8Df0686824F92d392Cb650057EA7D2EF46E" as Address,

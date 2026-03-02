@@ -549,21 +549,21 @@ contract E2ETest is Test {
         vm.prank(lp1);
         perpVault.deposit{value: 5 ether}();
 
-        uint256 vaultBalanceBefore = address(mockVault).balance;
+        uint256 traderBalBefore = address(trader1).balance;
         uint256 poolBalanceBefore = perpVault.getRawBalance();
 
         // Try to settle 10 ETH profit (but pool only has ~5 ETH)
         vm.prank(matchingEngine);
         perpVault.settleTraderProfit(trader1, 10 ether);
 
-        uint256 vaultBalanceAfter = address(mockVault).balance;
+        uint256 traderBalAfter = address(trader1).balance;
         uint256 poolBalanceAfter = perpVault.getRawBalance();
 
-        // Cross-validate: vault got what pool had, not full 10 ETH
-        uint256 vaultReceived = vaultBalanceAfter - vaultBalanceBefore;
-        assertEq(vaultReceived, poolBalanceBefore, "Vault should receive pool's full balance (ADL)");
+        // Cross-validate: trader got what pool had, not full 10 ETH
+        uint256 traderReceived = traderBalAfter - traderBalBefore;
+        assertEq(traderReceived, poolBalanceBefore, "Trader should receive pool's full balance (ADL)");
         assertEq(poolBalanceAfter, 0, "Pool should be empty after ADL");
-        assertLt(vaultReceived, 10 ether, "Vault should NOT receive full profit");
+        assertLt(traderReceived, 10 ether, "Trader should NOT receive full profit");
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -609,8 +609,8 @@ contract E2ETest is Test {
         uint256 sharePriceAfterProfit = perpVault.getSharePrice();
         assertLt(sharePriceAfterProfit, sharePriceBefore, "Share price drops when traders profit");
 
-        // ── Step 6: Trader closes with 3 ETH profit → settled from pool to vault ──
-        uint256 vaultBefore = address(mockVault).balance;
+        // ── Step 6: Trader closes with 3 ETH profit → settled from pool to trader ──
+        uint256 traderBefore = address(trader1).balance;
 
         vm.prank(matchingEngine);
         perpVault.settleTraderProfit(trader1, 3 ether);
@@ -622,7 +622,7 @@ contract E2ETest is Test {
         vm.prank(matchingEngine);
         perpVault.updatePendingPnL(0);
 
-        assertEq(address(mockVault).balance - vaultBefore, 3 ether, "Vault received 3 ETH profit");
+        assertEq(address(trader1).balance - traderBefore, 3 ether, "Trader received 3 ETH profit");
 
         // ── Step 7: Pool value decreased → LP values decreased ──
         uint256 sharePriceAfterSettle = perpVault.getSharePrice();

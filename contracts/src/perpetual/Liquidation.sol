@@ -473,21 +473,23 @@ contract Liquidation is Ownable, ReentrancyGuard {
      * @dev 由 Vault 调用，当用户穿仓时
      * @param amount 需要覆盖的金额
      */
-    function coverDeficit(uint256 amount) external {
+    function coverDeficit(uint256 amount) external returns (uint256 covered) {
         require(msg.sender == address(vault), "Only vault");
 
-        if (amount == 0) return;
+        if (amount == 0) return 0;
 
         if (insuranceFund >= amount) {
             insuranceFund -= amount;
+            covered = amount;
             emit DeficitCovered(amount);
         } else {
             // 保险基金不足
+            covered = insuranceFund;
             uint256 shortfall = amount - insuranceFund;
             insuranceFund = 0;
 
             _handleInsuranceShortfall(shortfall);
-            emit DeficitCovered(amount - shortfall);
+            emit DeficitCovered(covered);
         }
     }
 
