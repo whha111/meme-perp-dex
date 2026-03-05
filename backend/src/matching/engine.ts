@@ -658,6 +658,17 @@ export class MatchingEngine {
     // - 市价单: price=0, 使用 currentPrice (1e18 精度)
     // - 限价单: price>0, 前端发送 1e18 精度
     const isMarketOrder = price === 0n;
+
+    // M-29 FIX: 市价单在无历史价格时拒绝 (防止 0 价成交)
+    if (isMarketOrder && currentPrice === 0n) {
+      return {
+        order: { id: "", trader, token, isLong, size, price: 0n, leverage, filledSize: 0n, status: "REJECTED" as any, createdAt: now, updatedAt: now, margin: 0n, source: params.source || "api" },
+        matches: [],
+        rejected: true,
+        rejectReason: "Market orders require an established price. Submit a limit order first.",
+      };
+    }
+
     const priceETH = isMarketOrder ? currentPrice : price;  // 都是 1e18 精度
 
     // Step 2: 计算仓位的 ETH 价值 (名义价值)
@@ -965,6 +976,9 @@ export class MatchingEngine {
         // 计算成交价格（Maker价格优先：已在订单簿中的订单价格）
         const matchPrice = shortPrice;
 
+        // M-29 FIX: 绝不在 0 价成交
+        if (matchPrice === 0n) continue;
+
         // 创建配对
         const match: Match = {
           longOrder: incomingOrder,
@@ -1026,6 +1040,9 @@ export class MatchingEngine {
         const matchSize = remainingSize < longRemaining ? remainingSize : longRemaining;
         // Maker's price (existing order in book) determines match price
         const matchPrice = longPrice;
+
+        // M-29 FIX: 绝不在 0 价成交
+        if (matchPrice === 0n) continue;
 
         // 生成成交ID
         const tradeId = `trade_${Date.now()}_${this.tradeIdCounter + 1}`;

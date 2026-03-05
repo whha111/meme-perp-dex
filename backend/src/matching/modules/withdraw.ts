@@ -188,8 +188,9 @@ export function incrementNonce(user: Address): bigint {
 
 /**
  * Check if user can withdraw amount
+ * M-07 FIX: 现在同时检查链上 totalWithdrawn，防止已提款金额超过存款
  */
-export function canWithdraw(user: Address, amount: bigint): { canWithdraw: boolean; reason?: string; availableEquity?: bigint } {
+export async function canWithdraw(user: Address, amount: bigint): Promise<{ canWithdraw: boolean; reason?: string; availableEquity?: bigint }> {
   // Get Merkle proof (contains user's equity)
   const proof = getUserProof(user);
 
@@ -216,6 +217,24 @@ export function canWithdraw(user: Address, amount: bigint): { canWithdraw: boole
     };
   }
 
+  // M-07 FIX: 检查链上可用余额 (deposits - totalWithdrawn)
+  try {
+    const { getUserDeposits, getUserTotalWithdrawn } = await import("./relay");
+    const deposits = await getUserDeposits(user);
+    const totalWithdrawn = await getUserTotalWithdrawn(user);
+    const onChainAvailable = deposits > totalWithdrawn ? deposits - totalWithdrawn : 0n;
+
+    if (amount > onChainAvailable) {
+      return {
+        canWithdraw: false,
+        reason: `On-chain available insufficient: deposits=${deposits}, withdrawn=${totalWithdrawn}, available=${onChainAvailable} < ${amount}`,
+        availableEquity: onChainAvailable,
+      };
+    }
+  } catch (e) {
+    console.warn(`[Withdraw] Failed to check on-chain balance for ${user.slice(0, 10)}, proceeding with equity check only:`, e);
+  }
+
   return {
     canWithdraw: true,
     availableEquity: proof.equity,
@@ -235,8 +254,8 @@ export async function generateWithdrawalAuthorization(
     };
   }
 
-  // 1. Check if user can withdraw
-  const checkResult = canWithdraw(request.user, request.amount);
+  // 1. Check if user can withdraw (M-07: now async — checks on-chain totalWithdrawn)
+  const checkResult = await canWithdraw(request.user, request.amount);
   if (!checkResult.canWithdraw) {
     return {
       success: false,

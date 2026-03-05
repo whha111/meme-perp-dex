@@ -129,8 +129,10 @@ export async function syncBalanceFromChain(trader: Address): Promise<UserBalance
     const balance = await BalanceRepo.getOrCreate(trader);
     balance.walletBalance = walletBalance;           // 派生钱包中的 ETH + WETH (1e18)
     balance.availableBalance = contractAvailable;    // Settlement 中可用 ETH (1e18)
-    balance.usedMargin = 0n;                         // Mode 2: 仓位保证金由调用方从 Redis 计算
-    balance.frozenMargin = 0n;                       // Redis 中冻结 (待成交订单)
+    // AUDIT-FIX M-12: Do NOT reset usedMargin/frozenMargin to 0 — they are managed by
+    // the matching engine (position opens/closes and order freezes). Resetting here
+    // creates a race condition where equity is temporarily wrong until the engine re-sets them.
+    // balance.usedMargin and balance.frozenMargin are preserved from existing state.
 
     await BalanceRepo.update(trader, balance);
 

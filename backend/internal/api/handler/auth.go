@@ -75,6 +75,24 @@ type nonceInfo struct {
 	ExpiresAt time.Time
 }
 
+// M-25 FIX: 定期清理过期 nonce，防止内存无限增长
+func init() {
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			nonceMu.Lock()
+			now := time.Now()
+			for addr, info := range nonceStore {
+				if now.After(info.ExpiresAt) {
+					delete(nonceStore, addr)
+				}
+			}
+			nonceMu.Unlock()
+		}
+	}()
+}
+
 // GetNonce returns a nonce for the user to sign
 // @Summary Get login nonce
 // @Tags Auth

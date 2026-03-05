@@ -5332,6 +5332,11 @@ async function startEventWatching(): Promise<void> {
       },
     });
 
+    // M-11 FIX: 事件去重 Set (防止链重组/重连时重复处理)
+    const processedDepositEvents = new Set<string>();
+    // 定期清理 (每 10 分钟清空，避免内存无限增长)
+    setInterval(() => processedDepositEvents.clear(), 10 * 60 * 1000);
+
     // 监听 SettlementV2 DepositedFor 事件 (中继器代存)
     v2PublicClient.watchContractEvent({
       address: SETTLEMENT_V2_ADDRESS,
@@ -5339,6 +5344,14 @@ async function startEventWatching(): Promise<void> {
       eventName: "DepositedFor",
       onLogs: async (logs) => {
         for (const log of logs) {
+          // M-11 FIX: 去重 — txHash + logIndex 唯一标识事件
+          const eventKey = `${log.transactionHash}_${log.logIndex}`;
+          if (processedDepositEvents.has(eventKey)) {
+            console.log(`[Events:V2] Skipping duplicate DepositedFor: ${eventKey}`);
+            continue;
+          }
+          processedDepositEvents.add(eventKey);
+
           const { user, relayer, amount } = log.args as {
             user: Address;
             relayer: Address;
@@ -9599,19 +9612,20 @@ function addMarginToPosition(pairId: string, amount: bigint): AddMarginResult {
   const currentPrice = BigInt(position.markPrice);
   // position.size 已经是 ETH 名义价值 (1e18 精度)
   const positionValue = BigInt(position.size);
-  const newLeverage = Number((positionValue * 10000n) / newCollateral) / 10000;
+  // M-06 FIX: 全程 BigInt 计算杠杆 (1e4 basis points)，避免 Math.floor 截断
+  const leverageBp = (positionValue * 10000n) / newCollateral;  // e.g. 58000 = 5.8x
 
   // 更新仓位
   position.collateral = newCollateral.toString();
   position.margin = (newCollateral + BigInt(position.unrealizedPnL)).toString();
-  position.leverage = Math.floor(newLeverage).toString();
+  position.leverage = (Number(leverageBp) / 10000).toString();
 
   // 重新计算强平价格
   const entryPrice = BigInt(position.entryPrice);
   const mmr = BigInt(position.mmr);
   const newLiquidationPrice = calculateLiquidationPrice(
     entryPrice,
-    BigInt(Math.floor(newLeverage * 10000)),
+    leverageBp,
     position.isLong,
     mmr
   );
@@ -9725,18 +9739,19 @@ function removeMarginFromPosition(pairId: string, amount: bigint): RemoveMarginR
   }
 
   const newCollateral = oldCollateral - amount;
-  const newLeverage = Number((positionValue * 10000n) / newCollateral) / 10000;
+  // M-06 FIX: 全程 BigInt 计算杠杆
+  const leverageBp = (positionValue * 10000n) / newCollateral;
 
   // 更新仓位
   position.collateral = newCollateral.toString();
   position.margin = (newCollateral + BigInt(position.unrealizedPnL)).toString();
-  position.leverage = Math.floor(newLeverage).toString();
+  position.leverage = (Number(leverageBp) / 10000).toString();
 
   // 重新计算强平价格
   const entryPrice = BigInt(position.entryPrice);
   const newLiquidationPrice = calculateLiquidationPrice(
     entryPrice,
-    BigInt(Math.floor(newLeverage * 10000)),
+    leverageBp,
     position.isLong,
     mmr
   );
@@ -10738,11 +10753,23 @@ async function handleRequest(req: Request): Promise<Response> {
   }
 
   // 前端充值/提现后同步链上余额
+  // M-05 FIX: 需要 EIP-191 签名鉴权 (防止 DoS — 每次调用触发链上 RPC)
   if (path === "/api/balance/sync" && method === "POST") {
     try {
-      const { trader } = await req.json();
+      const { trader, signature, authNonce, authDeadline } = await req.json();
       if (!trader) return errorResponse("Missing trader");
       const normalizedTrader = (trader as string).toLowerCase() as Address;
+
+      // 鉴权: 只允许用户同步自己的余额
+      if (signature && authNonce !== undefined && authDeadline) {
+        const authResult = await verifyAuthSignature(normalizedTrader, signature, BigInt(authNonce), Number(authDeadline));
+        if (!authResult.valid) {
+          return errorResponse(`Authentication failed: ${authResult.reason}`, 401);
+        }
+      } else {
+        return errorResponse("Authentication required: signature, authNonce, authDeadline", 401);
+      }
+
       await syncUserBalanceFromChain(normalizedTrader);
       broadcastBalanceUpdate(normalizedTrader);
       return jsonResponse({ success: true });
@@ -12426,8 +12453,44 @@ async function handleWSMessage(ws: WebSocket, message: string): Promise<void> {
       }
       console.log(`[WS] Trader ${trader.slice(0, 10)} unsubscribed from risk data`);
     }
-    // 全局风控数据订阅 (保险基金、强平队列等)
+    // AUDIT-FIX M-01: subscribe_global_risk requires signature authentication
+    // Client must send: { type: "subscribe_global_risk", trader, signature, timestamp }
+    // Signature signs message: "subscribe_global_risk:{trader}:{timestamp}"
+    // Only authenticated traders can see global risk data (insurance fund, liquidation queue)
     else if (msg.type === "subscribe_global_risk") {
+      if (!SKIP_SIGNATURE_VERIFY_ENV) {
+        const { trader, signature, timestamp } = msg;
+        if (!trader || !signature || !timestamp) {
+          ws.send(JSON.stringify({
+            type: "error",
+            error: "subscribe_global_risk requires trader, signature and timestamp for authentication",
+            timestamp: Date.now(),
+          }));
+          return;
+        }
+        const normalizedTrader = trader.toLowerCase() as Address;
+        // Anti-replay: timestamp must be within 5 minutes
+        const now = Math.floor(Date.now() / 1000);
+        const ts = Number(timestamp);
+        if (Math.abs(now - ts) > 300) {
+          ws.send(JSON.stringify({
+            type: "error",
+            error: "subscribe_global_risk timestamp expired (must be within 5 minutes)",
+            timestamp: Date.now(),
+          }));
+          return;
+        }
+        const expectedMessage = `subscribe_global_risk:${normalizedTrader}:${timestamp}`;
+        const auth = await verifyTraderSignature(normalizedTrader, signature, expectedMessage);
+        if (!auth.valid) {
+          ws.send(JSON.stringify({
+            type: "error",
+            error: `subscribe_global_risk auth failed: ${auth.error}`,
+            timestamp: Date.now(),
+          }));
+          return;
+        }
+      }
       wsRiskSubscribers.add(ws);
 
       // 立即发送当前全局风控数据
