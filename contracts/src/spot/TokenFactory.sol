@@ -336,6 +336,18 @@ contract TokenFactory is Ownable, ReentrancyGuard, Pausable, ICurveEvents {
      * @param trader 交易者地址
      * @param amount 手续费总额
      */
+    /**
+     * @notice 分配交易手续费
+     * @dev H-08 FIX: 移除无推荐人时的重复加算。
+     *      当 referrer == address(0) 时，referrerFee = 0，
+     *      platformFee = amount - creatorFee - 0 已包含推荐人份额。
+     *      旧代码额外加了 10%，导致总分配 = 110% 的手续费，
+     *      多出的 10% 从池子 ETH 储备中被抽走。
+     *
+     *      分配比例:
+     *      - 有推荐人: 创建者 25% + 推荐人 10% + 平台 65% = 100%
+     *      - 无推荐人: 创建者 25% + 平台 75% = 100%
+     */
     function _distributeTradingFee(address token, address trader, uint256 amount) internal {
         if (amount == 0) return;
 
@@ -344,17 +356,15 @@ contract TokenFactory is Ownable, ReentrancyGuard, Pausable, ICurveEvents {
         // 计算各方份额
         uint256 creatorFee = (amount * CREATOR_FEE_SHARE) / 10000;
         uint256 referrerFee = referrer != address(0) ? (amount * REFERRER_FEE_SHARE) / 10000 : 0;
+        // H-08 FIX: platformFee = amount - creatorFee - referrerFee
+        // 无推荐人时 referrerFee=0，platformFee 自然包含推荐人份额，无需额外加算
         uint256 platformFee = amount - creatorFee - referrerFee;
 
-        // 如果没有邀请人，邀请人份额归平台
-        if (referrer == address(0)) {
-            platformFee += (amount * REFERRER_FEE_SHARE) / 10000;
-        }
-
-        // 创建者和邀请人: 累积收益等待提取
+        // 创建者: 累积收益等待提取
         if (creatorFee > 0) {
             creatorEarnings[token] += creatorFee;
         }
+        // 推荐人: 累积收益等待提取（无推荐人时 referrerFee=0，跳过）
         if (referrerFee > 0) {
             referrerEarnings[referrer] += referrerFee;
         }

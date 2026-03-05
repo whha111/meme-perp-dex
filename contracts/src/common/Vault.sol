@@ -35,6 +35,9 @@ contract Vault is Ownable, ReentrancyGuard, Pausable {
     // 保险基金地址（Liquidation 合约）
     address public insuranceFund;
 
+    // H-10 FIX: PerpVault 地址（清算剩余优先路由到 PerpVault）
+    address public perpVault;
+
     // H-016: 待领取的盈利（保险基金不足时记录）
     mapping(address => uint256) public pendingProfits;
 
@@ -132,6 +135,12 @@ contract Vault is Ownable, ReentrancyGuard, Pausable {
         if (_insuranceFund == address(0)) revert ZeroAddress();
         insuranceFund = _insuranceFund;
         emit InsuranceFundSet(_insuranceFund);
+    }
+
+    /// @notice H-10 FIX: 设置 PerpVault 地址（清算剩余优先路由到 PerpVault）
+    function setPerpVault(address _perpVault) external onlyOwner {
+        if (_perpVault == address(0)) revert ZeroAddress();
+        perpVault = _perpVault;
     }
 
     // P-007: Emergency pause functionality
@@ -537,13 +546,17 @@ contract Vault is Ownable, ReentrancyGuard, Pausable {
             balances[liquidator] += actualReward;
         }
 
-        // 剩余资金转入 LP 池
+        // H-10 FIX: 剩余资金优先路由到 PerpVault（保险基金），回退到 lendingPool
+        // GMX 标准: 清算剩余进入 LP 池 = 保险基金 = PerpVault
         uint256 actualRemaining = (fromUser + fromInsurance) > actualReward
             ? (fromUser + fromInsurance) - actualReward
             : 0;
-        if (actualRemaining > 0 && lendingPool != address(0)) {
-            (bool success,) = lendingPool.call{value: actualRemaining}("");
-            if (!success) revert TransferFailed();
+        if (actualRemaining > 0) {
+            address destination = perpVault != address(0) ? perpVault : lendingPool;
+            if (destination != address(0)) {
+                (bool success,) = destination.call{value: actualRemaining}("");
+                if (!success) revert TransferFailed();
+            }
         }
 
         emit Liquidated(liquidatedUser, liquidator, actualReward, actualRemaining);

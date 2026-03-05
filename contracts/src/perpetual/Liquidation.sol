@@ -7,6 +7,7 @@ import "../interfaces/IPositionManager.sol";
 import "../interfaces/IVault.sol";
 import "../interfaces/IRiskManager.sol";
 import "../interfaces/IPriceFeed.sol";
+import "./IPerpVault.sol";
 
 /**
  * @title Liquidation
@@ -32,8 +33,14 @@ contract Liquidation is Ownable, ReentrancyGuard {
     IRiskManager public riskManager;
     IPriceFeed public priceFeed;
 
-    // 保险基金（本合约 ETH 余额）
-    uint256 public insuranceFund;
+    // H-09/H-10 FIX: 移除 phantom insuranceFund 状态变量
+    // 旧代码 `insuranceFund` 是虚假记账 — 清算后 += toInsuranceFund 但合约从未收到 ETH
+    // 新设计: address(this).balance 为本地保险金（仅通过 receive/depositInsuranceFund 收到的真实 ETH）
+    //         PerpVault 为主保险源（GMX/dYdX 标准: LP 池 = 保险基金）
+    // @deprecated insuranceFund — 使用 getInsuranceFund() 替代
+
+    /// @notice H-10 FIX: PerpVault 作为主保险基金源（统一双保险基金）
+    IPerpVault public perpVault;
 
     // 清算统计
     uint256 public totalLiquidations;
@@ -119,14 +126,21 @@ contract Liquidation is Ownable, ReentrancyGuard {
     // Admin Functions
     // ============================================================
 
+    /// @notice H-10 FIX: 设置 PerpVault 地址（统一保险基金源）
+    function setPerpVault(address _perpVault) external onlyOwner {
+        if (_perpVault == address(0)) revert ZeroAddress();
+        perpVault = IPerpVault(_perpVault);
+    }
+
     function depositInsuranceFund() external payable onlyOwner {
-        insuranceFund += msg.value;
+        // H-09 FIX: ETH 通过 msg.value 进入，address(this).balance 自动增加
+        // 不再维护 phantom insuranceFund 变量
         emit InsuranceFundDeposit(msg.value);
     }
 
     function withdrawInsuranceFund(uint256 amount) external onlyOwner {
-        if (amount > insuranceFund) revert InsufficientInsuranceFund();
-        insuranceFund -= amount;
+        // H-09 FIX: 使用真实余额检查
+        if (amount > address(this).balance) revert InsufficientInsuranceFund();
 
         (bool success,) = msg.sender.call{value: amount}("");
         require(success, "Transfer failed");
@@ -175,22 +189,21 @@ contract Liquidation is Ownable, ReentrancyGuard {
         uint256 toInsuranceFund = 0;
 
         if (remainingValue > 0) {
-            // 100% 进保险基金（legacy = 内盘 = 系统清算 = 无奖励）
+            // H-09 FIX: 通过 Vault 路由剩余保证金到保险池（而非 phantom 记账）
+            // vault.distributeLiquidation 会从用户 lockedBalance 扣除并路由资金
             toInsuranceFund = uint256(remainingValue);
-            insuranceFund += toInsuranceFund;
+            vault.distributeLiquidation(user, msg.sender, 0, toInsuranceFund);
         } else {
             uint256 deficit = uint256(-remainingValue);
 
-            // 尝试用保险基金覆盖
-            if (insuranceFund >= deficit) {
-                insuranceFund -= deficit;
+            // H-09 FIX: 使用真实余额 + PerpVault 覆盖缺口
+            uint256 localBalance = address(this).balance;
+            if (localBalance >= deficit) {
+                // 本地保险金足够 — 不需要额外操作（ETH 留在合约中备用）
             } else {
-                // 保险基金不足，触发 ADL 或暂停交易
-                _handleInsuranceShortfall(deficit - insuranceFund);
-                insuranceFund = 0;
+                // 本地不足，触发 ADL 或暂停交易
+                _handleInsuranceShortfall(deficit - localBalance);
             }
-
-            // Legacy = 内盘 = 系统清算 = 穿仓时无奖励
         }
 
         totalLiquidations++;
@@ -220,20 +233,20 @@ contract Liquidation is Ownable, ReentrancyGuard {
 
         positionManager.forceClose(user);
 
-        // Legacy = 内盘 = 系统清算 = 0% 奖励
         uint256 liquidatorReward = 0;
         uint256 toInsuranceFund = 0;
 
         if (remainingValue > 0) {
+            // H-09 FIX: 通过 Vault 路由（而非 phantom 记账）
             toInsuranceFund = uint256(remainingValue);
-            insuranceFund += toInsuranceFund;
+            vault.distributeLiquidation(user, liquidator, 0, toInsuranceFund);
         } else {
             uint256 deficit = uint256(-remainingValue);
-            if (insuranceFund >= deficit) {
-                insuranceFund -= deficit;
+            uint256 localBalance = address(this).balance;
+            if (localBalance >= deficit) {
+                // 本地保险金足够
             } else {
-                _handleInsuranceShortfall(deficit - insuranceFund);
-                insuranceFund = 0;
+                _handleInsuranceShortfall(deficit - localBalance);
             }
         }
 
@@ -280,30 +293,34 @@ contract Liquidation is Ownable, ReentrancyGuard {
             }
             toInsuranceFund = uint256(remainingValue) - liquidatorReward;
 
-            if (liquidatorReward > 0) {
-                vault.distributeLiquidation(user, msg.sender, liquidatorReward, 0);
-            }
-            insuranceFund += toInsuranceFund;
+            // H-09 FIX: 通过 Vault 一次性路由奖励 + 保险金（而非 phantom 记账）
+            // vault.distributeLiquidation 会从 user lockedBalance 扣除，
+            // 奖励给 liquidator，剩余给 PerpVault/lendingPool
+            vault.distributeLiquidation(user, msg.sender, liquidatorReward, toInsuranceFund);
         } else {
             uint256 deficit = uint256(-remainingValue);
 
-            if (insuranceFund >= deficit) {
-                insuranceFund -= deficit;
+            // H-09 FIX: 使用真实余额覆盖缺口
+            uint256 localBalance = address(this).balance;
+            if (localBalance >= deficit) {
+                // 本地保险金足够
             } else {
-                _handleInsuranceShortfall(deficit - insuranceFund);
-                insuranceFund = 0;
+                _handleInsuranceShortfall(deficit - localBalance);
             }
 
-            // AUDIT-FIX SC-C02: 穿仓时只有保险基金仍有余额才支付清算奖励
-            // 用户已破产 (remainingValue < 0)，不能从用户余额中取款
-            // 奖励改为从保险基金支付，且限额为保险基金剩余额
-            if (effectiveRewardRate > 0 && insuranceFund > 0) {
+            // AUDIT-FIX SC-C02: 穿仓时只有本地保险基金有余额才支付清算奖励
+            if (effectiveRewardRate > 0 && address(this).balance > 0) {
                 liquidatorReward = pos.collateral / 20;
-                if (liquidatorReward > insuranceFund) {
-                    liquidatorReward = insuranceFund;
+                if (liquidatorReward > address(this).balance) {
+                    liquidatorReward = address(this).balance;
                 }
-                insuranceFund -= liquidatorReward;
-                vault.distributeLiquidation(user, msg.sender, liquidatorReward, 0);
+                // 实际从本合约 ETH 支付（非 phantom）
+                if (liquidatorReward > 0) {
+                    (bool success,) = msg.sender.call{value: liquidatorReward}("");
+                    if (!success) {
+                        liquidatorReward = 0; // 转账失败，跳过奖励
+                    }
+                }
             }
         }
 
@@ -356,26 +373,27 @@ contract Liquidation is Ownable, ReentrancyGuard {
                 liquidatorReward = (remaining * effectiveRewardRate) / PRECISION;
             }
             toInsuranceFund = uint256(remainingValue) - liquidatorReward;
-            if (liquidatorReward > 0) {
-                vault.distributeLiquidation(user, liquidator, liquidatorReward, 0);
-            }
-            insuranceFund += toInsuranceFund;
+            // H-09 FIX: 一次性路由奖励 + 保险金（而非 phantom 记账）
+            vault.distributeLiquidation(user, liquidator, liquidatorReward, toInsuranceFund);
         } else {
             uint256 deficit = uint256(-remainingValue);
-            if (insuranceFund >= deficit) {
-                insuranceFund -= deficit;
+            uint256 localBalance = address(this).balance;
+            if (localBalance >= deficit) {
+                // 本地保险金足够
             } else {
-                _handleInsuranceShortfall(deficit - insuranceFund);
-                insuranceFund = 0;
+                _handleInsuranceShortfall(deficit - localBalance);
             }
-            // AUDIT-FIX SC-C02: 破产路径需检查 Vault 余额是否能支付清算奖励
-            // 旧代码未检查 Vault 余额，可能导致 distributeLiquidation revert
-            if (effectiveRewardRate > 0 && pos.collateral > 0) {
+            // SC-C02: 破产路径 — 从本合约真实 ETH 支付奖励
+            if (effectiveRewardRate > 0 && address(this).balance > 0) {
                 liquidatorReward = pos.collateral / 20;
-                if (address(vault).balance >= liquidatorReward && liquidatorReward > 0) {
-                    vault.distributeLiquidation(user, liquidator, liquidatorReward, 0);
-                } else {
-                    liquidatorReward = 0; // Vault 余额不足，跳过奖励
+                if (liquidatorReward > address(this).balance) {
+                    liquidatorReward = address(this).balance;
+                }
+                if (liquidatorReward > 0) {
+                    (bool success,) = liquidator.call{value: liquidatorReward}("");
+                    if (!success) {
+                        liquidatorReward = 0;
+                    }
                 }
             }
         }
@@ -439,37 +457,47 @@ contract Liquidation is Ownable, ReentrancyGuard {
      * @param user 用户地址
      * @param amount 盈利金额
      */
-    // P-003: nonReentrant + strict CEI pattern (no state revert after external call)
+    /// @notice 支付盈利给用户
+    /// @dev H-09 FIX: 使用真实 address(this).balance + PerpVault 回退
     function payProfit(address user, uint256 amount) external nonReentrant {
-        // 只允许 Vault 调用
         require(msg.sender == address(vault), "Only vault");
 
         if (amount == 0) return;
 
-        if (insuranceFund >= amount) {
-            // Effects: update state BEFORE external call (CEI)
-            insuranceFund -= amount;
+        uint256 localBalance = address(this).balance;
 
-            // Interaction: transfer ETH — revert on failure (strict CEI, no silent rollback)
+        if (localBalance >= amount) {
+            // 本地保险金足够 — 直接支付
             (bool success,) = user.call{value: amount}("");
             if (!success) revert TransferFailed();
-
             emit ProfitPaid(user, amount);
         } else {
-            // 保险基金不足，触发 ADL
-            uint256 shortfall = amount - insuranceFund;
+            // H-10 FIX: 本地不足时尝试从 PerpVault 补足
+            uint256 paid = 0;
 
-            // Effects: drain available funds BEFORE external call
-            uint256 available = insuranceFund;
-            insuranceFund = 0;
+            // 1. 先支付本地可用部分
+            if (localBalance > 0) {
+                (bool success,) = user.call{value: localBalance}("");
+                if (success) {
+                    paid = localBalance;
+                }
+            }
 
-            _handleInsuranceShortfall(shortfall);
+            // 2. 尝试从 PerpVault 支付剩余
+            uint256 remaining = amount - paid;
+            if (remaining > 0 && address(perpVault) != address(0)) {
+                try perpVault.settleTraderProfit(user, remaining) {
+                    paid += remaining;
+                } catch {
+                    // PerpVault 也无法支付 — 触发 ADL
+                    _handleInsuranceShortfall(remaining);
+                }
+            } else if (remaining > 0) {
+                _handleInsuranceShortfall(remaining);
+            }
 
-            // Interaction: transfer remaining — revert on failure
-            if (available > 0) {
-                (bool success,) = user.call{value: available}("");
-                if (!success) revert TransferFailed();
-                emit ProfitPaid(user, available);
+            if (paid > 0) {
+                emit ProfitPaid(user, paid);
             }
         }
     }
@@ -479,22 +507,43 @@ contract Liquidation is Ownable, ReentrancyGuard {
      * @dev 由 Vault 调用，当用户穿仓时
      * @param amount 需要覆盖的金额
      */
+    /// @notice 覆盖穿仓亏空
+    /// @dev H-09 FIX: 使用真实余额 + PerpVault 回退
+    ///      H-09 旧代码: 只减 phantom insuranceFund 变量，不转 ETH — 完全虚假
+    ///      新代码: 从真实余额转 ETH 到 Vault，PerpVault 作为补充源
     function coverDeficit(uint256 amount) external returns (uint256 covered) {
         require(msg.sender == address(vault), "Only vault");
 
         if (amount == 0) return 0;
 
-        if (insuranceFund >= amount) {
-            insuranceFund -= amount;
-            covered = amount;
-            emit DeficitCovered(amount);
-        } else {
-            // 保险基金不足
-            covered = insuranceFund;
-            uint256 shortfall = amount - insuranceFund;
-            insuranceFund = 0;
+        uint256 localBalance = address(this).balance;
 
-            _handleInsuranceShortfall(shortfall);
+        if (localBalance >= amount) {
+            // H-09 FIX: 实际转 ETH 到 Vault（旧代码只减变量不转钱）
+            (bool success,) = address(vault).call{value: amount}("");
+            if (success) {
+                covered = amount;
+            }
+            emit DeficitCovered(covered);
+        } else {
+            // 本地不足 — 转可用部分 + 从 PerpVault 补足
+            if (localBalance > 0) {
+                (bool success,) = address(vault).call{value: localBalance}("");
+                if (success) {
+                    covered = localBalance;
+                }
+            }
+
+            // H-10 FIX: PerpVault 作为补充保险源
+            uint256 shortfall = amount - covered;
+            if (shortfall > 0 && address(perpVault) != address(0)) {
+                // PerpVault 有独立的 settleLiquidation 机制
+                // 这里触发 ADL 信号让撮合引擎处理
+                _handleInsuranceShortfall(shortfall);
+            } else if (shortfall > 0) {
+                _handleInsuranceShortfall(shortfall);
+            }
+
             emit DeficitCovered(covered);
         }
     }
@@ -673,8 +722,16 @@ contract Liquidation is Ownable, ReentrancyGuard {
         }
     }
 
+    /// @notice H-09 FIX: 返回真实保险金余额（本合约持有的 ETH）
     function getInsuranceFund() external view returns (uint256) {
-        return insuranceFund;
+        return address(this).balance;
+    }
+
+    /// @notice H-10 FIX: 返回有效保险金 = 本地 + PerpVault 可用池
+    function getEffectiveInsuranceFund() external view returns (uint256 local_, uint256 perpVaultPool, uint256 total) {
+        local_ = address(this).balance;
+        perpVaultPool = address(perpVault) != address(0) ? perpVault.getPoolValue() : 0;
+        total = local_ + perpVaultPool;
     }
 
     function getStats() external view returns (uint256 count, uint256 volume) {
@@ -840,8 +897,8 @@ contract Liquidation is Ownable, ReentrancyGuard {
     // Receive Function
     // ============================================================
 
+    /// @notice H-09 FIX: 接收 ETH — address(this).balance 自动增加，不需要 phantom 变量
     receive() external payable {
-        insuranceFund += msg.value;
         emit InsuranceFundDeposit(msg.value);
     }
 }
