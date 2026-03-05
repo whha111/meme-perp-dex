@@ -26,7 +26,7 @@ redis:
   pool_size: 10
 
 blockchain:
-  # BSC Mainnet — P0-1: Use public RPC, API key via env only
+  # BSC Mainnet
   rpc_url: "${MEMEPERP_BLOCKCHAIN_RPC_URL:-https://bsc-dataseed.binance.org/}"
   chain_id: 56  # BSC Mainnet
 

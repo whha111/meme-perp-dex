@@ -13,16 +13,16 @@
  * See withdraw.ts for the full withdrawal authorization flow.
  */
 
-import { createWalletClient, createPublicClient, http, fallback, type Address, type Hex } from "viem";
+import { createWalletClient, createPublicClient, http, fallback, defineChain, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { bsc } from "viem/chains";
-import { SETTLEMENT_V2_ADDRESS as SETTLEMENT_ADDRESS, COLLATERAL_TOKEN_ADDRESS } from "../config";
+import { bsc, bscTestnet } from "viem/chains";
+import { SETTLEMENT_V2_ADDRESS as SETTLEMENT_ADDRESS, COLLATERAL_TOKEN_ADDRESS, RPC_URL as CONFIG_RPC_URL, CHAIN_ID } from "../config";
 
 // ============================================================
 // Configuration
 // ============================================================
 
-const RPC_URL = process.env.BSC_RPC || "https://bsc-dataseed.binance.org/";
+const RELAY_RPC_URL = CONFIG_RPC_URL;
 const RPC_FALLBACK_URLS = (process.env.RPC_FALLBACK_URLS || "").split(",").filter(Boolean);
 const RELAYER_PRIVATE_KEY = process.env.RELAYER_PRIVATE_KEY as Hex;
 
@@ -34,24 +34,27 @@ if (!SETTLEMENT_ADDRESS) {
   console.warn("[Relay] ⚠️  SETTLEMENT_ADDRESS not set - relay service disabled");
 }
 
+// Select chain based on CHAIN_ID from config (synced with .env)
+const activeChain = CHAIN_ID === 97 ? bscTestnet : bsc;
+
 // Create relayer account
 const relayerAccount = RELAYER_PRIVATE_KEY ? privateKeyToAccount(RELAYER_PRIVATE_KEY) : null;
 
 // RPC transport with fallback
 const rpcTransport = RPC_FALLBACK_URLS.length > 0
-  ? fallback([http(RPC_URL), ...RPC_FALLBACK_URLS.map((url) => http(url))])
-  : http(RPC_URL);
+  ? fallback([http(RELAY_RPC_URL), ...RPC_FALLBACK_URLS.map((url) => http(url))])
+  : http(RELAY_RPC_URL);
 
 // Create clients
 const publicClient = createPublicClient({
-  chain: bsc,
+  chain: activeChain,
   transport: rpcTransport,
 });
 
 const walletClient = relayerAccount
   ? createWalletClient({
       account: relayerAccount,
-      chain: bsc,
+      chain: activeChain,
       transport: rpcTransport,
     })
   : null;

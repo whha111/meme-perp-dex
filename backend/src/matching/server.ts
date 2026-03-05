@@ -10,7 +10,9 @@ import "dotenv/config";
 import { enableStructuredConsole } from "./utils/logger";
 enableStructuredConsole(); // In production: all console.* outputs become JSON
 import { type Address, type Hex, verifyTypedData, verifyMessage, createPublicClient, http, webSocket, parseEther, formatUnits } from "viem";
-import { bsc } from "viem/chains";
+import { bsc, bscTestnet } from "viem/chains";
+import { CHAIN_ID as CONFIG_CHAIN_ID } from "./config";
+const activeChain = CONFIG_CHAIN_ID === 97 ? bscTestnet : bsc;
 import { WebSocketServer, WebSocket } from "ws";
 import { MatchingEngine, OrderType, OrderStatus, TimeInForce, OrderSource, registerPriceChangeCallback, type Order, type Match, type Trade, type Kline, type TokenStats } from "./engine";
 // ❌ Mode 2: SettlementSubmitter 已从导入中移除
@@ -1348,7 +1350,7 @@ async function executeADL(
         const adlAccount = privateKeyToAccount(MATCHER_PRIVATE_KEY);
         const adlWalletClient = createWalletClient({
           account: adlAccount,
-          chain: bsc,
+          chain: activeChain,
           transport: http(RPC_URL),
         });
 
@@ -4143,7 +4145,7 @@ async function syncUserBalanceFromChain(trader: Address): Promise<void> {
 
   try {
     const publicClient = createPublicClient({
-      chain: bsc,
+      chain: activeChain,
       transport: http(RPC_URL),
     });
 
@@ -4448,12 +4450,12 @@ async function autoDepositIfNeeded(trader: Address, requiredAmount: bigint): Pro
     const account = privateKeyToAccount(signingKey);
     const walletClient = createWalletClient({
       account,
-      chain: bsc,
+      chain: activeChain,
       transport: http(RPC_URL),
     });
 
     const publicClient = createPublicClient({
-      chain: bsc,
+      chain: activeChain,
       transport: http(RPC_URL),
     });
 
@@ -4731,7 +4733,7 @@ async function syncSupportedTokens(): Promise<void> {
 
   try {
     const publicClient = createPublicClient({
-      chain: bsc,
+      chain: activeChain,
       transport: http(RPC_URL),
     });
 
@@ -4776,7 +4778,7 @@ async function syncTokenInfoCache(): Promise<void> {
 
   try {
     const publicClient = createPublicClient({
-      chain: bsc,
+      chain: activeChain,
       transport: http(RPC_URL),
     });
 
@@ -4816,7 +4818,7 @@ async function syncFullTokenData(): Promise<void> {
 
   try {
     const publicClient = createPublicClient({
-      chain: bsc,
+      chain: activeChain,
       transport: http(RPC_URL),
     });
 
@@ -4950,7 +4952,7 @@ function startSwapEventWatching(
 
   try {
     const wsClient = createPublicClient({
-      chain: bsc,
+      chain: activeChain,
       transport: webSocket(WSS_URL),
     });
 
@@ -5120,7 +5122,7 @@ async function detectGraduatedTokens(): Promise<void> {
   if (SUPPORTED_TOKENS.length === 0) return;
 
   const publicClient = createPublicClient({
-    chain: bsc,
+    chain: activeChain,
     transport: http(RPC_URL),
   });
 
@@ -5235,7 +5237,7 @@ async function startEventWatching(): Promise<void> {
   console.log("[Events] Using WebSocket endpoint:", WSS_URL);
 
   const publicClient = createPublicClient({
-    chain: bsc,
+    chain: activeChain,
     transport: webSocket(WSS_URL),
   });
 
@@ -5305,7 +5307,7 @@ async function startEventWatching(): Promise<void> {
 
     // 创建独立的 WebSocket client (SettlementV2 合约地址不同于 V1)
     const v2PublicClient = createPublicClient({
-      chain: bsc,
+      chain: activeChain,
       transport: webSocket(WSS_URL),
     });
 
@@ -5659,14 +5661,10 @@ const TRADE_POLL_INTERVAL_MS = 15_000; // 15 秒轮询一次
 
 async function startTradeEventPoller(): Promise<void> {
   const { createPublicClient, http, parseAbiItem } = await import("viem");
-  const { bsc: bscChain } = await import("viem/chains");
-
-  // BSC Mainnet RPC
-  const POLL_RPC_URL = "https://bsc-dataseed.binance.org/";
 
   const pollClient = createPublicClient({
-    chain: bsc,
-    transport: http(POLL_RPC_URL),
+    chain: activeChain,
+    transport: http(RPC_URL),
   });
 
   const TRADE_EVENT_ABI = parseAbiItem(
@@ -6913,7 +6911,7 @@ async function handleGetNonce(trader: string): Promise<Response> {
   if (SETTLEMENT_ADDRESS) {
     try {
       const publicClient = createPublicClient({
-        chain: bsc,
+        chain: activeChain,
         transport: http(RPC_URL),
       });
       const chainNonce = await publicClient.readContract({
@@ -7832,7 +7830,7 @@ async function handleGetUserBalance(trader: string): Promise<Response> {
   let walletEthBalance = 0n;
 
   const publicClient = createPublicClient({
-    chain: bsc,
+    chain: activeChain,
     transport: http(RPC_URL),
   });
 
@@ -10459,20 +10457,20 @@ async function handleRequest(req: Request): Promise<Response> {
 
       // CR-01 FIX: Check and deduct user balance BEFORE generating signature
       const balance = getUserBalance(normalizedUser);
-      if (!balance || balance.available < withdrawAmount) {
-        const avail = balance ? balance.available.toString() : "0";
+      if (!balance || balance.availableBalance < withdrawAmount) {
+        const avail = balance ? balance.availableBalance.toString() : "0";
         return errorResponse(`Insufficient balance: available=${avail}, requested=${withdrawAmount.toString()}`);
       }
 
       // Deduct balance atomically (freeze the withdrawal amount)
-      balance.available -= withdrawAmount;
-      balance.frozen = (balance.frozen || 0n) + withdrawAmount;
+      balance.availableBalance -= withdrawAmount;
+      balance.frozenMargin = (balance.frozenMargin || 0n) + withdrawAmount;
 
       const result = await requestWithdrawal(normalizedUser, withdrawAmount);
       if (!result.success) {
         // Rollback balance deduction on failure
-        balance.available += withdrawAmount;
-        balance.frozen = (balance.frozen || 0n) - withdrawAmount;
+        balance.availableBalance += withdrawAmount;
+        balance.frozenMargin = (balance.frozenMargin || 0n) - withdrawAmount;
         return errorResponse(result.error || "Withdrawal request failed");
       }
 
@@ -10899,11 +10897,11 @@ async function handleRequest(req: Request): Promise<Response> {
       const account = privateKeyToAccount(signingKey);
       const walletClient = createWalletClient({
         account,
-        chain: bsc,
+        chain: activeChain,
         transport: http(RPC_URL),
       });
       const pubClient = createPublicClient({
-        chain: bsc,
+        chain: activeChain,
         transport: http(RPC_URL),
       });
 
@@ -11417,7 +11415,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
     try {
       const publicClient = createPublicClient({
-        chain: bsc,
+        chain: activeChain,
         transport: http(RPC_URL),
       });
       const currentBlock = toBlock || await publicClient.getBlockNumber();
@@ -12757,7 +12755,7 @@ async function startServer(): Promise<void> {
     const v2UpdaterAccount = privateKeyToAccount(MATCHER_PRIVATE_KEY);
     const v2WalletClient = createWalletClient({
       account: v2UpdaterAccount,
-      chain: bsc,
+      chain: activeChain,
       transport: http(RPC_URL),
     });
 
@@ -12788,13 +12786,13 @@ async function startServer(): Promise<void> {
     initializeWithdrawModule({
       signerPrivateKey: MATCHER_PRIVATE_KEY,
       contractAddress: SETTLEMENT_V2_ADDRESS,
-      chainId: 56, // BSC Mainnet
+      chainId: CONFIG_CHAIN_ID,
     });
     console.log("[Server] Mode 2: Withdraw module initialized (Merkle + EIP-712)");
 
     // 从链上同步提款 nonce（防止引擎重启后 nonce 重放攻击）
     const v2ReadClient = createPublicClient({
-      chain: bsc,
+      chain: activeChain,
       transport: http(RPC_URL),
     });
     const knownUsers = Array.from(userBalances.keys()) as Address[];
@@ -12823,7 +12821,7 @@ async function startServer(): Promise<void> {
     initializeWithdrawModule({
       signerPrivateKey: MATCHER_PRIVATE_KEY,
       contractAddress: SETTLEMENT_ADDRESS,
-      chainId: 56, // BSC Mainnet
+      chainId: CONFIG_CHAIN_ID,
     });
 
     startSnapshotJob({
@@ -12845,7 +12843,7 @@ async function startServer(): Promise<void> {
   // ============================================================
   {
     const lendingPublicClient = createPublicClient({
-      chain: bsc,
+      chain: activeChain,
       transport: http(RPC_URL),
     });
 
@@ -12854,7 +12852,7 @@ async function startServer(): Promise<void> {
       const matcherAccount = privateKeyToAccount(MATCHER_PRIVATE_KEY);
       lendingWalletClient = createWalletClient({
         account: matcherAccount,
-        chain: bsc,
+        chain: activeChain,
         transport: http(RPC_URL),
       });
     }
@@ -12872,7 +12870,7 @@ async function startServer(): Promise<void> {
   // ============================================================
   if (PERP_VAULT_ADDRESS_LOCAL) {
     const vaultPublicClient = createPublicClient({
-      chain: bsc,
+      chain: activeChain,
       transport: http(RPC_URL),
     });
 
@@ -12881,7 +12879,7 @@ async function startServer(): Promise<void> {
       const matcherAccount = privateKeyToAccount(MATCHER_PRIVATE_KEY);
       vaultWalletClient = createWalletClient({
         account: matcherAccount,
-        chain: bsc,
+        chain: activeChain,
         transport: http(RPC_URL),
       });
     }
@@ -12943,7 +12941,7 @@ async function startServer(): Promise<void> {
     // 使用备用 RPC 避免限流 (publicnode 比 sepolia.base.org 限制更宽松)
     const SYNC_RPC = process.env.SPOT_SYNC_RPC_URL || "https://bsc-dataseed.binance.org/";
     const publicClient = createPublicClient({
-      chain: bsc,
+      chain: activeChain,
       transport: http(SYNC_RPC),
     });
 
@@ -13315,10 +13313,9 @@ async function startServer(): Promise<void> {
   (async () => {
     try {
       const { createPublicClient, http } = await import("viem");
-      const { bsc: bscChain } = await import("viem/chains");
       const backfillClient = createPublicClient({
-        chain: bsc,
-        transport: http("https://bsc-dataseed.binance.org/"),
+        chain: activeChain,
+        transport: http(RPC_URL),
       });
       const currentBlock = await backfillClient.getBlockNumber();
       const backfillFrom = currentBlock > 50000n ? currentBlock - 50000n : 0n;
