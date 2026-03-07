@@ -27,17 +27,19 @@
     "wsConnectionFailed": "WebSocket 연결 실패"
   },
   "nav": {
+    "spot": "현물",
+    "perpetual": "선물",
+    "launch": "런치",
+    "assets": "자산",
+    "leaderboard": "리더보드",
     "market": "시장",
     "exchange": "교환",
-    "perpetual": "선물",
-    "assets": "자산",
     "createToken": "토큰 생성",
     "earnings": "수익 센터",
     "inviteProgram": "초대 프로그램",
     "wallet": "지갑",
     "searchPlaceholder": "토큰 / 주소 / DApp",
     "lending": "대출",
-    "leaderboard": "리더보드",
     "deposit": "입금",
     "invite": "초대"
   },

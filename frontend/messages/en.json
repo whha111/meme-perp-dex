@@ -27,17 +27,19 @@
     "wsConnectionFailed": "WebSocket connection failed"
   },
   "nav": {
+    "spot": "Spot",
+    "perpetual": "Perpetual",
+    "launch": "Launch",
+    "assets": "Assets",
+    "leaderboard": "Leaderboard",
     "market": "Market",
     "exchange": "Exchange",
-    "perpetual": "Perpetual",
-    "assets": "Assets",
     "createToken": "Create Token",
     "earnings": "Earnings",
     "inviteProgram": "Invite Program",
     "wallet": "Wallet",
     "searchPlaceholder": "Token / Address / DApp",
     "lending": "Lending",
-    "leaderboard": "Leaderboard",
     "deposit": "Deposit",
     "invite": "Invite"
   },

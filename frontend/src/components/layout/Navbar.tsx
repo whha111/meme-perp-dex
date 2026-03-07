@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useConnectModal, useAccountModal, useChainModal } from '@rainbow-me/rainbowkit';
 import { useTranslations } from 'next-intl';
 import { ThemeToggle } from '@/components/shared/ThemeToggle';
@@ -8,10 +9,19 @@ import { LanguageSelector } from '@/components/shared/LanguageSelector';
 import { useAccount, useDisconnect, useBalance } from 'wagmi';
 import { useState, useRef, useEffect } from 'react';
 
+const NAV_ITEMS = [
+  { href: '/exchange', key: 'spot' },
+  { href: '/perp', key: 'perpetual' },
+  { href: '/create', key: 'launch' },
+  { href: '/account', key: 'assets' },
+  { href: '/leaderboard', key: 'leaderboard' },
+] as const;
+
 export function Navbar() {
   const t = useTranslations('nav');
   const tWallet = useTranslations('wallet');
   const tCommon = useTranslations('common');
+  const pathname = usePathname();
 
   const { address, isConnected, chain } = useAccount();
   const { disconnect } = useDisconnect();
@@ -53,25 +63,23 @@ export function Navbar() {
             <span className="text-meme-lime text-lg">✦</span>
             <span className="tracking-tight">MEMEPERP</span>
           </Link>
-          <div className="flex items-center gap-6 text-[14px] text-okx-text-secondary">
-            <Link href="/exchange" prefetch={false} className="hover:text-okx-text-primary cursor-pointer hidden lg:inline transition-colors">
-              {t('exchange')}
-            </Link>
-            <Link href="/perp" prefetch={false} className="hover:text-okx-text-primary cursor-pointer hidden lg:inline transition-colors">
-              {t('perpetual')}
-            </Link>
-            <Link href="/create" className="text-meme-lime cursor-pointer font-bold hidden lg:inline transition-colors hover:opacity-80">
-              {t('createToken')}
-            </Link>
-            <Link href="/leaderboard" prefetch={false} className="hover:text-okx-text-primary cursor-pointer hidden lg:inline transition-colors">
-              {t('leaderboard')}
-            </Link>
-            <Link href="/deposit" prefetch={false} className="hover:text-okx-text-primary cursor-pointer hidden lg:inline transition-colors">
-              {t('deposit')}
-            </Link>
-            <Link href="/invite" prefetch={false} className="hover:text-okx-text-primary cursor-pointer hidden lg:inline transition-colors">
-              {t('invite')}
-            </Link>
+          <div className="flex items-center gap-6 text-[13px] font-mono">
+            {NAV_ITEMS.map(({ href, key }) => {
+              const isActive = pathname === href || pathname.startsWith(href + '/');
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  className={`hidden lg:inline transition-colors ${
+                    isActive
+                      ? 'text-meme-lime font-medium'
+                      : 'text-okx-text-secondary hover:text-okx-text-primary'
+                  }`}
+                >
+                  {t(key)}
+                </Link>
+              );
+            })}
           </div>
         </div>
 

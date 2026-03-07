@@ -27,17 +27,19 @@
     "wsConnectionFailed": "WebSocket接続に失敗しました"
   },
   "nav": {
+    "spot": "現物",
+    "perpetual": "先物",
+    "launch": "ローンチ",
+    "assets": "資産",
+    "leaderboard": "ランキング",
     "market": "マーケット",
     "exchange": "交換",
-    "perpetual": "先物",
-    "assets": "資産",
     "createToken": "トークン作成",
     "earnings": "収益センター",
     "inviteProgram": "招待プログラム",
     "wallet": "ウォレット",
     "searchPlaceholder": "通貨 / アドレス / DApp",
     "lending": "レンディング",
-    "leaderboard": "ランキング",
     "deposit": "入金",
     "invite": "招待"
   },

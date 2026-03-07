@@ -27,17 +27,19 @@
     "wsConnectionFailed": "WebSocket 连接失败"
   },
   "nav": {
+    "spot": "现货",
+    "perpetual": "合约",
+    "launch": "发射",
+    "assets": "资产",
+    "leaderboard": "排行榜",
     "market": "行情",
     "exchange": "兑换",
-    "perpetual": "合约",
-    "assets": "资产",
     "createToken": "创建代币",
     "earnings": "收益中心",
     "inviteProgram": "邀请计划",
     "wallet": "钱包",
     "searchPlaceholder": "币种 / 地址 / DApp",
     "lending": "借贷",
-    "leaderboard": "排行榜",
     "deposit": "充值",
     "invite": "邀请"
   },
