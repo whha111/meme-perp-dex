@@ -26,6 +26,8 @@ import { useRiskControl } from "@/hooks/perpetual/useRiskControl";
 import { useApiError } from "@/hooks/common/useApiError";
 import { trackRender } from "@/lib/debug-render";
 import { MATCHING_ENGINE_URL } from "@/config/api";
+import { AnimatedNumber } from "@/components/shared/AnimatedNumber";
+import { TradingErrorBoundary } from "@/components/shared/TradingErrorBoundary";
 
 // P003 修复: 统一使用 V2 架构（Settlement 合约 + 撮合引擎）
 // 移除旧的 PositionManager 合约依赖，仓位数据统一从撮合引擎获取
@@ -109,13 +111,13 @@ export function PerpetualTradingTerminal({
   // 格式化账户余额 (ETH 本位)
   // 显示: Settlement 可用 + 钱包可存入 (下单时自动存入 Settlement)
   const formattedAccountBalance = useMemo(() => {
-    if (!accountBalance) return "Ξ0.00";
+    if (!accountBalance) return "BNB 0.00";
     const settlementAvailable = Number(accountBalance.available) / 1e18;
     const walletETH = accountBalance.walletBalance ? Number(accountBalance.walletBalance) / 1e18 : 0;
     const gasReserve = 0.001;
     const usableWalletETH = walletETH > gasReserve ? walletETH - gasReserve : 0;
     const totalAvailable = settlementAvailable + usableWalletETH;
-    return `Ξ${totalAvailable.toFixed(4)}`;
+    return `BNB ${totalAvailable.toFixed(4)}`;
   }, [accountBalance]);
 
   // WebSocket 实时订单簿和成交数据 - 从统一的 tradingDataStore 获取
@@ -143,13 +145,28 @@ export function PerpetualTradingTerminal({
     return price.toFixed(4);
   };
 
+  // Number-based format for AnimatedNumber (price already divided by 1e18)
+  const formatMemePriceNum = useCallback((price: number) => {
+    if (price === 0) return "0.0000000000";
+    if (price < 0.000001) return price.toFixed(10);
+    if (price < 0.0001) return price.toFixed(8);
+    if (price < 0.01) return price.toFixed(6);
+    return price.toFixed(4);
+  }, []);
+
   const formattedPrice = formatMemePrice(tokenStats?.lastPrice);
-  const formattedPriceChange = tokenStats?.priceChange24h
-    ? (Number(tokenStats.priceChange24h) / 100).toFixed(2) + "%"
-    : "0.00%";
-  const isPriceUp = tokenStats?.priceChange24h ? Number(tokenStats.priceChange24h) >= 0 : true;
-  const formattedHigh24h = formatMemePrice(tokenStats?.high24h);
-  const formattedLow24h = formatMemePrice(tokenStats?.low24h);
+  // ✅ 使用 priceChangePercent24h (后端已计算好的百分比)，而非 priceChange24h (原始 wei 差值)
+  // 注意: JSX 模板 (L573) 自带 "+" 前缀，此处不重复添加
+  const priceChangePercent = parseFloat(tokenStats?.priceChangePercent24h || "0");
+  const formattedPriceChange = `${priceChangePercent.toFixed(2)}%`;
+  const isPriceUp = priceChangePercent >= 0;
+  // 24h 高低价：有 WS 数据用 WS，否则 fallback 到 spot 价格
+  const formattedHigh24h = (tokenStats?.high24h && tokenStats.high24h !== "0")
+    ? formatMemePrice(tokenStats.high24h)
+    : spotPriceBigInt ? formatMemePrice(spotPriceBigInt.toString()) : "0.0000000000";
+  const formattedLow24h = (tokenStats?.low24h && tokenStats.low24h !== "0")
+    ? formatMemePrice(tokenStats.low24h)
+    : spotPriceBigInt ? formatMemePrice(spotPriceBigInt.toString()) : "0.0000000000";
   // volume24h 是 ETH 成交量 (ETH 本位: 1e18 精度)
   // 后端计算: volume24h = Σ(trade.size * trade.price) / 1e18
   const formattedVolume24h = tokenStats?.volume24h
@@ -494,8 +511,8 @@ export function PerpetualTradingTerminal({
   const marketInfo = useMemo(
     () => ({
       fundingRate: fundingRateFormatted,
-      openInterest: `Ξ${formattedOpenInterest}`,
-      volume24h: `Ξ${formattedVolume24h}`,
+      openInterest: `BNB ${formattedOpenInterest}`,
+      volume24h: `BNB ${formattedVolume24h}`,
       high24h: formattedHigh24h,    // Token/ETH 比率，无货币符号
       low24h: formattedLow24h,      // Token/ETH 比率，无货币符号
       currentPrice: formattedPrice !== "0.0000000000"
@@ -513,98 +530,112 @@ export function PerpetualTradingTerminal({
   );
 
   // K 线图表的价格 prop — 单独 memoize，避免随父组件其他状态变化重建
+  // AUDIT-FIX FC-C03: chartPrice 应统一使用 ETH 计价
+  // 之前 fallback 用 spotPriceUsd (USD)，但 chart 期望 ETH 计价 → 价格 inflated ~2000x
   const chartPrice = useMemo(() => {
     if (tokenStats?.lastPrice) {
       return Number(tokenStats.lastPrice) / 1e18;
     }
-    return spotPriceUsd > 0 ? spotPriceUsd : undefined;
-  }, [tokenStats?.lastPrice, spotPriceUsd]);
+    // Fallback: 使用 spotPriceBigInt (ETH 计价, 1e18 精度)
+    if (spotPriceBigInt) {
+      return Number(spotPriceBigInt) / 1e18;
+    }
+    return undefined;
+  }, [tokenStats?.lastPrice, spotPriceBigInt]);
 
   return (
     <div
       className={`flex flex-col bg-okx-bg-primary min-h-screen text-okx-text-primary ${className}`}
     >
-      {/* Perpetual Not Enabled Warning */}
-      {!isPoolLoading && tokenAddress && !isPerpEnabled && (
-        <div className="bg-yellow-900/30 border-b border-yellow-500/50 px-4 py-2">
-          <div className="flex items-center gap-2 text-yellow-400 text-sm">
-            <svg className="w-5 h-5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
-              <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-            </svg>
-            <span>{t("perpNotEnabled")}</span>
-          </div>
-        </div>
-      )}
-
-      {/* Top Bar - Symbol Info */}
+      {/* Top Bar — 设计稿 uItYJ: pair + 永续 tag + leverage tag + separator + stats */}
       <div className="h-14 bg-okx-bg-secondary border-b border-okx-border-primary flex items-center px-4 gap-6">
-        {/* Symbol */}
+        {/* Symbol — 设计稿: pair name 16px bold + "永续" tag (9px #848E9C on #2B3139) + "5x" leverage tag */}
         <div className="flex items-center gap-2">
-          <span className="text-[18px] font-bold text-okx-text-primary">
-            {displaySymbol.toUpperCase()}-PERP
+          <span className="text-[16px] font-bold font-mono text-okx-text-primary">
+            {displaySymbol.toUpperCase()}USDT
           </span>
-          <span className={`text-[12px] px-2 py-0.5 rounded ${isPerpEnabled ? 'text-okx-up bg-okx-up/10' : 'text-yellow-400 bg-yellow-900/30'}`}>
-            {isPerpEnabled ? 'Perpetual' : t("perpNotEnabled")}
+          <span className="text-[9px] font-medium px-1.5 py-0.5 rounded-sm bg-okx-bg-hover text-okx-text-secondary">
+            {t("perpetualLabel")}
+          </span>
+          <span className="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded-sm bg-okx-accent/[0.13] text-okx-accent">
+            10x
           </span>
         </div>
 
-        {/* Market Stats */}
-        <div className="flex items-center gap-6 text-[12px]">
-          {/* 当前价格和涨跌幅 (TokenFactory 现货价格) */}
-          <div className="flex items-center gap-2">
-            <span className={`text-[16px] font-bold ${marketInfo.isPriceUp ? "text-okx-up" : "text-okx-down"}`}>
-              {marketInfo.currentPrice}
-            </span>
-            <span className={`text-[12px] ${marketInfo.isPriceUp ? "text-okx-up" : "text-okx-down"}`}>
+        {/* Market Stats — 设计稿 uItYJ: vertical stacked layout (value top, label bottom) */}
+        <div className="flex items-center gap-6">
+          {/* 标记价格 — 设计稿: JetBrains Mono 16px bold green, label Inter 9px #848E9C */}
+          <div className="flex flex-col gap-0.5">
+            {chartPrice ? (
+              <AnimatedNumber
+                value={chartPrice}
+                format={formatMemePriceNum}
+                className={`text-[16px] font-bold font-mono ${marketInfo.isPriceUp ? "text-okx-up" : "text-okx-down"}`}
+                showArrow={true}
+                highlightChange={true}
+              />
+            ) : (
+              <span className={`text-[16px] font-bold font-mono ${marketInfo.isPriceUp ? "text-okx-up" : "text-okx-down"}`}>
+                {marketInfo.currentPrice}
+              </span>
+            )}
+            <span className="text-[9px] text-okx-text-secondary">{t("markPrice")}</span>
+          </div>
+
+          <div className="h-6 w-px bg-okx-border-primary" />
+
+          {/* 24h 涨跌 */}
+          <div className="flex flex-col gap-0.5">
+            <span className={`text-[12px] font-semibold font-mono ${marketInfo.isPriceUp ? "text-okx-up" : "text-okx-down"}`}>
               {marketInfo.isPriceUp ? "+" : ""}{marketInfo.priceChange}
             </span>
+            <span className="text-[9px] text-okx-text-secondary">{t("change24h")}</span>
           </div>
-          <div className="h-4 w-px bg-okx-border-primary" />
-          {/* 市值 (FDV) - ETH 本位 */}
-          <div>
-            <span className="text-okx-text-tertiary mr-2">市值</span>
-            <span className="text-okx-text-primary">
+
+          {/* 最高价 */}
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12px] font-mono text-okx-text-primary">{marketInfo.high24h}</span>
+            <span className="text-[9px] text-okx-text-secondary">{t("high24h")}</span>
+          </div>
+
+          {/* 最低价 */}
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12px] font-mono text-okx-text-primary">{marketInfo.low24h}</span>
+            <span className="text-[9px] text-okx-text-secondary">{t("low24h")}</span>
+          </div>
+
+          {/* 24h 成交量 */}
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12px] font-mono text-okx-text-primary">{marketInfo.volume24h}</span>
+            <span className="text-[9px] text-okx-text-secondary">{t("volume24h")}</span>
+          </div>
+
+          {/* 持仓量 */}
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12px] font-mono text-okx-text-primary">{marketInfo.openInterest}</span>
+            <span className="text-[9px] text-okx-text-secondary">{t("openInterest")}</span>
+          </div>
+
+          {/* 资金费率 */}
+          <div className="flex flex-col gap-0.5">
+            <span className={`text-[12px] font-mono ${isFundingPositive ? "text-okx-up" : "text-okx-down"}`}>
+              {marketInfo.fundingRate}
+            </span>
+            <span className="text-[9px] text-okx-text-secondary">
+              {t("fundingRate")} / {fundingCountdown}
+            </span>
+          </div>
+
+          {/* 市值 */}
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12px] font-mono text-okx-text-primary">
               {marketInfo.marketCap >= 1000000
-                ? `Ξ${(marketInfo.marketCap / 1000000).toFixed(2)}M`
+                ? `$${(marketInfo.marketCap / 1000000).toFixed(2)}M`
                 : marketInfo.marketCap >= 1000
-                ? `Ξ${(marketInfo.marketCap / 1000).toFixed(2)}K`
-                : `Ξ${marketInfo.marketCap.toFixed(4)}`}
+                ? `$${(marketInfo.marketCap / 1000).toFixed(2)}K`
+                : `$${marketInfo.marketCap.toFixed(2)}`}
             </span>
-          </div>
-          <div>
-            <span className="text-okx-text-tertiary mr-2">
-              {t("fundingRate")}
-            </span>
-            <span className={isFundingPositive ? "text-okx-up" : "text-okx-down"}>{marketInfo.fundingRate}</span>
-            <span className="text-okx-text-tertiary ml-1">/ {fundingCountdown}</span>
-          </div>
-          <div>
-            <span className="text-okx-text-tertiary mr-2">
-              {t("openInterest")}
-            </span>
-            <span className="text-okx-text-primary">
-              {marketInfo.openInterest}
-            </span>
-          </div>
-          <div>
-            <span className="text-okx-text-tertiary mr-2">
-              {t("volume24h")}
-            </span>
-            <span className="text-okx-text-primary">
-              {marketInfo.volume24h}
-            </span>
-          </div>
-          <div>
-            <span className="text-okx-text-tertiary mr-2">{t("high24h")}</span>
-            <span className="text-okx-up">{marketInfo.high24h}</span>
-          </div>
-          <div>
-            <span className="text-okx-text-tertiary mr-2">{t("low24h")}</span>
-            <span className="text-okx-down">{marketInfo.low24h}</span>
-          </div>
-          <div>
-            <span className="text-okx-text-tertiary mr-2">24h Trades</span>
-            <span className="text-okx-text-primary">{marketInfo.trades24h}</span>
+            <span className="text-[9px] text-okx-text-secondary">市值</span>
           </div>
         </div>
 
@@ -647,7 +678,7 @@ export function PerpetualTradingTerminal({
                 <path fillRule="evenodd" d="M2.166 4.999A11.954 11.954 0 0010 1.944 11.954 11.954 0 0017.834 5c.11.65.166 1.32.166 2.001 0 5.225-3.34 9.67-8 11.317C5.34 16.67 2 12.225 2 7c0-.682.057-1.35.166-2.001zm11.541 3.708a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
               </svg>
               <span className="text-green-400 font-medium">
-                {insuranceFund.display?.balance || "Ξ0"}
+                {insuranceFund.display?.balance || "BNB 0"}
               </span>
               <span>IF</span>
             </div>
@@ -670,27 +701,31 @@ export function PerpetualTradingTerminal({
       <div className="flex flex-1 overflow-hidden">
         {/* Left: Order Book - 使用新的 OrderBook 组件 */}
         <div className="w-[240px] border-r border-okx-border-primary overflow-hidden">
-          <OrderBook
-            data={wsOrderBook ? { ...wsOrderBook, recentTrades: wsRecentTrades } : undefined}
-            onPriceClick={(price) => {
-              // 点击价格可以填入下单面板
-              console.log("Price clicked:", price);
-            }}
-            maxRows={12}
-          />
+          <TradingErrorBoundary module="OrderBook">
+            <OrderBook
+              data={wsOrderBook ? { ...wsOrderBook, recentTrades: wsRecentTrades } : undefined}
+              onPriceClick={(price) => {
+                // 点击价格可以填入下单面板
+                console.log("Price clicked:", price);
+              }}
+              maxRows={12}
+            />
+          </TradingErrorBoundary>
         </div>
 
         {/* Center: Chart + Bottom Panel */}
         <div className="flex-1 border-r border-okx-border-primary flex flex-col overflow-hidden">
           {/* Chart Area - 使用撮合引擎 K 线数据 */}
           <div className="h-[400px] bg-[#131722]">
-            {tokenAddress && (
-              <MemoizedPriceChart
-                tokenAddress={tokenAddress}
-                displaySymbol={displaySymbol}
-                currentPrice={chartPrice}
-              />
-            )}
+            <TradingErrorBoundary module="PerpChart">
+              {tokenAddress && (
+                <MemoizedPriceChart
+                  tokenAddress={tokenAddress}
+                  displaySymbol={displaySymbol}
+                  currentPrice={chartPrice}
+                />
+              )}
+            </TradingErrorBoundary>
           </div>
 
           {/* Bottom Panel - Positions, Orders, History */}
@@ -722,7 +757,7 @@ export function PerpetualTradingTerminal({
                     </span>
                   )}
                   {activeBottomTab === tab.key && (
-                    <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#A3E635]" />
+                    <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-okx-accent" />
                   )}
                 </button>
               ))}
@@ -761,21 +796,21 @@ export function PerpetualTradingTerminal({
                         </tr>
                       </thead>
                       <tbody>
-                        {currentPositionsForDisplay.map((pos: any) => {
+                        {currentPositionsForDisplay.map((pos) => {
                           // ============================================================
                           // 直接使用后端推送的数据，不再前端计算！
                           // ETH 本位: size=ETH名义价值(1e18), price=Token/ETH(1e18), ETH=1e18, ratio/roe=基点
                           // ============================================================
-                          const sizeETH = parseFloat(pos.size) / 1e18;  // ETH 名义价值 (1e18 精度)
-                          const entryPrice = parseFloat(pos.entryPrice) / 1e18;  // Token/ETH 比率 (1e18 精度)
-                          const markPrice = parseFloat(pos.markPrice || pos.entryPrice) / 1e18;  // 后端推送的标记价 (Token/ETH)
-                          const liqPrice = parseFloat(pos.liquidationPrice || "0") / 1e18;  // 后端推送的强平价 (Token/ETH)
-                          const marginETH = parseFloat(pos.collateral) / 1e18;  // 保证金 (ETH)
-                          const leverage = parseFloat(pos.leverage);  // 人类可读
-                          const unrealizedPnlETH = parseFloat(pos.unrealizedPnL) / 1e18;  // 后端推送的盈亏 (ETH)
-                          const marginRatio = parseFloat(pos.marginRatio || "0") / 100;  // 基点转百分比
-                          const roe = parseFloat(pos.roe || "0") / 100;  // 基点转百分比
-                          const mmr = parseFloat(pos.mmr || "200") / 100;  // 基点转百分比
+                          const sizeETH = parseFloat(String(pos.size)) / 1e18;  // ETH 名义价值 (1e18 精度)
+                          const entryPrice = parseFloat(String(pos.entryPrice)) / 1e18;  // Token/ETH 比率 (1e18 精度)
+                          const markPrice = parseFloat(String(pos.markPrice || pos.entryPrice)) / 1e18;  // 后端推送的标记价 (Token/ETH)
+                          const liqPrice = parseFloat(String(pos.liquidationPrice || "0")) / 1e18;  // 后端推送的强平价 (Token/ETH)
+                          const marginETH = parseFloat(String(pos.collateral)) / 1e18;  // 保证金 (ETH)
+                          const leverage = parseFloat(String(pos.leverage));  // 人类可读
+                          const unrealizedPnlETH = parseFloat(String(pos.unrealizedPnL)) / 1e18;  // 后端推送的盈亏 (ETH)
+                          const marginRatio = parseFloat(String(pos.marginRatio || "0")) / 100;  // 基点转百分比
+                          const roe = parseFloat(String("roe" in pos ? pos.roe : "0") || "0") / 100;  // 基点转百分比
+                          const mmr = parseFloat(String(pos.mmr || "200")) / 100;  // 基点转百分比
                           // size 就是 ETH 名义价值，反算代币数量用于辅助显示
                           const tokenAmount = markPrice > 0 ? sizeETH / markPrice : 0;
 
@@ -816,7 +851,7 @@ export function PerpetualTradingTerminal({
                               {/* 仓位大小 - ETH 名义价值 + 代币数量 */}
                               <td className="py-3 px-1 text-right">
                                 <div className="text-okx-text-primary font-medium">
-                                  Ξ{sizeETH >= 1 ? sizeETH.toFixed(4) : sizeETH.toFixed(6)}
+                                  BNB {sizeETH >= 1 ? sizeETH.toFixed(4) : sizeETH.toFixed(6)}
                                 </div>
                                 <div className="text-[9px] text-okx-text-tertiary">
                                   {tokenAmount >= 1000000000 ? `${(tokenAmount/1000000000).toFixed(1)}B` :
@@ -843,7 +878,7 @@ export function PerpetualTradingTerminal({
 
                               {/* 保证金 (ETH) */}
                               <td className="py-3 px-1 text-right">
-                                <span className="text-okx-text-primary">Ξ{marginETH >= 1 ? marginETH.toFixed(4) : marginETH.toFixed(6)}</span>
+                                <span className="text-okx-text-primary">BNB {marginETH >= 1 ? marginETH.toFixed(4) : marginETH.toFixed(6)}</span>
                                 <div className="text-[9px] text-okx-text-tertiary">MMR: {mmr.toFixed(2)}%</div>
                               </td>
 
@@ -854,7 +889,7 @@ export function PerpetualTradingTerminal({
 
                               {/* 未实现盈亏 - 后端实时推送 (ETH) */}
                               <td className={`py-3 px-1 text-right font-bold ${unrealizedPnlETH >= 0 ? "text-green-400" : "text-red-400"}`}>
-                                {unrealizedPnlETH >= 0 ? "+" : ""}Ξ{Math.abs(unrealizedPnlETH) >= 1 ? Math.abs(unrealizedPnlETH).toFixed(4) : Math.abs(unrealizedPnlETH).toFixed(6)}
+                                {unrealizedPnlETH >= 0 ? "+" : ""}BNB {Math.abs(unrealizedPnlETH) >= 1 ? Math.abs(unrealizedPnlETH).toFixed(4) : Math.abs(unrealizedPnlETH).toFixed(6)}
                               </td>
 
                               {/* ROE% - 后端实时推送 */}
@@ -962,11 +997,11 @@ export function PerpetualTradingTerminal({
                           // margin 是 ETH (1e18 精度)
                           const marginETH = order.margin ? Number(order.margin) / 1e18 : 0;
                           const marginDisplay = order.margin
-                            ? `Ξ${marginETH >= 1 ? marginETH.toFixed(4) : marginETH.toFixed(6)}`
+                            ? `BNB ${marginETH >= 1 ? marginETH.toFixed(4) : marginETH.toFixed(6)}`
                             : "--";
                           const feeETH = order.fee && order.fee !== "0" ? Number(order.fee) / 1e18 : 0;
                           const feeDisplay = feeETH > 0
-                            ? `Ξ${feeETH >= 0.0001 ? feeETH.toFixed(6) : feeETH.toFixed(8)}`
+                            ? `BNB ${feeETH >= 0.0001 ? feeETH.toFixed(6) : feeETH.toFixed(8)}`
                             : "--";
                           const orderTypeDisplay = order.orderType === "MARKET" ? "市价" : "限价";
                           const fillPercent = Number(order.size) > 0
@@ -989,7 +1024,7 @@ export function PerpetualTradingTerminal({
                                     navigator.clipboard.writeText(order.id);
                                   }}
                                 >
-                                  {order.id} 📋
+                                  {order.id} <svg className="w-3 h-3 inline-block ml-1" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25H10.5a2.25 2.25 0 00-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.375a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" /></svg>
                                 </span>
                               </td>
 
@@ -1159,7 +1194,7 @@ export function PerpetualTradingTerminal({
                                     navigator.clipboard.writeText(order.id);
                                   }}
                                 >
-                                  {order.id} 📋
+                                  {order.id} <svg className="w-3 h-3 inline-block ml-1" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25H10.5a2.25 2.25 0 00-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.375a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" /></svg>
                                 </span>
                               </td>
                               <td className="py-2 px-1 text-okx-text-secondary">{timeDisplay}</td>
@@ -1235,10 +1270,10 @@ export function PerpetualTradingTerminal({
                           const priceRaw = Number(trade.price) / 1e18;
                           const priceDisplay = formatSmallPrice(priceRaw);
                           const feeETH = Number(trade.fee) / 1e18;
-                          const feeDisplay = `Ξ${feeETH >= 0.0001 ? feeETH.toFixed(6) : feeETH.toFixed(8)}`;
+                          const feeDisplay = `BNB ${feeETH >= 0.0001 ? feeETH.toFixed(6) : feeETH.toFixed(8)}`;
                           const pnlETH = Number(trade.realizedPnL) / 1e18;
                           const pnlDisplay = pnlETH !== 0
-                            ? `${pnlETH >= 0 ? "+" : ""}Ξ${Math.abs(pnlETH) >= 1 ? Math.abs(pnlETH).toFixed(4) : Math.abs(pnlETH).toFixed(6)}`
+                            ? `${pnlETH >= 0 ? "+" : ""}BNB ${Math.abs(pnlETH) >= 1 ? Math.abs(pnlETH).toFixed(4) : Math.abs(pnlETH).toFixed(6)}`
                             : "--";
                           const roleDisplay = trade.isMaker ? "Maker" : "Taker";
                           const typeDisplay = trade.type === "liquidation" ? "强平"
@@ -1266,7 +1301,7 @@ export function PerpetualTradingTerminal({
                                     navigator.clipboard.writeText(trade.orderId || trade.id);
                                   }}
                                 >
-                                  {trade.orderId || trade.id} 📋
+                                  {trade.orderId || trade.id} <svg className="w-3 h-3 inline-block ml-1" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M15.666 3.888A2.25 2.25 0 0013.5 2.25H10.5a2.25 2.25 0 00-2.166 1.638m7.332 0c.055.194.084.4.084.612v0a.75.75 0 01-.75.75H9.375a.75.75 0 01-.75-.75v0c0-.212.03-.418.084-.612m7.332 0c.646.049 1.288.11 1.927.184 1.1.128 1.907 1.077 1.907 2.185V19.5a2.25 2.25 0 01-2.25 2.25H6.75A2.25 2.25 0 014.5 19.5V6.257c0-1.108.806-2.057 1.907-2.185a48.208 48.208 0 011.927-.184" /></svg>
                                 </span>
                               </td>
                               <td className="py-2 px-1 text-okx-text-secondary">{timeDisplay}</td>
@@ -1378,7 +1413,7 @@ export function PerpetualTradingTerminal({
                           || bill.type === "DEPOSIT"
                           || bill.type === "INSURANCE_INJECTION"
                           || bill.type === "MARGIN_REMOVE";
-                        const amountStr = `${rawValueETH >= 0 ? "+" : ""}Ξ${rawValueETH >= 1 ? rawValueETH.toFixed(4) : rawValueETH >= 0 ? rawValueETH.toFixed(6) : (Math.abs(rawValueETH) >= 1 ? rawValueETH.toFixed(4) : rawValueETH.toFixed(6))}`;
+                        const amountStr = `${rawValueETH >= 0 ? "+" : ""}BNB ${rawValueETH >= 1 ? rawValueETH.toFixed(4) : rawValueETH >= 0 ? rawValueETH.toFixed(6) : (Math.abs(rawValueETH) >= 1 ? rawValueETH.toFixed(4) : rawValueETH.toFixed(6))}`;
                         const amountColor = typeMeta.color || (rawValueETH >= 0 ? "text-okx-up" : "text-okx-down");
                         const ts = new Date(bill.createdAt);
                         const pad = (n: number) => n.toString().padStart(2, "0");
@@ -1389,11 +1424,11 @@ export function PerpetualTradingTerminal({
                             <div className="flex items-center justify-between mb-1">
                               <span className="text-okx-text-tertiary text-[10px]">{timeStr}</span>
                               <span className="text-okx-text-tertiary text-[10px]">
-                                {t("billBalanceAfter")} Ξ{balanceAfterETH >= 1 ? balanceAfterETH.toFixed(4) : balanceAfterETH.toFixed(6)}
+                                {t("billBalanceAfter")} BNB {balanceAfterETH >= 1 ? balanceAfterETH.toFixed(4) : balanceAfterETH.toFixed(6)}
                               </span>
                             </div>
                             <div className="flex items-center justify-between">
-                              <span className="text-[11px] font-medium text-okx-text-primary">ETH</span>
+                              <span className="text-[11px] font-medium text-okx-text-primary">BNB</span>
                               <span className={`text-[12px] font-bold ${amountColor}`}>{amountStr}</span>
                             </div>
                             <div className="flex items-center gap-2 mt-0.5">
@@ -1434,13 +1469,15 @@ export function PerpetualTradingTerminal({
 
         {/* Right: Order Panel (固定宽度) */}
         <div className="w-[320px] bg-okx-bg-primary overflow-y-auto">
-          {/* V2: 使用 Settlement 合约 + 撮合引擎 */}
-          <PerpetualOrderPanelV2
-            symbol={symbol}
-            displaySymbol={displaySymbol}
-            tokenAddress={symbol.startsWith("0x") ? symbol as Address : undefined}
-            isPerpEnabled={isPerpEnabled}
-          />
+          <TradingErrorBoundary module="OrderPanel">
+            {/* V2: 使用 Settlement 合约 + 撮合引擎 */}
+            <PerpetualOrderPanelV2
+              symbol={symbol}
+              displaySymbol={displaySymbol}
+              tokenAddress={symbol.startsWith("0x") ? symbol as Address : undefined}
+              isPerpEnabled={isPerpEnabled}
+            />
+          </TradingErrorBoundary>
         </div>
       </div>
 
