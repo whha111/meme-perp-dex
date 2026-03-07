@@ -4,146 +4,108 @@ import React, { useState, useEffect, useCallback } from "react";
 import { useAccount } from "wagmi";
 import { useTranslations } from "next-intl";
 import { Navbar } from "@/components/layout/Navbar";
-import { InviteCard } from "@/components/referral/InviteCard";
-import { TierProgress } from "@/components/referral/TierProgress";
-import { ReferralStats } from "@/components/referral/ReferralStats";
-import { InviteeList } from "@/components/referral/InviteeList";
-import { RewardHistory } from "@/components/referral/RewardHistory";
 import { MATCHING_ENGINE_URL } from "@/config/api";
 
 interface ReferrerInfo {
   code: string;
-  codeReadable: string;
   tier: number;
   totalInvites: number;
-  activeInvites: number;
-  totalVolume: string;
   totalEarned: string;
-  pendingReward: string;
-  currentRebateBps: number;
-  currentLevel2Bps: number;
+  monthlyEarned: string;
+  currentRebatePercent: number;
+  invitees: InviteeRow[];
 }
 
-/**
- * P2-1: /invite 页面接入真实 API
- *
- * 调用撮合引擎 Referral API:
- *  - GET /api/referral/referrer?address=0x... — 获取推荐信息
- *  - POST /api/referral/register — 如果用户还不是推荐人，自动注册
- */
-
-// 根据邀请人数和交易量计算当前等级
-function calculateTier(totalInvites: number, totalVolume: string): number {
-  const vol = parseFloat(totalVolume);
-  if (totalInvites >= 100 || vol >= 50) return 3; // Diamond
-  if (totalInvites >= 20 || vol >= 10) return 2;  // Gold
-  if (totalInvites >= 5 || vol >= 1) return 1;    // Silver
-  return 0; // Bronze
+interface InviteeRow {
+  address: string;
+  joinedDate: string;
+  volume: string;
+  rebate: string;
 }
 
-// 根据等级获取返佣比例
-function getTierRebateBps(tier: number): { rebate: number; level2: number } {
-  switch (tier) {
-    case 3: return { rebate: 2500, level2: 500 };
-    case 2: return { rebate: 2000, level2: 400 };
-    case 1: return { rebate: 1500, level2: 300 };
-    default: return { rebate: 1000, level2: 200 };
-  }
+// VIP tier config matching design
+const VIP_TIERS = [
+  { level: "VIP 1", rangeKey: "vip1Range", rate: "10%", rewardKey: "noDataPlaceholder" },
+  { level: "VIP 2", rangeKey: "vip2Range", rate: "25%", rewardKey: "vip2Reward" },
+  { level: "VIP 3", rangeKey: "vip3Range", rate: "35%", rewardKey: "vip3Reward" },
+  { level: "VIP 4", rangeKey: "vip4Range", rate: "50%", rewardKey: "vip4Reward" },
+];
+
+function calculateVipTier(totalInvites: number): number {
+  if (totalInvites >= 100) return 3;
+  if (totalInvites >= 30) return 2;
+  if (totalInvites >= 10) return 1;
+  return 0;
+}
+
+function getNextTierRequirement(currentTier: number): { count: number; level: string } | null {
+  if (currentTier >= 3) return null;
+  const next = VIP_TIERS[currentTier + 1];
+  const counts = [10, 30, 100];
+  return { count: counts[currentTier], level: next.level };
 }
 
 export default function InvitePage() {
   const t = useTranslations("referral");
   const { address, isConnected } = useAccount();
-  const [referrerInfo, setReferrerInfo] = useState<ReferrerInfo | null>(null);
+  const [info, setInfo] = useState<ReferrerInfo | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"overview" | "invitees" | "rewards">("overview");
+  const [copied, setCopied] = useState(false);
 
-  // P2-1: 从真实 API 获取推荐信息
+  const inviteLink = info?.code
+    ? `https://memeperp.io/ref/${address ? `${address.slice(0, 6)}...${address.slice(-4)}` : ""}`
+    : "";
+
   const fetchReferrerInfo = useCallback(async (addr: string) => {
     setLoading(true);
-    setError(null);
-
     try {
-      // 1. 尝试获取推荐人信息
       const res = await fetch(`${MATCHING_ENGINE_URL}/api/referral/referrer?address=${addr}`);
       const data = await res.json();
 
       if (data.isReferrer && data.referrer) {
         const r = data.referrer;
         const totalInvites = (r.level1Referrals || 0) + (r.level2Referrals || 0);
-        const totalVolumeEth = (Number(r.totalVolumeReferred || "0") / 1e18).toFixed(4);
-        const totalEarnedEth = (Number(r.totalEarnings || "0") / 1e18).toFixed(6);
-        const pendingEth = (Number(r.pendingEarnings || "0") / 1e18).toFixed(6);
-        const tier = calculateTier(r.level1Referrals || 0, totalVolumeEth);
-        const bps = getTierRebateBps(tier);
+        const tier = calculateVipTier(r.level1Referrals || 0);
+        const rebatePercents = [10, 25, 35, 50];
 
-        setReferrerInfo({
+        setInfo({
           code: r.code || "",
-          codeReadable: r.code || "",
           tier,
           totalInvites,
-          activeInvites: r.level1Referrals || 0,
-          totalVolume: totalVolumeEth,
-          totalEarned: totalEarnedEth,
-          pendingReward: pendingEth,
-          currentRebateBps: bps.rebate,
-          currentLevel2Bps: bps.level2,
+          totalEarned: (Number(r.totalEarnings || "0") / 1e18).toFixed(4),
+          monthlyEarned: (Number(r.pendingEarnings || "0") / 1e18).toFixed(4),
+          currentRebatePercent: rebatePercents[tier],
+          invitees: [],
         });
       } else {
-        // 2. 不是推荐人，自动注册
+        // Auto-register
         const registerRes = await fetch(`${MATCHING_ENGINE_URL}/api/referral/register`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ address: addr }),
         });
         const registerData = await registerRes.json();
+        const code = registerData?.referrer?.code || "";
 
-        if (registerData.success && registerData.referrer) {
-          const r = registerData.referrer;
-          setReferrerInfo({
-            code: r.code || "",
-            codeReadable: r.code || "",
-            tier: 0,
-            totalInvites: 0,
-            activeInvites: 0,
-            totalVolume: "0",
-            totalEarned: "0",
-            pendingReward: "0",
-            currentRebateBps: 1000,
-            currentLevel2Bps: 200,
-          });
-        } else {
-          // 注册也失败，显示默认空状态
-          setReferrerInfo({
-            code: "",
-            codeReadable: "",
-            tier: 0,
-            totalInvites: 0,
-            activeInvites: 0,
-            totalVolume: "0",
-            totalEarned: "0",
-            pendingReward: "0",
-            currentRebateBps: 1000,
-            currentLevel2Bps: 200,
-          });
-        }
+        setInfo({
+          code,
+          tier: 0,
+          totalInvites: 0,
+          totalEarned: "0",
+          monthlyEarned: "0",
+          currentRebatePercent: 10,
+          invitees: [],
+        });
       }
-    } catch (e) {
-      console.error("[Invite] Failed to fetch referrer info:", e);
-      setError("Failed to load referral data. Please try again later.");
-      // 降级到空状态（不显示假数据）
-      setReferrerInfo({
+    } catch {
+      setInfo({
         code: "",
-        codeReadable: "",
         tier: 0,
         totalInvites: 0,
-        activeInvites: 0,
-        totalVolume: "0",
         totalEarned: "0",
-        pendingReward: "0",
-        currentRebateBps: 1000,
-        currentLevel2Bps: 200,
+        monthlyEarned: "0",
+        currentRebatePercent: 10,
+        invitees: [],
       });
     } finally {
       setLoading(false);
@@ -154,187 +116,219 @@ export default function InvitePage() {
     if (isConnected && address) {
       fetchReferrerInfo(address);
     } else {
-      setReferrerInfo(null);
+      setInfo(null);
     }
   }, [isConnected, address, fetchReferrerInfo]);
 
-  const tierConfig = [
-    { name: t("tierBronze"), minInvites: 0, minVolume: "0", rebateBps: 1000, level2Bps: 200 },
-    { name: t("tierSilver"), minInvites: 5, minVolume: "1", rebateBps: 1500, level2Bps: 300 },
-    { name: t("tierGold"), minInvites: 20, minVolume: "10", rebateBps: 2000, level2Bps: 400 },
-    { name: t("tierDiamond"), minInvites: 100, minVolume: "50", rebateBps: 2500, level2Bps: 500 },
-  ];
+  const handleCopy = () => {
+    navigator.clipboard.writeText(inviteLink);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const nextTier = info ? getNextTierRequirement(info.tier) : null;
 
   return (
-    <div className="min-h-screen bg-okx-bg-primary text-okx-text-primary">
+    <div className="min-h-screen bg-[#000000] text-white">
       <Navbar />
 
-      <div className="max-w-6xl mx-auto px-4 py-8">
-        {/* Hero Header */}
-        <div className="mb-8 bg-gradient-to-b from-meme-lime/5 to-transparent rounded-2xl p-8">
-          <h1 className="text-3xl font-bold mb-2">{t("title")}</h1>
-          <p className="text-okx-text-secondary">{t("subtitle")}</p>
+      {!isConnected ? (
+        /* Connect Wallet State */
+        <div className="flex flex-col items-center justify-center py-32 px-4">
+          <div className="text-6xl mb-6">🎁</div>
+          <h2 className="text-2xl font-bold mb-3">{t("connectWalletTitle")}</h2>
+          <p className="text-[#888888] text-base">{t("connectWalletDesc")}</p>
         </div>
+      ) : loading ? (
+        <div className="flex justify-center items-center py-32">
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#BFFF00]" />
+        </div>
+      ) : (
+        <>
+          {/* Hero Section — gradient bg */}
+          <div
+            className="px-16 py-12"
+            style={{ background: "linear-gradient(180deg, #0a0f00 0%, #000000 100%)" }}
+          >
+            <h1 className="text-4xl font-extrabold text-white mb-6">
+              {t("heroTitle")}
+            </h1>
+            <p className="text-base text-[#888888] mb-6">
+              {t("heroSubtitle")}
+            </p>
 
-        {/* Error Banner */}
-        {error && (
-          <div className="mb-4 p-3 bg-okx-down/10 border border-okx-down/20 rounded-lg text-sm text-okx-down">
-            {error}
-          </div>
-        )}
-
-        {!isConnected ? (
-          <div className="meme-card p-12 text-center">
-            <div className="text-6xl mb-4">🎁</div>
-            <h2 className="text-xl font-bold mb-2">{t("connectWalletTitle")}</h2>
-            <p className="text-okx-text-secondary mb-4">{t("connectWalletDesc")}</p>
-          </div>
-        ) : loading ? (
-          <div className="flex justify-center items-center py-20">
-            <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-meme-lime"></div>
-          </div>
-        ) : (
-          <>
-            {/* Tier Progress */}
-            <TierProgress
-              currentTier={referrerInfo?.tier ?? 0}
-              activeInvites={referrerInfo?.activeInvites ?? 0}
-              totalVolume={referrerInfo?.totalVolume ?? "0"}
-              tierConfig={tierConfig}
-            />
-
-            {/* Main Content Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-6">
-              {/* Left Column - Invite Card */}
-              <div className="lg:col-span-1">
-                <InviteCard
-                  code={referrerInfo?.code ?? ""}
-                  codeReadable={referrerInfo?.codeReadable}
-                  address={address ?? ""}
-                  currentRebateBps={referrerInfo?.currentRebateBps ?? 1000}
-                />
+            {/* Link Row */}
+            <div className="flex items-center gap-3">
+              <div className="flex items-center px-5 py-3.5 bg-[#111111] border border-[#333333] rounded-lg w-[520px]">
+                <span className="text-sm font-mono text-[#BFFF00] truncate">
+                  {inviteLink || "https://memeperp.io/ref/..."}
+                </span>
               </div>
+              <button
+                onClick={handleCopy}
+                className="px-7 py-3.5 bg-[#BFFF00] text-black text-sm font-bold rounded-lg hover:bg-[#d4ff4d] transition-colors"
+              >
+                {copied ? t("copied") : t("copyLink")}
+              </button>
+              <button className="px-7 py-3.5 border border-[#BFFF00] text-[#BFFF00] text-sm font-semibold rounded-lg hover:bg-[#BFFF00]/10 transition-colors">
+                {t("sharePoster")}
+              </button>
+            </div>
+          </div>
 
-              {/* Right Column - Stats & Tabs */}
-              <div className="lg:col-span-2 space-y-6">
-                {/* Stats Cards */}
-                <ReferralStats
-                  totalInvites={referrerInfo?.totalInvites ?? 0}
-                  activeInvites={referrerInfo?.activeInvites ?? 0}
-                  totalEarned={referrerInfo?.totalEarned ?? "0"}
-                  pendingReward={referrerInfo?.pendingReward ?? "0"}
-                />
-
-                {/* Tabs */}
-                <div className="bg-okx-bg-card border border-okx-border-primary rounded-lg overflow-hidden">
-                  <div className="flex border-b border-okx-border-primary">
-                    <button
-                      onClick={() => setActiveTab("overview")}
-                      className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
-                        activeTab === "overview"
-                          ? "text-okx-accent border-b-2 border-okx-accent bg-okx-bg-hover"
-                          : "text-okx-text-secondary hover:text-okx-text-primary"
-                      }`}
-                    >
-                      {t("tabOverview")}
-                    </button>
-                    <button
-                      onClick={() => setActiveTab("invitees")}
-                      className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
-                        activeTab === "invitees"
-                          ? "text-okx-accent border-b-2 border-okx-accent bg-okx-bg-hover"
-                          : "text-okx-text-secondary hover:text-okx-text-primary"
-                      }`}
-                    >
-                      {t("tabInvitees")}
-                    </button>
-                    <button
-                      onClick={() => setActiveTab("rewards")}
-                      className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
-                        activeTab === "rewards"
-                          ? "text-okx-accent border-b-2 border-okx-accent bg-okx-bg-hover"
-                          : "text-okx-text-secondary hover:text-okx-text-primary"
-                      }`}
-                    >
-                      {t("tabRewards")}
-                    </button>
-                  </div>
-
-                  <div className="p-4">
-                    {activeTab === "overview" && (
-                      <div className="space-y-4">
-                        <h3 className="font-medium">{t("howItWorks")}</h3>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                          <div className="p-4 bg-okx-bg-hover rounded-lg">
-                            <div className="text-2xl mb-2">1</div>
-                            <h4 className="font-medium mb-1">{t("step1Title")}</h4>
-                            <p className="text-sm text-okx-text-secondary">{t("step1Desc")}</p>
-                          </div>
-                          <div className="p-4 bg-okx-bg-hover rounded-lg">
-                            <div className="text-2xl mb-2">2</div>
-                            <h4 className="font-medium mb-1">{t("step2Title")}</h4>
-                            <p className="text-sm text-okx-text-secondary">{t("step2Desc")}</p>
-                          </div>
-                          <div className="p-4 bg-okx-bg-hover rounded-lg">
-                            <div className="text-2xl mb-2">3</div>
-                            <h4 className="font-medium mb-1">{t("step3Title")}</h4>
-                            <p className="text-sm text-okx-text-secondary">{t("step3Desc")}</p>
-                          </div>
-                        </div>
-
-                        {/* Tier Table */}
-                        <h3 className="font-medium mt-6">{t("tierBenefits")}</h3>
-                        <div className="overflow-x-auto">
-                          <table className="w-full text-sm">
-                            <thead>
-                              <tr className="border-b border-okx-border-primary">
-                                <th className="text-left py-3 px-4">{t("tier")}</th>
-                                <th className="text-left py-3 px-4">{t("requirements")}</th>
-                                <th className="text-right py-3 px-4">{t("level1Rebate")}</th>
-                                <th className="text-right py-3 px-4">{t("level2Rebate")}</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {tierConfig.map((tier, idx) => (
-                                <tr
-                                  key={idx}
-                                  className={`border-b border-okx-border-primary ${
-                                    idx === referrerInfo?.tier ? "bg-okx-accent/10" : ""
-                                  }`}
-                                >
-                                  <td className="py-3 px-4">
-                                    <span className={`tier-${["bronze", "silver", "gold", "diamond"][idx]}`}>
-                                      {tier.name}
-                                    </span>
-                                  </td>
-                                  <td className="py-3 px-4 text-okx-text-secondary">
-                                    {idx === 0
-                                      ? t("noRequirements")
-                                      : `${tier.minInvites} ${t("inviteesOr")} ${tier.minVolume} BNB`}
-                                  </td>
-                                  <td className="py-3 px-4 text-right text-okx-up">
-                                    {(tier.rebateBps / 100).toFixed(0)}%
-                                  </td>
-                                  <td className="py-3 px-4 text-right text-okx-up">
-                                    {(tier.level2Bps / 100).toFixed(0)}%
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    )}
-
-                    {activeTab === "invitees" && <InviteeList address={address} />}
-                    {activeTab === "rewards" && <RewardHistory address={address} />}
-                  </div>
-                </div>
+          {/* Stats Row — 4 cards */}
+          <div className="flex gap-5 px-16 py-6">
+            {/* Card 1: Total Invited */}
+            <div className="flex-1 bg-[#111111] border border-[#1a1a1a] rounded-xl p-6">
+              <div className="text-[13px] text-[#888888] mb-2">{t("totalInvited")}</div>
+              <div className="flex items-baseline gap-1">
+                <span className="text-[32px] font-extrabold font-mono text-[#BFFF00]">
+                  {info?.totalInvites ?? 0}
+                </span>
+                <span className="text-sm text-[#666666]">{t("personUnit")}</span>
               </div>
             </div>
-          </>
-        )}
-      </div>
+
+            {/* Card 2: Total Rebate */}
+            <div className="flex-1 bg-[#111111] border border-[#1a1a1a] rounded-xl p-6">
+              <div className="text-[13px] text-[#888888] mb-2">{t("totalRebate")}</div>
+              <div className="flex items-baseline gap-1">
+                <span className="text-[32px] font-extrabold font-mono text-white">
+                  {info?.totalEarned ?? "0"}
+                </span>
+                <span className="text-sm text-[#666666]">ETH</span>
+              </div>
+            </div>
+
+            {/* Card 3: Monthly Rebate */}
+            <div className="flex-1 bg-[#111111] border border-[#1a1a1a] rounded-xl p-6">
+              <div className="text-[13px] text-[#888888] mb-2">{t("monthlyRebate")}</div>
+              <div className="flex items-baseline gap-1">
+                <span className="text-[32px] font-extrabold font-mono text-white">
+                  {info?.monthlyEarned ?? "0"}
+                </span>
+                <span className="text-sm text-[#666666]">ETH</span>
+              </div>
+            </div>
+
+            {/* Card 4: Current Tier */}
+            <div className="flex-1 bg-[#111111] border border-[#1a1a1a] rounded-xl p-6">
+              <div className="text-[13px] text-[#888888] mb-2">{t("currentLevel")}</div>
+              <div className="flex items-baseline gap-1">
+                <span className="text-[32px] font-extrabold font-mono text-[#BFFF00]">
+                  VIP {(info?.tier ?? 0) + 1}
+                </span>
+                <span className="text-sm text-[#666666]">
+                  / {info?.currentRebatePercent ?? 10}%{t("rebateSuffix")}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Body — Two Columns */}
+          <div className="flex gap-8 px-16 pb-12">
+            {/* Left Column: Tier Table */}
+            <div className="flex-1 flex flex-col gap-4">
+              {/* Title Row */}
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-bold text-white">{t("rebateTierTitle")}</h2>
+                {nextTier && (
+                  <span className="text-xs text-[#666666]">
+                    {t("upgradeHint", { count: nextTier.count, level: nextTier.level })}
+                  </span>
+                )}
+              </div>
+
+              {/* Table Header */}
+              <div className="flex items-center px-4 py-2.5 bg-[#0a0a0a] rounded-lg">
+                <span className="flex-1 text-xs font-semibold text-[#888888]">{t("tierLevelCol")}</span>
+                <span className="flex-1 text-xs font-semibold text-[#888888] text-center">{t("inviteCountCol")}</span>
+                <span className="flex-1 text-xs font-semibold text-[#888888] text-center">{t("rebateRateCol")}</span>
+                <span className="flex-1 text-xs font-semibold text-[#888888] text-right">{t("extraRewardCol")}</span>
+              </div>
+
+              {/* Tier Rows */}
+              {VIP_TIERS.map((tier, idx) => {
+                const isActive = idx === (info?.tier ?? 0);
+                return (
+                  <div
+                    key={idx}
+                    className={`flex items-center px-4 py-3 ${
+                      isActive
+                        ? "bg-[#BFFF00]/[0.03] border border-[#BFFF00]/[0.13] rounded-md"
+                        : "border-b border-[#1a1a1a]"
+                    }`}
+                  >
+                    <div className="flex-1 flex items-center gap-1.5">
+                      <span
+                        className={`text-[13px] font-mono font-semibold ${
+                          isActive ? "text-[#BFFF00] font-bold" : "text-[#888888]"
+                        }`}
+                      >
+                        {tier.level}
+                      </span>
+                      {isActive && (
+                        <span className="text-[9px] font-bold text-black bg-[#BFFF00] px-1.5 py-0.5 rounded">
+                          {t("currentBadge")}
+                        </span>
+                      )}
+                    </div>
+                    <span className="flex-1 text-[13px] font-mono text-white text-center">
+                      {t(tier.rangeKey as any)}
+                    </span>
+                    <span
+                      className={`flex-1 text-[13px] font-mono text-center ${
+                        isActive ? "text-[#BFFF00] font-bold" : "text-[#BFFF00]"
+                      }`}
+                    >
+                      {tier.rate}
+                    </span>
+                    <span
+                      className={`flex-1 text-xs text-right ${
+                        isActive ? "text-[#BFFF00]" : "text-[#888888]"
+                      }`}
+                    >
+                      {idx === 0 ? t("noDataPlaceholder") : t(tier.rewardKey as any)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Right Column: Invite History */}
+            <div className="w-[480px] flex-shrink-0 flex flex-col gap-4">
+              <h2 className="text-lg font-bold text-white">{t("inviteHistory")}</h2>
+
+              {/* Table Header */}
+              <div className="flex items-center px-3 py-2.5 bg-[#0a0a0a] rounded-lg">
+                <span className="flex-1 text-xs font-semibold text-[#888888]">{t("userCol")}</span>
+                <span className="flex-1 text-xs font-semibold text-[#888888] text-center">{t("registerTimeCol")}</span>
+                <span className="flex-1 text-xs font-semibold text-[#888888] text-center">{t("tradeVolumeCol")}</span>
+                <span className="flex-1 text-xs font-semibold text-[#888888] text-right">{t("rebateAmountCol")}</span>
+              </div>
+
+              {/* Invite Rows (from API or placeholder) */}
+              {(info?.invitees && info.invitees.length > 0) ? (
+                info.invitees.map((inv, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center px-3 py-2.5 border-b border-[#1a1a1a]"
+                  >
+                    <span className="flex-1 text-xs font-mono text-white">{inv.address}</span>
+                    <span className="flex-1 text-xs font-mono text-[#888888] text-center">{inv.joinedDate}</span>
+                    <span className="flex-1 text-xs font-mono text-white text-center">{inv.volume} ETH</span>
+                    <span className="flex-1 text-xs font-mono text-[#BFFF00] text-right">+{inv.rebate}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="flex items-center justify-center py-12 text-[#666666] text-sm">
+                  {t("noInvitees")}
+                </div>
+              )}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

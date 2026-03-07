@@ -99,14 +99,14 @@ function PerpContent() {
   const [activeCategory, setActiveCategory] = useState<MarketCategory>("all");
   const [searchQuery, setSearchQuery] = useState("");
 
-  // 分类配置 (i18n)
+  // 分类配置 (i18n) — 与设计稿 hjfIJ 一致: 带 emoji 前缀
   const CATEGORIES: { key: MarketCategory; label: string }[] = useMemo(() => [
     { key: "all", label: tPerp("catAll") },
-    { key: "hot", label: tPerp("catHot") },
-    { key: "new", label: tPerp("catNew") },
-    { key: "meme", label: "Meme" },
-    { key: "layer2", label: "Layer2" },
-    { key: "favorites", label: tPerp("catFavorites") },
+    { key: "hot", label: `🔥 ${tPerp("catHot")}` },
+    { key: "new", label: `🆕 ${tPerp("catNew")}` },
+    { key: "meme", label: "🐸 Meme" },
+    { key: "layer2", label: "⚡ Layer2" },
+    { key: "favorites", label: `⭐ ${tPerp("catFavorites")}` },
   ], [tPerp]);
 
   useEffect(() => {
@@ -171,7 +171,7 @@ function PerpContent() {
   if (!mounted || isLoading) {
     return (
       <div className="flex items-center justify-center min-h-[calc(100vh-64px)]">
-        <div className="w-8 h-8 border-4 border-meme-lime border-t-transparent rounded-full animate-spin"></div>
+        <div className="w-8 h-8 border-4 border-okx-accent border-t-transparent rounded-full animate-spin"></div>
       </div>
     );
   }
@@ -198,7 +198,7 @@ function PerpContent() {
         <p className="text-okx-text-secondary text-lg">{t("market.noTokens")}</p>
         <button
           onClick={() => router.push("/create")}
-          className="bg-meme-lime text-black px-6 py-2 rounded-lg font-bold hover:opacity-90 transition-opacity"
+          className="bg-okx-accent text-[#0B0E11] px-6 py-2 rounded-lg font-bold hover:opacity-90 transition-opacity"
         >
           {t("nav.createToken")}
         </button>
@@ -208,61 +208,54 @@ function PerpContent() {
 
   return (
     <div className="perp-theme min-h-[calc(100vh-64px)] bg-okx-bg-primary">
-      {/* Hero Section */}
+      {/* Hero Section — 设计稿 hjfIJ: padding 24,48, border-bottom #1E2329 */}
       <div className="border-b border-okx-border-primary px-12 py-6 space-y-6">
         <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-okx-text-primary">{tPerp("marketTitle")}</h1>
-            <p className="text-sm text-okx-text-secondary mt-1">{tPerp("marketSubtitle")}</p>
+          <div className="space-y-1">
+            <h1 className="text-[22px] font-bold text-okx-text-primary">{tPerp("marketTitle")}</h1>
+            <p className="text-[13px] text-[#5E6673]">{tPerp("marketSubtitle")}</p>
           </div>
 
-          {/* Search */}
-          <div className="relative">
+          {/* Search — 设计稿: 🔍 icon left, w-280, h-40, bg #1E2329, border #2B3139, rounded-8 */}
+          <div className="flex items-center w-[280px] h-10 bg-okx-bg-card border border-okx-border-primary rounded-lg px-3.5 gap-2">
+            <span className="text-sm text-okx-text-tertiary flex-shrink-0">🔍</span>
             <input
               type="text"
               placeholder={tPerp("searchPairs")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-[280px] h-10 bg-okx-bg-card border border-okx-border-primary rounded-lg px-4 text-sm text-okx-text-primary placeholder:text-okx-text-tertiary focus:outline-none focus:border-meme-lime"
+              className="flex-1 bg-transparent text-[13px] text-okx-text-primary placeholder:text-[#5E6673] focus:outline-none"
             />
-            <svg
-              className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-okx-text-tertiary"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
           </div>
         </div>
 
-        {/* Stats Cards */}
-        <div className="grid grid-cols-4 gap-4">
+        {/* Stats Cards — 设计稿: flex gap-16, bg #1E2329, rounded-8, padding 16,20 */}
+        <div className="flex gap-4">
           {[
             { label: tPerp("totalVolume24h"), value: formatValue(totalVolume24h), color: "text-okx-text-primary" },
             { label: tPerp("totalOI"), value: formatValue(totalMarketCap), color: "text-okx-text-primary" },
             { label: tPerp("activePairs"), value: `${activeTokens} ${tPerp("pairsUnit")}`, color: "text-okx-text-primary" },
             { label: tPerp("insuranceFund"), value: "2.00 ETH", color: "text-okx-up" },
           ].map((stat, idx) => (
-            <div key={idx} className="bg-okx-bg-card rounded-lg p-4">
-              <div className="text-xs text-okx-text-secondary mb-1">{stat.label}</div>
-              <div className={`text-lg font-bold font-mono ${stat.color}`}>{stat.value}</div>
+            <div key={idx} className="flex-1 bg-okx-bg-card rounded-lg py-4 px-5">
+              <div className="text-[12px] text-[#5E6673] mb-1.5">{stat.label}</div>
+              <div className={`text-[18px] font-bold font-mono ${stat.color}`}>{stat.value}</div>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Table Section */}
+      {/* Table Section — 设计稿: padding 16,48,0,48 */}
       <div className="px-12 pt-4">
-        {/* Category Tabs */}
+        {/* Category Tabs — 设计稿: gap-6, active=#F0B90B bg, rounded-6, padding 8,20, 13px */}
         <div className="flex items-center gap-1.5 pb-3">
           {CATEGORIES.map((cat) => (
             <button
               key={cat.key}
               onClick={() => setActiveCategory(cat.key)}
-              className={`px-5 py-2 rounded-md text-sm font-medium transition-all ${
+              className={`px-5 py-2 rounded-md text-[13px] font-medium transition-all ${
                 activeCategory === cat.key
-                  ? "bg-meme-lime text-black font-bold"
+                  ? "bg-okx-accent text-[#0B0E11] font-bold"
                   : "text-okx-text-secondary hover:text-okx-text-primary hover:bg-okx-bg-card"
               }`}
             >
@@ -271,8 +264,8 @@ function PerpContent() {
           ))}
         </div>
 
-        {/* Table Header */}
-        <div className="flex items-center bg-okx-bg-card rounded-t-md px-4 py-3 text-xs font-semibold text-okx-text-secondary">
+        {/* Table Header — 设计稿: bg #1E2329, rounded-t-6, padding 12,16, #5E6673 12px semibold */}
+        <div className="flex items-center bg-okx-bg-card rounded-t-md px-4 py-3 text-[12px] font-semibold text-[#5E6673]">
           <div className="w-[200px]">{tPerp("pair")}</div>
           <div className="w-[130px] text-right">{tPerp("latestPrice")}</div>
           <div className="w-[100px] text-right">{tPerp("change24h")}</div>
@@ -302,7 +295,7 @@ function PerpContent() {
               >
                 {/* Pair Name */}
                 <div className="w-[200px] flex items-center gap-3">
-                  <span className="text-okx-text-tertiary cursor-pointer hover:text-meme-lime text-sm">☆</span>
+                  <span className="text-okx-text-tertiary cursor-pointer hover:text-okx-accent text-sm">☆</span>
                   <div className="w-7 h-7 rounded-full overflow-hidden bg-okx-bg-hover flex-shrink-0">
                     <img
                       src={parseMetadataURI(token.metadataURI) || `https://api.dicebear.com/7.x/identicon/svg?seed=${token.address}`}
@@ -317,7 +310,7 @@ function PerpContent() {
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-okx-text-primary">{token.symbol}/USDT</span>
                       {isNew && (
-                        <span className="text-[10px] bg-meme-lime/20 text-meme-lime px-1.5 py-0.5 rounded font-bold">
+                        <span className="text-[10px] bg-okx-accent/20 text-okx-accent px-1.5 py-0.5 rounded font-bold">
                           NEW
                         </span>
                       )}
@@ -376,7 +369,7 @@ function PerpContent() {
                 {/* Trade Button */}
                 <div className="flex-1 text-right">
                   <button
-                    className="px-4 py-1.5 bg-meme-lime text-black text-xs font-bold rounded hover:opacity-90 transition-opacity"
+                    className="px-4 py-1.5 bg-okx-accent text-[#0B0E11] text-xs font-bold rounded hover:opacity-90 transition-opacity"
                     onClick={(e) => {
                       e.stopPropagation();
                       router.push(`/perp?symbol=${token.address}`);
@@ -412,7 +405,7 @@ export default function PerpetualTradingPage() {
       <Suspense
         fallback={
           <div className="flex items-center justify-center min-h-[calc(100vh-64px)]">
-            <div className="w-8 h-8 border-4 border-meme-lime border-t-transparent rounded-full animate-spin"></div>
+            <div className="w-8 h-8 border-4 border-okx-accent border-t-transparent rounded-full animate-spin"></div>
           </div>
         }
       >

@@ -6,6 +6,7 @@ import { Navbar } from "@/components/layout/Navbar";
 import { TradingTerminal } from "@/components/common/TradingTerminal";
 import { TradingErrorBoundary } from "@/components/shared/TradingErrorBoundary";
 import { TokenSelector } from "@/components/spot/TokenSelector";
+import { SpotListingView } from "@/components/spot/SpotListingView";
 import { useTranslations } from "next-intl";
 import { useTradingDataStore } from "@/lib/stores/tradingDataStore";
 import { useUnifiedWebSocket } from "@/hooks/common/useUnifiedWebSocket";
@@ -33,50 +34,31 @@ function ExchangeContent() {
   if (!mounted || isLoading) {
     return (
       <div className="flex items-center justify-center min-h-[calc(100vh-64px)]">
-        <div className="w-8 h-8 border-4 border-okx-up border-t-transparent rounded-full animate-spin"></div>
+        <div className="w-8 h-8 border-4 border-meme-lime border-t-transparent rounded-full animate-spin"></div>
       </div>
     );
   }
-
-  // 获取要交易的代币: URL参数 > 第一个可用代币
-  const symbol = urlSymbol || (tokens.length > 0 ? tokens[0].address : null);
 
   // Token 选择回调 — 更新 URL (replace 不污染浏览历史)
   const handleTokenSelect = (tokenAddress: string) => {
     router.replace(`/exchange?symbol=${tokenAddress}`, { scroll: false });
   };
 
-  // 如果没有代币可交易，提示用户
-  if (!symbol) {
-    return (
-      <div className="flex flex-col items-center justify-center min-h-[calc(100vh-64px)] gap-4">
-        <p className="text-okx-text-secondary text-lg">{t("market.noTokens")}</p>
-        <button
-          onClick={() => router.push("/create")}
-          className="bg-meme-lime text-black px-6 py-2 rounded-lg font-bold hover:opacity-90 transition-opacity"
-        >
-          {t("nav.createToken")}
-        </button>
-        <button
-          onClick={() => router.push("/")}
-          className="text-okx-text-tertiary hover:text-okx-text-primary transition-colors"
-        >
-          {t("nav.market")}
-        </button>
-      </div>
-    );
+  // No symbol in URL → show spot listing overview (matching e5mP7 design)
+  if (!urlSymbol) {
+    return <SpotListingView tokens={tokens} />;
   }
 
-  // 把 TokenSelector 作为 headerSlot 注入到 TradingTerminal 顶栏
+  // Symbol selected → show trading terminal
   return (
     <TradingErrorBoundary module="SpotTradingTerminal">
       <TradingTerminal
-        symbol={symbol}
+        symbol={urlSymbol}
         headerSlot={
           <TokenSelector
             tokens={tokens}
             isLoading={isLoading}
-            selectedAddress={symbol}
+            selectedAddress={urlSymbol}
             onSelect={handleTokenSelect}
           />
         }

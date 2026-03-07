@@ -547,85 +547,95 @@ export function PerpetualTradingTerminal({
     <div
       className={`flex flex-col bg-okx-bg-primary min-h-screen text-okx-text-primary ${className}`}
     >
-      {/* Top Bar - Symbol Info */}
+      {/* Top Bar — 设计稿 uItYJ: pair + 永续 tag + leverage tag + separator + stats */}
       <div className="h-14 bg-okx-bg-secondary border-b border-okx-border-primary flex items-center px-4 gap-6">
-        {/* Symbol */}
+        {/* Symbol — 设计稿: pair name 16px bold + "永续" tag (9px #848E9C on #2B3139) + "5x" leverage tag */}
         <div className="flex items-center gap-2">
-          <span className="text-[18px] font-bold text-okx-text-primary">
-            {displaySymbol.toUpperCase()}-PERP
+          <span className="text-[16px] font-bold font-mono text-okx-text-primary">
+            {displaySymbol.toUpperCase()}USDT
           </span>
-          <span className="text-[12px] px-2 py-0.5 rounded text-okx-up bg-okx-up/10">
-            Perpetual
+          <span className="text-[9px] font-medium px-1.5 py-0.5 rounded-sm bg-okx-bg-hover text-okx-text-secondary">
+            {t("perpetualLabel")}
+          </span>
+          <span className="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded-sm bg-okx-accent/[0.13] text-okx-accent">
+            10x
           </span>
         </div>
 
-        {/* Market Stats */}
-        <div className="flex items-center gap-6 text-[12px]">
-          {/* 当前价格和涨跌幅 (TokenFactory 现货价格) */}
-          <div className="flex items-center gap-2">
+        {/* Market Stats — 设计稿 uItYJ: vertical stacked layout (value top, label bottom) */}
+        <div className="flex items-center gap-6">
+          {/* 标记价格 — 设计稿: JetBrains Mono 16px bold green, label Inter 9px #848E9C */}
+          <div className="flex flex-col gap-0.5">
             {chartPrice ? (
               <AnimatedNumber
                 value={chartPrice}
                 format={formatMemePriceNum}
-                className={`text-[16px] font-bold ${marketInfo.isPriceUp ? "text-okx-up" : "text-okx-down"}`}
+                className={`text-[16px] font-bold font-mono ${marketInfo.isPriceUp ? "text-okx-up" : "text-okx-down"}`}
                 showArrow={true}
                 highlightChange={true}
               />
             ) : (
-              <span className={`text-[16px] font-bold ${marketInfo.isPriceUp ? "text-okx-up" : "text-okx-down"}`}>
+              <span className={`text-[16px] font-bold font-mono ${marketInfo.isPriceUp ? "text-okx-up" : "text-okx-down"}`}>
                 {marketInfo.currentPrice}
               </span>
             )}
-            <span className={`text-[12px] ${marketInfo.isPriceUp ? "text-okx-up" : "text-okx-down"}`}>
+            <span className="text-[9px] text-okx-text-secondary">{t("markPrice")}</span>
+          </div>
+
+          <div className="h-6 w-px bg-okx-border-primary" />
+
+          {/* 24h 涨跌 */}
+          <div className="flex flex-col gap-0.5">
+            <span className={`text-[12px] font-semibold font-mono ${marketInfo.isPriceUp ? "text-okx-up" : "text-okx-down"}`}>
               {marketInfo.isPriceUp ? "+" : ""}{marketInfo.priceChange}
             </span>
+            <span className="text-[9px] text-okx-text-secondary">{t("change24h")}</span>
           </div>
-          <div className="h-4 w-px bg-okx-border-primary" />
-          {/* 市值 (FDV) - ETH 本位 */}
-          <div>
-            <span className="text-okx-text-tertiary mr-2">市值</span>
-            <span className="text-okx-text-primary">
+
+          {/* 最高价 */}
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12px] font-mono text-okx-text-primary">{marketInfo.high24h}</span>
+            <span className="text-[9px] text-okx-text-secondary">{t("high24h")}</span>
+          </div>
+
+          {/* 最低价 */}
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12px] font-mono text-okx-text-primary">{marketInfo.low24h}</span>
+            <span className="text-[9px] text-okx-text-secondary">{t("low24h")}</span>
+          </div>
+
+          {/* 24h 成交量 */}
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12px] font-mono text-okx-text-primary">{marketInfo.volume24h}</span>
+            <span className="text-[9px] text-okx-text-secondary">{t("volume24h")}</span>
+          </div>
+
+          {/* 持仓量 */}
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12px] font-mono text-okx-text-primary">{marketInfo.openInterest}</span>
+            <span className="text-[9px] text-okx-text-secondary">{t("openInterest")}</span>
+          </div>
+
+          {/* 资金费率 */}
+          <div className="flex flex-col gap-0.5">
+            <span className={`text-[12px] font-mono ${isFundingPositive ? "text-okx-up" : "text-okx-down"}`}>
+              {marketInfo.fundingRate}
+            </span>
+            <span className="text-[9px] text-okx-text-secondary">
+              {t("fundingRate")} / {fundingCountdown}
+            </span>
+          </div>
+
+          {/* 市值 */}
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[12px] font-mono text-okx-text-primary">
               {marketInfo.marketCap >= 1000000
-                ? `BNB ${(marketInfo.marketCap / 1000000).toFixed(2)}M`
+                ? `$${(marketInfo.marketCap / 1000000).toFixed(2)}M`
                 : marketInfo.marketCap >= 1000
-                ? `BNB ${(marketInfo.marketCap / 1000).toFixed(2)}K`
-                : `BNB ${marketInfo.marketCap.toFixed(4)}`}
+                ? `$${(marketInfo.marketCap / 1000).toFixed(2)}K`
+                : `$${marketInfo.marketCap.toFixed(2)}`}
             </span>
-          </div>
-          <div>
-            <span className="text-okx-text-tertiary mr-2">
-              {t("fundingRate")}
-            </span>
-            <span className={isFundingPositive ? "text-okx-up" : "text-okx-down"}>{marketInfo.fundingRate}</span>
-            <span className="text-okx-text-tertiary ml-1">/ {fundingCountdown}</span>
-          </div>
-          <div>
-            <span className="text-okx-text-tertiary mr-2">
-              {t("openInterest")}
-            </span>
-            <span className="text-okx-text-primary">
-              {marketInfo.openInterest}
-            </span>
-          </div>
-          <div>
-            <span className="text-okx-text-tertiary mr-2">
-              {t("volume24h")}
-            </span>
-            <span className="text-okx-text-primary">
-              {marketInfo.volume24h}
-            </span>
-          </div>
-          <div>
-            <span className="text-okx-text-tertiary mr-2">{t("high24h")}</span>
-            <span className="text-okx-up">{marketInfo.high24h}</span>
-          </div>
-          <div>
-            <span className="text-okx-text-tertiary mr-2">{t("low24h")}</span>
-            <span className="text-okx-down">{marketInfo.low24h}</span>
-          </div>
-          <div>
-            <span className="text-okx-text-tertiary mr-2">24h Trades</span>
-            <span className="text-okx-text-primary">{marketInfo.trades24h}</span>
+            <span className="text-[9px] text-okx-text-secondary">市值</span>
           </div>
         </div>
 
@@ -747,7 +757,7 @@ export function PerpetualTradingTerminal({
                     </span>
                   )}
                   {activeBottomTab === tab.key && (
-                    <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#A3E635]" />
+                    <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-okx-accent" />
                   )}
                 </button>
               ))}
