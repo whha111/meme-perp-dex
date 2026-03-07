@@ -7,7 +7,9 @@ import { useTranslations } from 'next-intl';
 import { ThemeToggle } from '@/components/shared/ThemeToggle';
 import { LanguageSelector } from '@/components/shared/LanguageSelector';
 import { useAccount, useDisconnect, useBalance } from 'wagmi';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
+import { useTradingDataStore } from '@/lib/stores/tradingDataStore';
 
 const NAV_ITEMS = [
   { href: '/exchange', key: 'spot' },
@@ -30,29 +32,41 @@ export function Navbar() {
   const { openAccountModal } = useAccountModal();
   const { openChainModal } = useChainModal();
 
+  const router = useRouter();
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLDivElement>(null);
+  const allTokens = useTradingDataStore((state) => state.allTokens);
+
+  const searchResults = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const q = searchQuery.toLowerCase();
+    return allTokens
+      .filter((t) => t.symbol?.toLowerCase().includes(q) || t.name?.toLowerCase().includes(q) || t.address.toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [searchQuery, allTokens]);
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
-  // Close menu when clicking outside
+  // Close menus when clicking outside
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setShowAccountMenu(false);
       }
+      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+        setSearchFocused(false);
+      }
     }
 
-    if (showAccountMenu) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => {
-        document.removeEventListener('mousedown', handleClickOutside);
-      };
-    }
-  }, [showAccountMenu]);
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   return (
     <nav className="sticky top-0 z-30 bg-okx-bg-primary border-b border-okx-border-primary h-[64px]">
@@ -86,12 +100,57 @@ export function Navbar() {
         {/* 右侧: 搜索框 + 语言 + 主题 + 钱包 */}
         <div className="flex items-center gap-3">
           {/* 搜索框 */}
-          <div className="relative hidden md:block">
+          <div className="relative hidden md:block" ref={searchRef}>
             <input
               type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onFocus={() => setSearchFocused(true)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && searchResults.length > 0) {
+                  router.push(`/exchange?symbol=${searchResults[0].address}`);
+                  setSearchQuery('');
+                  setSearchFocused(false);
+                }
+                if (e.key === 'Escape') setSearchFocused(false);
+              }}
               placeholder={t('searchPlaceholder')}
               className="bg-okx-bg-hover border border-okx-border-primary rounded-full px-4 py-1.5 text-[12px] text-okx-text-primary w-64 focus:outline-none focus:border-okx-border-secondary placeholder:text-okx-text-tertiary"
             />
+            {searchFocused && searchQuery.trim() && (
+              <div className="absolute top-full mt-1 left-0 w-80 bg-okx-bg-card border border-okx-border-primary rounded-lg shadow-xl z-50 max-h-[320px] overflow-y-auto">
+                {searchResults.length > 0 ? (
+                  searchResults.map((token) => (
+                    <button
+                      key={token.address}
+                      onClick={() => {
+                        router.push(`/exchange?symbol=${token.address}`);
+                        setSearchQuery('');
+                        setSearchFocused(false);
+                      }}
+                      className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-okx-bg-hover text-left transition-colors"
+                    >
+                      <div className="w-7 h-7 rounded-full bg-meme-lime/20 flex items-center justify-center text-meme-lime text-[11px] font-bold flex-shrink-0">
+                        {token.symbol?.charAt(0)?.toUpperCase() || '?'}
+                      </div>
+                      <div className="flex flex-col gap-px flex-1 min-w-0">
+                        <span className="text-[13px] font-semibold text-okx-text-primary">{token.symbol}</span>
+                        <span className="text-[10px] text-okx-text-tertiary truncate">{token.name}</span>
+                      </div>
+                      <span className="font-mono text-[11px] text-okx-text-secondary">
+                        {Number(token.price || '0') > 0
+                          ? `${(Number(token.price) / 1e18).toFixed(8)}`
+                          : '--'}
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="px-4 py-6 text-center text-okx-text-tertiary text-[12px]">
+                    {t('noResults')}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* 语言选择器 */}

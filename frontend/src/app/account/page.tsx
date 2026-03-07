@@ -190,13 +190,22 @@ export default function AccountPage() {
                       {/* Divider + Actions */}
                       <div className="h-px bg-[#1A1A1A]" />
                       <div className="flex items-center gap-2">
-                        <button className="flex-1 text-[11px] font-medium py-2 bg-[#111111] border border-[#1A1A1A] rounded text-[#CCCCCC] hover:text-white transition-colors">
+                        <button
+                          onClick={() => router.push(`/perp?symbol=${pos.token}`)}
+                          className="flex-1 text-[11px] font-medium py-2 bg-[#111111] border border-[#1A1A1A] rounded text-[#CCCCCC] hover:text-white transition-colors"
+                        >
                           {t("addMargin")}
                         </button>
-                        <button className="flex-1 text-[11px] font-medium py-2 bg-[#111111] border border-[#1A1A1A] rounded text-[#CCCCCC] hover:text-white transition-colors">
+                        <button
+                          onClick={() => router.push(`/perp?symbol=${pos.token}`)}
+                          className="flex-1 text-[11px] font-medium py-2 bg-[#111111] border border-[#1A1A1A] rounded text-[#CCCCCC] hover:text-white transition-colors"
+                        >
                           {t("closePosition")}
                         </button>
-                        <button className="flex-1 text-[11px] font-medium py-2 bg-[#111111] border border-[#1A1A1A] rounded text-[#CCCCCC] hover:text-white transition-colors">
+                        <button
+                          onClick={() => router.push(`/perp?symbol=${pos.token}`)}
+                          className="flex-1 text-[11px] font-medium py-2 bg-[#111111] border border-[#1A1A1A] rounded text-[#CCCCCC] hover:text-white transition-colors"
+                        >
                           {t("adjustLeverage")}
                         </button>
                       </div>
