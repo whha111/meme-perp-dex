@@ -40,7 +40,10 @@ export default function Home() {
       const mcFloat = parseFloat(t.marketCap) || 0;
       totalMarketCap += mcFloat * ETH_PRICE_USD;
       const stats = tokenStatsMap.get(t.address.toLowerCase() as Address);
-      totalVolume += parseFloat(stats?.volume24h || "0");
+      const volRaw = parseFloat(stats?.volume24h || "0");
+      // Normalize: if value looks like wei (>1e12), divide by 1e18
+      const volEth = volRaw > 1e12 ? volRaw / 1e18 : volRaw;
+      totalVolume += volEth * ETH_PRICE_USD;
     });
     return { totalVolume, totalMarketCap, totalTraders, totalTokens: allTokens.length };
   }, [allTokens, tokenStatsMap, ETH_PRICE_USD]);

@@ -34,6 +34,7 @@ export function Navbar() {
 
   const router = useRouter();
   const [showAccountMenu, setShowAccountMenu] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
@@ -71,8 +72,23 @@ export function Navbar() {
   return (
     <nav className="sticky top-0 z-30 bg-okx-bg-primary border-b border-okx-border-primary h-[64px]">
       <div className="max-w-[1440px] mx-auto px-4 h-full flex items-center justify-between">
-        {/* 左侧: Logo + 导航链接 */}
-        <div className="flex items-center gap-8">
+        {/* 左侧: Logo + 汉堡菜单 + 导航链接 */}
+        <div className="flex items-center gap-4 lg:gap-8">
+          {/* 汉堡菜单按钮 (mobile/tablet only) */}
+          <button
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="lg:hidden p-1.5 rounded-md hover:bg-okx-bg-hover transition-colors text-okx-text-secondary"
+            aria-label="Toggle menu"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              {mobileMenuOpen ? (
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              ) : (
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+              )}
+            </svg>
+          </button>
+
           <Link href="/" className="flex items-center gap-2 text-okx-text-primary font-bold text-xl">
             <span className="text-meme-lime text-lg">✦</span>
             <span className="tracking-tight">MEMEPERP</span>
@@ -309,6 +325,43 @@ export function Navbar() {
           )}
         </div>
       </div>
+
+      {/* Mobile Menu Overlay */}
+      {mobileMenuOpen && (
+        <div className="lg:hidden absolute top-[64px] left-0 right-0 bg-okx-bg-primary border-b border-okx-border-primary shadow-lg z-40">
+          <div className="flex flex-col py-2 px-4">
+            {NAV_ITEMS.map(({ href, key }) => {
+              const isActive = pathname === href || pathname.startsWith(href + '/');
+              return (
+                <Link
+                  key={href}
+                  href={href}
+                  onClick={() => setMobileMenuOpen(false)}
+                  className={`py-3 px-3 rounded-lg text-[14px] font-mono transition-colors ${
+                    isActive
+                      ? 'text-meme-lime font-medium bg-meme-lime/5'
+                      : 'text-okx-text-secondary hover:text-okx-text-primary hover:bg-okx-bg-hover'
+                  }`}
+                >
+                  {t(key)}
+                </Link>
+              );
+            })}
+            {/* Settings link in mobile menu */}
+            <Link
+              href="/settings"
+              onClick={() => setMobileMenuOpen(false)}
+              className={`py-3 px-3 rounded-lg text-[14px] font-mono transition-colors ${
+                pathname === '/settings'
+                  ? 'text-meme-lime font-medium bg-meme-lime/5'
+                  : 'text-okx-text-secondary hover:text-okx-text-primary hover:bg-okx-bg-hover'
+              }`}
+            >
+              {tCommon('settings')}
+            </Link>
+          </div>
+        </div>
+      )}
     </nav>
   );
 }

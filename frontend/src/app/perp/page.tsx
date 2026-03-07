@@ -120,7 +120,11 @@ function PerpContent() {
       const marketCapUsd = marketCapFloat * ETH_PRICE_USD;
       const stats = tokenStatsMap.get(token.address.toLowerCase() as Address);
       const priceChange24h = parseFloat(stats?.priceChangePercent24h || "0");
-      const volume24h = parseFloat(stats?.volume24h || "0");
+      // volume24h from matching engine is in ETH — convert to USD
+      const volumeRaw = parseFloat(stats?.volume24h || "0");
+      // Sanity check: if value looks like wei (>1e12), normalize
+      const volumeEth = volumeRaw > 1e12 ? volumeRaw / 1e18 : volumeRaw;
+      const volume24h = volumeEth * ETH_PRICE_USD;
       const hotScore = marketCapUsd * 0.5 + volume24h * 0.3 + (token.isGraduated ? 1000 : 0);
 
       return {
@@ -208,16 +212,16 @@ function PerpContent() {
 
   return (
     <div className="perp-theme min-h-[calc(100vh-64px)] bg-okx-bg-primary">
-      {/* Hero Section — 设计稿 hjfIJ: padding 24,48, border-bottom #1E2329 */}
-      <div className="border-b border-okx-border-primary px-12 py-6 space-y-6">
-        <div className="flex items-center justify-between">
+      {/* Hero Section */}
+      <div className="border-b border-okx-border-primary px-4 md:px-8 lg:px-12 py-4 md:py-6 space-y-4 md:space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="space-y-1">
-            <h1 className="text-[22px] font-bold text-okx-text-primary">{tPerp("marketTitle")}</h1>
-            <p className="text-[13px] text-okx-text-tertiary">{tPerp("marketSubtitle")}</p>
+            <h1 className="text-lg md:text-[22px] font-bold text-okx-text-primary">{tPerp("marketTitle")}</h1>
+            <p className="text-[12px] md:text-[13px] text-okx-text-tertiary">{tPerp("marketSubtitle")}</p>
           </div>
 
-          {/* Search — 设计稿: 🔍 icon left, w-280, h-40, bg #1E2329, border #2B3139, rounded-8 */}
-          <div className="flex items-center w-[280px] h-10 bg-okx-bg-card border border-okx-border-primary rounded-lg px-3.5 gap-2">
+          {/* Search */}
+          <div className="flex items-center w-full sm:w-[280px] h-10 bg-okx-bg-card border border-okx-border-primary rounded-lg px-3.5 gap-2">
             <svg className="w-4 h-4 text-okx-text-tertiary flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" /></svg>
             <input
               type="text"
@@ -229,26 +233,26 @@ function PerpContent() {
           </div>
         </div>
 
-        {/* Stats Cards — 设计稿: flex gap-16, bg #1E2329, rounded-8, padding 16,20 */}
-        <div className="flex gap-4">
+        {/* Stats Cards — responsive grid */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
           {[
             { label: tPerp("totalVolume24h"), value: formatValue(totalVolume24h), color: "text-okx-text-primary" },
             { label: tPerp("totalOI"), value: formatValue(totalMarketCap), color: "text-okx-text-primary" },
             { label: tPerp("activePairs"), value: `${activeTokens} ${tPerp("pairsUnit")}`, color: "text-okx-text-primary" },
             { label: tPerp("insuranceFund"), value: "2.00 ETH", color: "text-okx-up" },
           ].map((stat, idx) => (
-            <div key={idx} className="flex-1 bg-okx-bg-card rounded-lg py-4 px-5">
-              <div className="text-[12px] text-okx-text-tertiary mb-1.5">{stat.label}</div>
-              <div className={`text-[18px] font-bold font-mono ${stat.color}`}>{stat.value}</div>
+            <div key={idx} className="bg-okx-bg-card rounded-lg py-3 px-4 md:py-4 md:px-5">
+              <div className="text-[11px] md:text-[12px] text-okx-text-tertiary mb-1">{stat.label}</div>
+              <div className={`text-[15px] md:text-[18px] font-bold font-mono ${stat.color}`}>{stat.value}</div>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Table Section — 设计稿: padding 16,48,0,48 */}
-      <div className="px-12 pt-4">
-        {/* Category Tabs — 设计稿: gap-6, active=#F0B90B bg, rounded-6, padding 8,20, 13px */}
-        <div className="flex items-center gap-1.5 pb-3">
+      {/* Table Section */}
+      <div className="px-4 md:px-8 lg:px-12 pt-4">
+        {/* Category Tabs — horizontally scrollable on mobile */}
+        <div className="flex items-center gap-1.5 pb-3 overflow-x-auto">
           {CATEGORIES.map((cat) => (
             <button
               key={cat.key}
@@ -264,7 +268,10 @@ function PerpContent() {
           ))}
         </div>
 
-        {/* Table Header — 设计稿: bg #1E2329, rounded-t-6, padding 12,16, #5E6673 12px semibold */}
+        {/* Table — horizontally scrollable on mobile/tablet */}
+        <div className="overflow-x-auto">
+        <div className="min-w-[960px]">
+        {/* Table Header */}
         <div className="flex items-center bg-okx-bg-card rounded-t-md px-4 py-3 text-[12px] font-semibold text-okx-text-tertiary">
           <div className="w-[200px]">{tPerp("pair")}</div>
           <div className="w-[130px] text-right">{tPerp("latestPrice")}</div>
@@ -388,6 +395,8 @@ function PerpContent() {
             {searchQuery ? tPerp("noMatchingPairs") : t("market.noTokens")}
           </div>
         )}
+        </div>
+        </div>
       </div>
     </div>
   );

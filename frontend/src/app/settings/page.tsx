@@ -243,15 +243,15 @@ export default function SettingsPage() {
     <div className="min-h-screen bg-okx-bg-primary text-okx-text-primary">
       <Navbar />
 
-      <div className="max-w-[1440px] mx-auto px-8 lg:px-16 py-8">
-        <div className="flex gap-8">
+      <div className="max-w-[1440px] mx-auto px-4 md:px-8 lg:px-16 py-6 md:py-8">
+        <div className="flex flex-col md:flex-row gap-6 md:gap-8">
           {/* Left Sidebar Navigation */}
-          <div className="w-[220px] shrink-0 space-y-1">
+          <div className="w-full md:w-[220px] md:shrink-0 flex md:flex-col gap-1 overflow-x-auto md:overflow-x-visible pb-2 md:pb-0">
             {navItems.map((item) => (
               <button
                 key={item.key}
                 onClick={() => setActiveNav(item.key)}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm transition-all ${
+                className={`whitespace-nowrap md:w-full flex items-center gap-3 px-4 py-2.5 md:py-3 rounded-lg text-sm transition-all ${
                   activeNav === item.key
                     ? "bg-meme-lime/10 text-meme-lime font-bold border border-meme-lime/20"
                     : "text-okx-text-secondary hover:text-okx-text-primary hover:bg-okx-bg-hover"
@@ -264,7 +264,7 @@ export default function SettingsPage() {
           </div>
 
           {/* Main Content Area */}
-          <div className="flex-1 space-y-6">
+          <div className="flex-1 min-w-0 space-y-6">
             <div>
               <h1 className="text-2xl font-bold">
                 {navItems.find((n) => n.key === activeNav)?.label}

@@ -79,6 +79,32 @@
   --tab-border: #2B3139;
 }
 
+/* Light mode override for perp-theme — prevent dark hardcoded vars from overriding .light */
+.light .perp-theme {
+  --okx-bg-primary: #F8F9FA;
+  --okx-bg-secondary: #FFFFFF;
+  --okx-bg-card: #FFFFFF;
+  --okx-bg-hover: #F0F1F3;
+  --okx-bg-active: #E8E9EB;
+
+  --okx-border-primary: #D2D6DC;
+  --okx-border-secondary: #E2E8F0;
+  --okx-border-hover: #A0AEC0;
+
+  --okx-accent: #3182CE;
+  --input-border-focus: #3182CE;
+
+  --chart-grid: rgba(0, 0, 0, 0.08);
+  --chart-separator: #D2D6DC;
+  --chart-button-hover: #E8E9EB;
+
+  --input-bg: #FFFFFF;
+  --input-border: #D2D6DC;
+
+  --tab-active-bg: #E8E9EB;
+  --tab-border: #D2D6DC;
+}
+
 /* Light theme - Professional trading platform style (Binance/TradingView inspired) */
 .light {
   --background: #F8F9FA;

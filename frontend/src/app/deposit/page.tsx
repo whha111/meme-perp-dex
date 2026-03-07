@@ -68,10 +68,10 @@ export default function DepositPage() {
     <div className="min-h-screen bg-okx-bg-primary text-okx-text-primary">
       <Navbar />
 
-      <div className="max-w-[1440px] mx-auto px-8 lg:px-16 py-8">
-        <div className="flex gap-8 items-start">
+      <div className="max-w-[1440px] mx-auto px-4 md:px-8 lg:px-16 py-6 md:py-8">
+        <div className="flex flex-col lg:flex-row gap-6 lg:gap-8 items-start">
           {/* Left: Deposit Form */}
-          <div className="w-[560px] shrink-0 space-y-6">
+          <div className="w-full lg:w-[560px] lg:shrink-0 space-y-6">
             {/* Tab Switcher */}
             <div className="flex gap-2">
               <button
@@ -215,7 +215,7 @@ export default function DepositPage() {
           </div>
 
           {/* Right: Transaction History + Balance Summary */}
-          <div className="flex-1 space-y-5">
+          <div className="flex-1 min-w-0 space-y-5">
             {/* Header */}
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-bold">{t("txHistory")}</h3>

@@ -16,6 +16,7 @@
     "marketCap": "Market Cap",
     "volume24h": "24h Volume",
     "security": "Security",
+    "settings": "Settings",
     "copied": "Copied",
     "copyFailed": "Copy failed",
     "addressUnknown": "Address unknown",

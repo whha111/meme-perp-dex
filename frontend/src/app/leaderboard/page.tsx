@@ -98,7 +98,7 @@ export default function LeaderboardPage() {
       <Navbar />
 
       {/* Hero Section */}
-      <div className="w-full bg-gradient-to-b from-meme-darker to-okx-bg-primary py-10 px-8 lg:px-16">
+      <div className="w-full bg-gradient-to-b from-meme-darker to-okx-bg-primary py-8 md:py-10 px-4 md:px-8 lg:px-16">
         <div className="max-w-[1440px] mx-auto">
           <div className="flex items-center gap-4 mb-4">
             <h1 className="text-3xl font-extrabold">{t("title")}</h1>
@@ -117,7 +117,7 @@ export default function LeaderboardPage() {
           </p>
 
           {/* Tabs */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 overflow-x-auto pb-1">
             {tabs.map((tab) => (
               <button
                 key={tab.key}
@@ -135,17 +135,17 @@ export default function LeaderboardPage() {
         </div>
       </div>
 
-      {/* Podium (TOP 3) */}
-      <div className="max-w-[1440px] mx-auto px-8 lg:px-16 py-8">
-        <div className="flex justify-center items-end gap-6">
-          {/* 2nd Place */}
+      {/* Podium (TOP 3) — responsive: stack on mobile, row on desktop */}
+      <div className="max-w-[1440px] mx-auto px-4 md:px-8 lg:px-16 py-6 md:py-8">
+        <div className="flex flex-col md:flex-row justify-center items-center md:items-end gap-4 md:gap-6">
+          {/* 2nd Place (shown first on mobile for natural 1-2-3 reading via order) */}
           <div
-            className={`flex flex-col items-center gap-3 rounded-2xl p-6 w-[280px] bg-okx-bg-card border ${podiumColors[1].border}`}
+            className={`order-2 md:order-1 flex flex-col items-center gap-3 rounded-2xl p-5 md:p-6 w-full max-w-[320px] md:w-[280px] bg-okx-bg-card border ${podiumColors[1].border}`}
           >
-            <span className={`text-3xl font-black ${podiumColors[1].text}`}>{podiumColors[1].rank}</span>
+            <span className={`text-2xl md:text-3xl font-black ${podiumColors[1].text}`}>{podiumColors[1].rank}</span>
             <span className="font-mono text-sm">{entries[1]?.address}</span>
             <div className="text-center">
-              <div className="text-meme-lime font-mono font-bold text-lg">{entries[1]?.pnl}</div>
+              <div className="text-meme-lime font-mono font-bold text-base md:text-lg">{entries[1]?.pnl}</div>
               <div className="text-okx-text-secondary text-sm">ROE {entries[1]?.roe}</div>
             </div>
             <span className={`text-sm font-semibold ${podiumColors[1].text}`}>
@@ -155,12 +155,12 @@ export default function LeaderboardPage() {
 
           {/* 1st Place */}
           <div
-            className={`flex flex-col items-center gap-3 rounded-2xl p-8 w-[320px] bg-okx-bg-card border-2 ${podiumColors[0].border}`}
+            className={`order-1 md:order-2 flex flex-col items-center gap-3 rounded-2xl p-6 md:p-8 w-full max-w-[320px] md:w-[320px] bg-okx-bg-card border-2 ${podiumColors[0].border}`}
           >
-            <span className={`text-4xl font-black ${podiumColors[0].text}`}>{podiumColors[0].rank}</span>
+            <span className={`text-3xl md:text-4xl font-black ${podiumColors[0].text}`}>{podiumColors[0].rank}</span>
             <span className="font-mono text-sm font-semibold">{entries[0]?.address}</span>
             <div className="text-center">
-              <div className="text-meme-lime font-mono font-bold text-xl">{entries[0]?.pnl}</div>
+              <div className="text-meme-lime font-mono font-bold text-lg md:text-xl">{entries[0]?.pnl}</div>
               <div className="text-okx-text-secondary text-sm">ROE {entries[0]?.roe}</div>
             </div>
             <span className={`text-sm font-bold ${podiumColors[0].text}`}>
@@ -170,12 +170,12 @@ export default function LeaderboardPage() {
 
           {/* 3rd Place */}
           <div
-            className={`flex flex-col items-center gap-3 rounded-2xl p-6 w-[280px] bg-okx-bg-card border ${podiumColors[2].border}`}
+            className={`order-3 flex flex-col items-center gap-3 rounded-2xl p-5 md:p-6 w-full max-w-[320px] md:w-[280px] bg-okx-bg-card border ${podiumColors[2].border}`}
           >
-            <span className={`text-3xl font-black ${podiumColors[2].text}`}>{podiumColors[2].rank}</span>
+            <span className={`text-2xl md:text-3xl font-black ${podiumColors[2].text}`}>{podiumColors[2].rank}</span>
             <span className="font-mono text-sm">{entries[2]?.address}</span>
             <div className="text-center">
-              <div className="text-meme-lime font-mono font-bold text-lg">{entries[2]?.pnl}</div>
+              <div className="text-meme-lime font-mono font-bold text-base md:text-lg">{entries[2]?.pnl}</div>
               <div className="text-okx-text-secondary text-sm">ROE {entries[2]?.roe}</div>
             </div>
             <span className={`text-sm font-semibold ${podiumColors[2].text}`}>
@@ -186,7 +186,8 @@ export default function LeaderboardPage() {
       </div>
 
       {/* Ranking Table */}
-      <div className="max-w-[1440px] mx-auto px-8 lg:px-16 pb-12">
+      <div className="max-w-[1440px] mx-auto px-4 md:px-8 lg:px-16 pb-12 overflow-x-auto">
+        <div className="min-w-[640px]">
         {/* Table Header */}
         <div className="grid grid-cols-6 bg-meme-darker rounded-lg px-4 py-3 text-xs font-semibold text-okx-text-secondary">
           <span>{t("rank")}</span>
@@ -228,6 +229,7 @@ export default function LeaderboardPage() {
             <span className="font-mono text-sm text-okx-text-tertiary text-right">{currentUser.reward}</span>
           </div>
         )}
+        </div>{/* close min-w-[640px] */}
       </div>
     </div>
   );

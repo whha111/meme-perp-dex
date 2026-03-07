@@ -17,6 +17,7 @@
     "marketCap": "市值",
     "volume24h": "24h成交",
     "security": "安全",
+    "settings": "设置",
     "copied": "已复制",
     "copyFailed": "复制失败",
     "addressUnknown": "合约地址未知",

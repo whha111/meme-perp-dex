@@ -16,6 +16,7 @@
     "marketCap": "시가총액",
     "volume24h": "24시간 거래량",
     "security": "보안",
+    "settings": "설정",
     "copied": "복사됨",
     "copyFailed": "복사 실패",
     "addressUnknown": "주소 알 수 없음",
