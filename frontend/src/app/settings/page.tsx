@@ -118,10 +118,38 @@ export default function SettingsPage() {
     { key: "appearance" as NavKey, label: t("navAppearance") },
   ], [t]);
 
-  const mockApiKeys = useMemo(() => [
-    { name: "Trading Bot v1", key: "pk_live_8x...4f2a", permissions: [t("permRead"), t("permTrade")], created: "2024-01-15" },
-    { name: "Portfolio Tracker", key: "pk_live_3m...7c8d", permissions: [t("permReadOnly")], created: "2024-02-20" },
-  ], [t]);
+  // User-generated API keys (persisted in localStorage)
+  const [apiKeys, setApiKeys] = useState<{ name: string; key: string; permissions: string[]; created: string }[]>([]);
+
+  // Load API keys from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("user_api_keys");
+      if (saved) setApiKeys(JSON.parse(saved));
+    } catch { /* ignore */ }
+  }, []);
+
+  const generateApiKey = () => {
+    const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+    const rand = (len: number) => Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+    const newKey = {
+      name: `API Key ${apiKeys.length + 1}`,
+      key: `pk_live_${rand(32)}`,
+      permissions: [t("permRead"), t("permTrade")],
+      created: new Date().toISOString().split("T")[0],
+    };
+    const updated = [...apiKeys, newKey];
+    setApiKeys(updated);
+    localStorage.setItem("user_api_keys", JSON.stringify(updated));
+    showToast(t("apiKeyCreated"), "success");
+  };
+
+  const deleteApiKey = (idx: number) => {
+    const updated = apiKeys.filter((_, i) => i !== idx);
+    setApiKeys(updated);
+    localStorage.setItem("user_api_keys", JSON.stringify(updated));
+    showToast(t("apiKeyDeleted"), "success");
+  };
 
   const mockSessions = useMemo(() => [
     { device: "Chrome · macOS", location: "Shanghai, CN", timeKey: "current", isCurrent: true },
@@ -354,27 +382,41 @@ export default function SettingsPage() {
                       <p className="text-xs text-okx-text-tertiary mt-1">{t("apiKeyManagementDesc")}</p>
                     </div>
                     <button
-                      onClick={() => showToast(t("featureComingSoon"), "info")}
+                      onClick={generateApiKey}
                       className="px-4 py-2 rounded-lg text-xs font-bold bg-meme-lime text-black hover:opacity-90 transition-opacity"
                     >
                       + {t("createApiKey")}
                     </button>
                   </div>
 
-                  {mockApiKeys.map((api, idx) => (
-                    <div key={idx} className={`flex items-center justify-between px-6 py-4 ${idx < mockApiKeys.length - 1 ? "border-b border-okx-border-primary" : ""}`}>
-                      <div>
-                        <div className="text-sm font-medium">{api.name}</div>
-                        <div className="text-xs text-okx-text-tertiary font-mono">{api.key}</div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        {api.permissions.map((perm) => (
-                          <span key={perm} className="meme-badge meme-badge-lime">{perm}</span>
-                        ))}
-                        <button className="text-xs text-okx-down hover:opacity-80">{t("delete")}</button>
-                      </div>
+                  {apiKeys.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center px-6 py-10 text-okx-text-tertiary">
+                      <IconKey className="w-8 h-8 mb-3 opacity-40" />
+                      <p className="text-sm">{t("noApiKeys")}</p>
+                      <p className="text-xs mt-1 mb-4">{t("noApiKeysDesc")}</p>
+                      <button
+                        onClick={generateApiKey}
+                        className="px-5 py-2 rounded-lg text-xs font-bold bg-meme-lime text-black hover:opacity-90 transition-opacity"
+                      >
+                        + {t("createApiKey")}
+                      </button>
                     </div>
-                  ))}
+                  ) : (
+                    apiKeys.map((api, idx) => (
+                      <div key={idx} className={`flex items-center justify-between px-6 py-4 ${idx < apiKeys.length - 1 ? "border-b border-okx-border-primary" : ""}`}>
+                        <div>
+                          <div className="text-sm font-medium">{api.name}</div>
+                          <div className="text-xs text-okx-text-tertiary font-mono">{api.key}</div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          {api.permissions.map((perm) => (
+                            <span key={perm} className="meme-badge meme-badge-lime">{perm}</span>
+                          ))}
+                          <button onClick={() => deleteApiKey(idx)} className="text-xs text-okx-down hover:opacity-80">{t("delete")}</button>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
 
                 {/* Login Activity */}
@@ -518,36 +560,44 @@ export default function SettingsPage() {
                       <p className="text-xs text-okx-text-tertiary mt-1">{t("apiKeyManagementDesc")}</p>
                     </div>
                     <button
-                      onClick={() => showToast(t("featureComingSoon"), "info")}
+                      onClick={generateApiKey}
                       className="px-4 py-2 rounded-lg text-xs font-bold bg-meme-lime text-black hover:opacity-90 transition-opacity"
                     >
                       + {t("createApiKey")}
                     </button>
                   </div>
 
-                  {mockApiKeys.map((api, idx) => (
-                    <div key={idx} className={`flex items-center justify-between px-6 py-4 ${idx < mockApiKeys.length - 1 ? "border-b border-okx-border-primary" : ""}`}>
-                      <div>
-                        <div className="text-sm font-medium flex items-center gap-2">
-                          {api.name}
-                          <span className="text-xs text-okx-text-tertiary">{t("created")}: {api.created}</span>
-                        </div>
-                        <div className="text-xs text-okx-text-tertiary font-mono mt-1">{api.key}</div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        {api.permissions.map((perm) => (
-                          <span key={perm} className="meme-badge meme-badge-lime">{perm}</span>
-                        ))}
-                        <button
-                          onClick={() => showToast(t("featureComingSoon"), "info")}
-                          className="px-3 py-1.5 rounded-lg text-xs bg-okx-bg-hover border border-okx-border-primary text-okx-text-secondary hover:text-okx-text-primary transition-colors"
-                        >
-                          {t("configure")}
-                        </button>
-                        <button className="text-xs text-okx-down hover:opacity-80">{t("delete")}</button>
-                      </div>
+                  {apiKeys.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center px-6 py-10 text-okx-text-tertiary">
+                      <IconKey className="w-8 h-8 mb-3 opacity-40" />
+                      <p className="text-sm">{t("noApiKeys")}</p>
+                      <p className="text-xs mt-1 mb-4">{t("noApiKeysDesc")}</p>
+                      <button
+                        onClick={generateApiKey}
+                        className="px-5 py-2 rounded-lg text-xs font-bold bg-meme-lime text-black hover:opacity-90 transition-opacity"
+                      >
+                        + {t("createApiKey")}
+                      </button>
                     </div>
-                  ))}
+                  ) : (
+                    apiKeys.map((api, idx) => (
+                      <div key={idx} className={`flex items-center justify-between px-6 py-4 ${idx < apiKeys.length - 1 ? "border-b border-okx-border-primary" : ""}`}>
+                        <div>
+                          <div className="text-sm font-medium flex items-center gap-2">
+                            {api.name}
+                            <span className="text-xs text-okx-text-tertiary">{t("created")}: {api.created}</span>
+                          </div>
+                          <div className="text-xs text-okx-text-tertiary font-mono mt-1">{api.key}</div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          {api.permissions.map((perm) => (
+                            <span key={perm} className="meme-badge meme-badge-lime">{perm}</span>
+                          ))}
+                          <button onClick={() => deleteApiKey(idx)} className="text-xs text-okx-down hover:opacity-80">{t("delete")}</button>
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
 
                 <div className="meme-card p-6 space-y-4">
