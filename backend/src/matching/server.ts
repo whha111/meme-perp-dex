@@ -12088,11 +12088,19 @@ function broadcastMarketData(token: Address): void {
   const depth = orderBook.getDepth(20);
   const trades = engine.getRecentTrades(normalizedToken, 100);
 
-  // ✅ 价格回退链: 永续成交价 → 现货价格 (TokenFactory AMM)
+  // ✅ 价格回退链: 永续成交价 → 现货价格 (TokenFactory AMM) → cachedSpotStats
   // 当永续订单簿没有成交时，使用现货价格作为标记价格
   let currentPrice = orderBook.getCurrentPrice();
   if (currentPrice <= 0n) {
     currentPrice = engine.getSpotPrice(normalizedToken);
+  }
+  // ✅ 最终回退: 从 cachedSpotStats 获取价格 (避免 currentPrice=0 导致 -100%)
+  if (currentPrice <= 0n) {
+    const spotFallback = cachedSpotStats.get(normalizedToken);
+    if (spotFallback) {
+      const spotPrice = parseFloat(spotFallback.high24h || spotFallback.open24h || "0");
+      if (spotPrice > 0) currentPrice = BigInt(Math.floor(spotPrice * 1e18));
+    }
   }
 
   // 计算24小时统计 (永续交易)
@@ -12391,6 +12399,14 @@ function broadcastAllMarketStats(): void {
     let currentPrice = orderBook.getCurrentPrice();
     if (currentPrice <= 0n) {
       currentPrice = engine.getSpotPrice(normalizedToken);
+    }
+    // ✅ 最终回退: 从 cachedSpotStats 获取价格 (避免 currentPrice=0 导致 -100%)
+    if (currentPrice <= 0n) {
+      const spotFallback = cachedSpotStats.get(normalizedToken);
+      if (spotFallback) {
+        const spotPrice = parseFloat(spotFallback.high24h || spotFallback.open24h || "0");
+        if (spotPrice > 0) currentPrice = BigInt(Math.floor(spotPrice * 1e18));
+      }
     }
 
     const trades24h = trades.filter(t => t.timestamp >= oneDayAgo);
@@ -12909,6 +12925,14 @@ async function handleWSMessage(ws: WebSocket, message: string): Promise<void> {
         const trades = engine.getRecentTrades(normalizedToken, 100);
         let currentPrice = orderBook.getCurrentPrice();
         if (currentPrice <= 0n) currentPrice = engine.getSpotPrice(normalizedToken);
+        // ✅ 最终回退: 从 cachedSpotStats 获取价格 (避免 currentPrice=0 导致 -100%)
+        if (currentPrice <= 0n) {
+          const spotFallback = cachedSpotStats.get(normalizedToken);
+          if (spotFallback) {
+            const spotPrice = parseFloat(spotFallback.high24h || spotFallback.open24h || "0");
+            if (spotPrice > 0) currentPrice = BigInt(Math.floor(spotPrice * 1e18));
+          }
+        }
         const trades24h = trades.filter(t => t.timestamp >= oneDayAgo);
         let volume24h = 0n, high24h = currentPrice, low24h = currentPrice, open24h = currentPrice, trades24hCount = 0;
         if (trades24h.length > 0) {
