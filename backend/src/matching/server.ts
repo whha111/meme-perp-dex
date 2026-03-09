@@ -4456,8 +4456,11 @@ async function autoDepositIfNeeded(trader: Address, requiredAmount: bigint): Pro
   // SettlementV2 模式: 用户通过前端直接存入 WETH 到 SettlementV2 合约
   // 引擎不再代用户执行 V1 auto-deposit (避免双重存入)
   if (SETTLEMENT_V2_ADDRESS) {
-    // 仍然同步链上余额，但不自动存入
-    await syncUserBalanceFromChain(trader);
+    // ★ 测试模式跳过链上余额同步 (fake deposit 通过 mode2Adj 维护余额)
+    // 避免每次下单都做 4 次 RPC 调用到 BSC Testnet (5-30s延迟)
+    if (!ALLOW_FAKE_DEPOSIT) {
+      await syncUserBalanceFromChain(trader);
+    }
     const balance = getUserBalance(trader);
     if (balance.availableBalance < requiredAmount) {
       throw new Error(`余额不足: 需要 ${Number(requiredAmount) / 1e18} BNB，可用 ${Number(balance.availableBalance) / 1e18} BNB。请通过 SettlementV2 合约存入 WBNB。`);
