@@ -13402,7 +13402,8 @@ async function startServer(): Promise<void> {
     const { updateKlineWithCurrentPrice } = await import("../spot/spotHistory");
 
     // 使用备用 RPC 避免限流 (publicnode 比 sepolia.base.org 限制更宽松)
-    const SYNC_RPC = process.env.SPOT_SYNC_RPC_URL || "https://bsc-dataseed.binance.org/";
+    // BUGFIX: default must match CHAIN_ID — don't hardcode mainnet when running on testnet!
+    const SYNC_RPC = process.env.SPOT_SYNC_RPC_URL || RPC_URL;
     const publicClient = createPublicClient({
       chain: activeChain,
       transport: http(SYNC_RPC),

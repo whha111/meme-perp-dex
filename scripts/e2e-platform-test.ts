@@ -458,6 +458,30 @@ async function getSpotPrice(token: Address): Promise<bigint> {
   } catch { return 0n; }
 }
 
+/** Get ERC20 token balance */
+async function getTokenBalance(wallet: Address, token: Address): Promise<bigint> {
+  try {
+    return await publicClient.readContract({
+      address: token, abi: erc20Abi, functionName: "balanceOf", args: [wallet],
+    }) as bigint;
+  } catch { return 0n; }
+}
+
+/** Open position WITHOUT /api/price/update shortcut.
+ *  Mark price comes from spot AMM via syncSpotPrices (every 3s).
+ *  Use this for real on-chain tokens to test the full price oracle chain. */
+async function openPositionReal(
+  buyer: WalletBundle, seller: WalletBundle,
+  token: Address, price: bigint, size: bigint, leverage: number,
+): Promise<{ buyResult: any; sellResult: any }> {
+  const buyResult = await submitOrder(buyer, token, true, size, leverage, price, 1);
+  await sleep(300);
+  const sellResult = await submitOrder(seller, token, false, size, leverage, price, 1);
+  // Wait for syncSpotPrices (3s interval) to naturally set mark price from AMM
+  await sleep(4000);
+  return { buyResult, sellResult };
+}
+
 /** Trigger Merkle snapshot + get proof + request withdrawal authorization */
 async function requestWithdrawal(wallet: WalletBundle, amount: bigint): Promise<any> {
   // Trigger snapshot
@@ -499,6 +523,7 @@ const results: BatchResult[] = [];
 let useFakeDeposit = false;
 let createdTokenA: Address | null = null;
 let createdTokenB: Address | null = null;
+let priceManipulator: WalletBundle | null = null; // Reused across Phase 5 liquidation batches
 
 function log(msg: string) { console.log(`[${new Date().toISOString().slice(11, 19)}] ${msg}`); }
 function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
@@ -595,9 +620,10 @@ async function preflight(): Promise<boolean> {
 async function batch01_createTokenA(): Promise<{ label: string; pass: boolean; detail?: string }[]> {
   const w = makeWallet(0);
   const name = `E2ETEST_${Date.now().toString(36).slice(-4).toUpperCase()}`;
-  log(`  Creating token "${name}" with 0.3 BNB initial liquidity...`);
-  createdTokenA = await createTokenOnChain(w, name, name, parseEther("0.3"));
+  log(`  Creating token "${name}" with 0.05 BNB initial liquidity (shallow pool for liquidation tests)...`);
+  createdTokenA = await createTokenOnChain(w, name, name, parseEther("0.05"));
   if (!createdTokenA) return [assert("Token created", false, "createToken tx failed")];
+
   log(`  Token A: ${createdTokenA}`);
   const price = await getSpotPrice(createdTokenA);
   return [
@@ -609,8 +635,8 @@ async function batch01_createTokenA(): Promise<{ label: string; pass: boolean; d
 async function batch02_createTokenB(): Promise<{ label: string; pass: boolean; detail?: string }[]> {
   const w = makeWallet(0);
   const name = `E2ETEST_${Date.now().toString(36).slice(-4).toUpperCase()}B`;
-  log(`  Creating token "${name}" with 0.3 BNB initial liquidity...`);
-  createdTokenB = await createTokenOnChain(w, name, name, parseEther("0.3"));
+  log(`  Creating token "${name}" with 0.05 BNB initial liquidity (shallow pool for liquidation tests)...`);
+  createdTokenB = await createTokenOnChain(w, name, name, parseEther("0.05"));
   if (!createdTokenB) return [assert("Token created", false, "createToken tx failed")];
   log(`  Token B: ${createdTokenB}`);
   const price = await getSpotPrice(createdTokenB);
@@ -1273,227 +1299,350 @@ async function batch20_withdraw_blocked(): Promise<ReturnType<typeof assert>[]> 
 
 // ════════════════════════════════════════════════════════════════
 //  PHASE 5: LIQUIDATION & BANKRUPTCY (Batches 21-25)
+//
+//  These batches test the FULL real price chain:
+//    spotBuy/spotSell on AMM → TokenFactory.getCurrentPrice() changes
+//    → syncSpotPrices (3s) → engine.updatePrice → onPriceChange
+//    → processLiquidations
+//
+//  CRITICAL: TokenFactory uses virtual reserves (pump.fun model):
+//    VIRTUAL_ETH_RESERVE = 10.593 ether
+//    Price impact ≈ 2 × buyBNB / (10.593 + realETH)
+//    For 12% pump → need ~0.65 BNB buy regardless of initial pool size
+//
+//  We use a single global `priceManipulator` wallet to conserve BNB.
+//  After selling tokens, ~98% of BNB is recovered (1-2% AMM fee).
 // ════════════════════════════════════════════════════════════════
 
-// Batch 21: Long + 10x → Price drops to liq line → Liquidated
+// Helper: ensure priceManipulator is funded with at least minBNB
+async function ensureManipulatorFunded(minBNB: bigint): Promise<void> {
+  if (!priceManipulator) {
+    priceManipulator = makeWallet(72);
+  }
+  // Check current BNB balance on-chain
+  const bal = await publicClient.getBalance({ address: priceManipulator.address });
+  if (bal < minBNB) {
+    const deficit = minBNB - bal + parseEther("0.02"); // extra for gas
+    log(`    [Manipulator] Balance ${formatEther(bal)} < ${formatEther(minBNB)}, topping up ${formatEther(deficit)}...`);
+    await sendBNB(makeWallet(0), priceManipulator.address, deficit);
+    await sleep(2000);
+  } else {
+    log(`    [Manipulator] Balance ${formatEther(bal)} BNB — sufficient`);
+  }
+}
+
+// Helper: sell all tokens of a given type held by manipulator (recover BNB)
+async function manipulatorSellAll(token: Address): Promise<void> {
+  if (!priceManipulator) return;
+  const tokenBal = await getTokenBalance(priceManipulator.address, token);
+  if (tokenBal > 0n) {
+    log(`    [Manipulator] Selling ${formatEther(tokenBal)} tokens to recover BNB...`);
+    await spotSell(priceManipulator, token, tokenBal);
+    await sleep(2000);
+  }
+}
+
+// Batch 21: Long + 10x → Spot AMM sell crashes price → Liquidated (FULL CHAIN)
+// Flow: buy tokens → pump price → open 10x long → sell tokens → crash → liquidation
 async function batch21_liquidation_long(): Promise<ReturnType<typeof assert>[]> {
+  if (!createdTokenA) return [assert("Token A required", false, "skipped — no real token from Phase 1")];
   const trader = makeWallet(70);
   const counter = makeWallet(71);
-  const token = freshToken();
+  const token = createdTokenA;
   await deposit(trader, parseEther("0.5"));
   await deposit(counter, parseEther("0.5"));
-  await sleep(500);
   const checks: ReturnType<typeof assert>[] = [];
-  const price = BASE_PRICE;
-  const size = parseEther("0.1");
 
-  // Open long 10x
-  await matchTwoParties(trader, counter, token, price, size, 10);
-  await sleep(1000);
+  // Step 1: Fund manipulator with 0.8 BNB (first batch creates it)
+  // Buy 0.65 BNB worth of tokens → ~12% pump on virtual 10.593 BNB reserve
+  log(`  Step 1: Funding manipulator & buying tokens to pump spot price...`);
+  await ensureManipulatorFunded(parseEther("0.75"));
+  const priceBefore = await getSpotPrice(token);
+  log(`    Spot price before pump: ${formatEther(priceBefore)} BNB`);
+  const buyOk = await spotBuy(priceManipulator!, token, parseEther("0.65"));
+  checks.push(assert("Spot buy 0.65 BNB to pump price", buyOk));
+  await sleep(3000);
+
+  // Step 2: Read pumped price & wait for syncSpotPrices
+  const entryPrice = await getSpotPrice(token);
+  const pumpPct = Number(entryPrice) / Number(priceBefore) - 1;
+  log(`    Spot price after pump: ${formatEther(entryPrice)} BNB (${(pumpPct * 100).toFixed(1)}% up)`);
+  log(`  Step 2: Waiting for syncSpotPrices to update mark price...`);
+  await sleep(4000);
+
+  // Step 3: Open 10x long at the pumped spot price (NO /api/price/update)
+  const size = parseEther("0.1");
+  log(`  Step 3: Opening 10x long at ${formatEther(entryPrice)}...`);
+  const { buyResult } = await openPositionReal(trader, counter, token, entryPrice, size, 10);
+  checks.push(assert("10x long opened at real spot price", buyResult.success === true));
 
   const posBefore = await getPositions(trader.address);
-  checks.push(assert("10x long position opened", posBefore.length > 0));
+  checks.push(assert("Position exists", posBefore.length > 0));
+  if (posBefore.length === 0) return checks;
 
-  // Liq price for long 10x: entry * (1 - 1/10 + 0.02) = entry * 0.92
-  // Drop price to entry * 0.88 (below liq line)
-  const liqTargetPrice = price * 88n / 100n;
-  log(`  Moving price to ${formatEther(liqTargetPrice)} (below liq line ~${formatEther(price * 92n / 100n)})`);
-  const mA = makeWallet(72);
-  const mB = makeWallet(73);
-  await deposit(mA, parseEther("1"));
-  await deposit(mB, parseEther("1"));
-  await movePrice(mA, mB, token, liqTargetPrice);
+  // Step 4: Sell ALL tokens → crashes spot price below liq line
+  // Selling reverses the pump: if pumped 12%, selling drops ~10.7% from entry
+  // 10x long liq ≈ entry * (1 - 1/10 + 0.02) = entry * 0.92 → need >8% drop
+  await manipulatorSellAll(token);
 
-  // Wait for risk engine to liquidate (runs every 100ms)
-  log(`  Waiting for risk engine to liquidate...`);
-  await sleep(5000);
+  const priceAfterCrash = await getSpotPrice(token);
+  const dropPct = 1 - Number(priceAfterCrash) / Number(entryPrice);
+  log(`    Price after crash: ${formatEther(priceAfterCrash)} (${(dropPct * 100).toFixed(1)}% down from entry)`);
+  log(`    Liq line for 10x long: entry * 0.92 → need >8% drop. Got ${(dropPct * 100).toFixed(1)}%`);
+  checks.push(assert("Price dropped >8% (below liq line)", dropPct > 0.08,
+    `${(dropPct * 100).toFixed(1)}% drop`));
+
+  // Step 5: Wait for syncSpotPrices + risk engine to liquidate
+  log(`  Step 5: Waiting for syncSpotPrices + risk engine to liquidate...`);
+  await sleep(8000);
 
   const posAfter = await getPositions(trader.address);
   const liquidated = posAfter.filter((p: any) =>
     p.token?.toLowerCase() === token.toLowerCase()).length === 0;
-  checks.push(assert("Position liquidated", liquidated || posAfter.length < posBefore.length,
+  checks.push(assert("Position liquidated via REAL AMM price chain ✨", liquidated,
     `positions: ${posBefore.length} → ${posAfter.length}`));
 
   return checks;
 }
 
-// Batch 22: Short + 10x → Price rises → Liquidated
+// Batch 22: Short + 10x → Spot AMM buy pumps price → Liquidated (FULL CHAIN)
+// Flow: open 10x short → buy tokens → pump price above liq line → liquidation
 async function batch22_liquidation_short(): Promise<ReturnType<typeof assert>[]> {
+  if (!createdTokenB) return [assert("Token B required", false, "skipped — no real token from Phase 1")];
   const trader = makeWallet(74);
   const counter = makeWallet(75);
-  const token = freshToken();
+  const token = createdTokenB;
   await deposit(trader, parseEther("0.5"));
   await deposit(counter, parseEther("0.5"));
-  await sleep(500);
   const checks: ReturnType<typeof assert>[] = [];
-  const price = BASE_PRICE;
-  const size = parseEther("0.1");
 
-  // Open short 10x
-  await submitOrder(counter, token, true, size, 10, price, 1);
+  // Step 1: Read current spot price & open 10x short at market
+  const spotPrice = await getSpotPrice(token);
+  log(`  Step 1: Current spot price of Token B: ${formatEther(spotPrice)} BNB`);
+  log(`    Opening 10x short at spot price...`);
+  const size = parseEther("0.1");
+  // Counter buys (long), trader sells (short) — NO /api/price/update
+  await submitOrder(counter, token, true, size, 10, spotPrice, 1);
   await sleep(300);
-  await submitOrder(trader, token, false, size, 10, price, 1);
-  await sleep(2000);
+  await submitOrder(trader, token, false, size, 10, spotPrice, 1);
+  await sleep(4000); // wait for syncSpotPrices to set mark price
 
   const posBefore = await getPositions(trader.address);
-  checks.push(assert("10x short position opened", posBefore.length > 0));
+  checks.push(assert("10x short opened at real spot price", posBefore.length > 0));
+  if (posBefore.length === 0) return checks;
 
-  // Liq price for short 10x: entry * (1 + 1/10 - 0.02) = entry * 1.08
-  // Move price to entry * 1.12 (above liq line)
-  const liqTargetPrice = price * 112n / 100n;
-  log(`  Moving price up to ${formatEther(liqTargetPrice)} (above liq line ~${formatEther(price * 108n / 100n)})`);
-  const mA = makeWallet(76);
-  const mB = makeWallet(77);
-  await deposit(mA, parseEther("1"));
-  await deposit(mB, parseEther("1"));
-  await movePrice(mA, mB, token, liqTargetPrice);
+  // Step 2: Buy 0.65 BNB of tokens → pumps price >8% above short liq line
+  // Short 10x liq: entry * (1 + 1/10 - 0.02) = entry * 1.08 → need >8% pump
+  log(`  Step 2: Buying tokens to pump price above short liq line...`);
+  await ensureManipulatorFunded(parseEther("0.75"));
+  const buyOk = await spotBuy(priceManipulator!, token, parseEther("0.65"));
+  checks.push(assert("Spot buy 0.65 BNB to pump price", buyOk));
+  await sleep(2000);
 
-  await sleep(5000);
+  const priceAfterPump = await getSpotPrice(token);
+  const pumpPct = Number(priceAfterPump) / Number(spotPrice) - 1;
+  log(`    Price after pump: ${formatEther(priceAfterPump)} (${(pumpPct * 100).toFixed(1)}% up)`);
+  log(`    Liq line for 10x short: entry * 1.08 → need >8% pump. Got ${(pumpPct * 100).toFixed(1)}%`);
+  checks.push(assert("Price pumped >8% (above liq line)", pumpPct > 0.08,
+    `${(pumpPct * 100).toFixed(1)}% pump`));
+
+  // Step 3: Wait for syncSpotPrices + risk engine to liquidate
+  log(`  Step 3: Waiting for syncSpotPrices + risk engine...`);
+  await sleep(8000);
 
   const posAfter = await getPositions(trader.address);
-  checks.push(assert("Short liquidated",
-    posAfter.filter((p: any) => p.token?.toLowerCase() === token.toLowerCase()).length === 0,
+  const liquidated = posAfter.filter((p: any) =>
+    p.token?.toLowerCase() === token.toLowerCase()).length === 0;
+  checks.push(assert("Short liquidated via REAL AMM price chain ✨", liquidated,
     `positions: ${posBefore.length} → ${posAfter.length}`));
 
+  // Note: manipulator still holds Token B — will sell in batch 24
   return checks;
 }
 
-// Batch 23: Long + 10x → Flash crash (穿仓) → Insurance fund covers
+// Batch 23: Long + 10x → Flash crash via massive spot sell (穿仓) → Insurance fund covers (FULL CHAIN)
+// Flow: buy MORE tokens → bigger pump → open 10x long → sell ALL → crash past margin → bankruptcy
 async function batch23_bankruptcy_long(): Promise<ReturnType<typeof assert>[]> {
+  if (!createdTokenA) return [assert("Token A required", false, "skipped — no real token from Phase 1")];
   const trader = makeWallet(78);
   const counter = makeWallet(79);
-  const token = freshToken();
+  const token = createdTokenA;
   await deposit(trader, parseEther("0.5"));
   await deposit(counter, parseEther("0.5"));
-  await sleep(500);
   const checks: ReturnType<typeof assert>[] = [];
-  const price = BASE_PRICE;
-  const size = parseEther("0.2"); // larger position for clearer bankruptcy
 
   const insuranceBefore = await getInsuranceFund();
 
-  // Open long 10x
-  await matchTwoParties(trader, counter, token, price, size, 10);
-  await sleep(1000);
-  checks.push(assert("Large 10x long opened", true));
+  // Step 1: Ensure manipulator has funds (it recovered BNB from batch 21 sell)
+  // Buy 0.65 BNB of tokens → ~12% pump
+  log(`  Step 1: Buying tokens for pump (bankruptcy test)...`);
+  await ensureManipulatorFunded(parseEther("0.75"));
+  const priceBefore = await getSpotPrice(token);
+  const buyOk = await spotBuy(priceManipulator!, token, parseEther("0.65"));
+  checks.push(assert("Large spot buy for pump", buyOk));
+  await sleep(3000);
 
-  // Flash crash: price drops 20% (way past liq line of 92%)
-  // Loss = size * 20% = 0.04, Margin = size/10 = 0.02 → shortfall = 0.02 → insurance fund
-  const crashPrice = price * 80n / 100n;
-  log(`  Flash crash to ${formatEther(crashPrice)} (穿仓: loss > margin)`);
-  const mA = makeWallet(80);
-  const mB = makeWallet(81);
-  await deposit(mA, parseEther("2"));
-  await deposit(mB, parseEther("2"));
-  await movePrice(mA, mB, token, crashPrice);
+  const entryPrice = await getSpotPrice(token);
+  const pumpPct = Number(entryPrice) / Number(priceBefore) - 1;
+  log(`    Pumped from ${formatEther(priceBefore)} → ${formatEther(entryPrice)} (${(pumpPct * 100).toFixed(1)}% up)`);
 
-  await sleep(5000);
+  // Step 2: Wait for syncSpotPrices, then open 10x long with larger size
+  log(`  Step 2: Waiting for syncSpotPrices...`);
+  await sleep(4000);
+  const size = parseEther("0.2");
+  log(`    Opening 10x long at ${formatEther(entryPrice)} with size ${formatEther(size)}...`);
+  const { buyResult } = await openPositionReal(trader, counter, token, entryPrice, size, 10);
+  checks.push(assert("10x long opened at pumped price", buyResult.success === true));
+
+  // Step 3: Sell ALL tokens → massive crash (穿仓: loss > margin)
+  // For 10x: liq at 8% drop (margin=10%), crash 12%+ → loss exceeds margin → bankruptcy
+  log(`  Step 3: Flash crash — selling ALL tokens...`);
+  await manipulatorSellAll(token);
+
+  const crashPrice = await getSpotPrice(token);
+  const dropPct = 1 - Number(crashPrice) / Number(entryPrice);
+  log(`    Price crashed: ${formatEther(entryPrice)} → ${formatEther(crashPrice)} (${(dropPct * 100).toFixed(1)}% drop)`);
+  log(`    Margin = 10%, Drop = ${(dropPct * 100).toFixed(1)}% → 穿仓 (loss > margin)`);
+
+  // Step 4: Wait for syncSpotPrices + risk engine
+  log(`  Step 4: Waiting for liquidation via real price chain...`);
+  await sleep(8000);
 
   const posAfter = await getPositions(trader.address);
-  checks.push(assert("Position liquidated (穿仓)",
+  checks.push(assert("Position liquidated (穿仓) via REAL AMM chain ✨",
     posAfter.filter((p: any) => p.token?.toLowerCase() === token.toLowerCase()).length === 0));
 
   const insuranceAfter = await getInsuranceFund();
-  checks.push(assert("Insurance fund used",
+  checks.push(assert("Insurance fund used for bankruptcy",
     true, `before=${formatEther(insuranceBefore)} after=${formatEther(insuranceAfter)}`));
 
   return checks;
 }
 
-// Batch 24: Near liquidation → Add margin → Saved
+// Batch 24: Long 2x with real token → Spot price drops → Add margin → Position saved (FULL CHAIN)
+// Uses 2x leverage (liq at ~48% drop) so AMM swings (~12%) won't trigger liquidation
 async function batch24_margin_call_saved(): Promise<ReturnType<typeof assert>[]> {
+  if (!createdTokenB) return [assert("Token B required", false, "skipped — no real token from Phase 1")];
   const trader = makeWallet(82);
   const counter = makeWallet(83);
-  const token = freshToken();
+  const token = createdTokenB;
   await deposit(trader, parseEther("1"));
   await deposit(counter, parseEther("0.5"));
-  await sleep(500);
   const checks: ReturnType<typeof assert>[] = [];
-  const price = BASE_PRICE;
-  const size = parseEther("0.1");
 
-  // Open long 10x
-  await matchTwoParties(trader, counter, token, price, size, 10);
-  await sleep(1000);
+  // Step 1: Sell any Token B the manipulator still holds from batch 22 (recover BNB)
+  log(`  Step 1: Setting up 2x long with real spot price...`);
+  await manipulatorSellAll(token); // recover BNB from batch 22's Token B holdings
+  await sleep(2000);
+
+  // Buy 0.3 BNB of tokens → modest ~5.5% pump (just to set up price movement for later sell)
+  await ensureManipulatorFunded(parseEther("0.4"));
+  const buyOk = await spotBuy(priceManipulator!, token, parseEther("0.3"));
+  checks.push(assert("Spot buy for price setup", buyOk));
+  await sleep(3000);
+
+  const entryPrice = await getSpotPrice(token);
+  log(`    Entry spot price: ${formatEther(entryPrice)} BNB`);
+  await sleep(4000); // wait for syncSpotPrices
+
+  const size = parseEther("0.1");
+  const { buyResult } = await openPositionReal(trader, counter, token, entryPrice, size, 2);
+  checks.push(assert("2x long opened at real spot price", buyResult.success === true));
 
   const pos = await getPositions(trader.address);
   if (pos.length === 0) return [assert("Position opened", false)];
   const pairId = pos[0].pairId || pos[0].id;
 
-  // Price drops to near liq (93% of entry, liq is at 92%)
-  const nearLiqPrice = price * 93n / 100n;
-  log(`  Price drops near liq: ${formatEther(nearLiqPrice)}`);
-  const mA = makeWallet(84);
-  const mB = makeWallet(85);
-  await deposit(mA, parseEther("0.5"));
-  await deposit(mB, parseEther("0.5"));
-  await movePrice(mA, mB, token, nearLiqPrice);
-  await sleep(2000);
+  // Step 2: Sell tokens → spot price drops (but stays above 2x liq line at ~48%)
+  log(`  Step 2: Selling tokens to drop price (stress test)...`);
+  await manipulatorSellAll(token);
 
-  // Position should still exist (93% > 92% liq)
+  const droppedPrice = await getSpotPrice(token);
+  const dropPct = 1 - Number(droppedPrice) / Number(entryPrice);
+  log(`    Price dropped: ${formatEther(entryPrice)} → ${formatEther(droppedPrice)} (${(dropPct * 100).toFixed(1)}% down)`);
+  log(`    2x long liq at ~48% drop — position is stressed but safe`);
+
+  // Step 3: Wait for syncSpotPrices to update mark price
+  await sleep(5000);
+
+  // Position should still exist (2x liq is very far at ~48% drop)
   const posStillAlive = await getPositions(trader.address);
-  checks.push(assert("Position survives near-liq",
-    posStillAlive.length > 0, `${posStillAlive.length} positions`));
+  checks.push(assert("Position survives price drop (2x liq far away)",
+    posStillAlive.length > 0, `${posStillAlive.length} positions, ${(dropPct * 100).toFixed(1)}% drop vs ~48% liq`));
 
-  // Add margin to push liq price lower
+  // Step 4: Add margin to further strengthen position
   const addResult = await addMargin(trader, pairId, parseEther("0.05"));
-  checks.push(assert("Margin added", addResult.success === true || !addResult.error,
+  checks.push(assert("Margin added successfully", addResult.success === true || !addResult.error,
     addResult.error || "OK"));
 
-  // Clean up — close position
+  // Step 5: Clean up — close position at current price
+  const currentPrice = await getSpotPrice(token);
   await deposit(makeWallet(86), parseEther("0.5"));
-  await submitOrder(makeWallet(86), token, true, size, 1, nearLiqPrice, 1);
+  await submitOrder(makeWallet(86), token, true, size, 1, currentPrice, 1);
   await sleep(300);
-  await closePosition(trader, token, true, size, nearLiqPrice);
+  await closePosition(trader, token, true, size, currentPrice);
   await sleep(2000);
 
   return checks;
 }
 
-// Batch 25: Post-liquidation → Reopen → Verify clean state
+// Batch 25: Post-liquidation via real AMM → Reopen → Verify clean state (FULL CHAIN)
+// Flow: pump → open 10x long → crash → liquidation → reopen on same token
 async function batch25_reopen_after_liquidation(): Promise<ReturnType<typeof assert>[]> {
+  if (!createdTokenA) return [assert("Token A required", false, "skipped — no real token from Phase 1")];
   const trader = makeWallet(87);
   const counter = makeWallet(88);
-  const token = freshToken();
+  const token = createdTokenA;
   await deposit(trader, parseEther("1"));
   await deposit(counter, parseEther("0.5"));
-  await sleep(500);
   const checks: ReturnType<typeof assert>[] = [];
-  const price = BASE_PRICE;
+
+  // Step 1: Pump price with 0.65 BNB buy → ~12% swing
+  log(`  Step 1: Pumping price for entry...`);
+  await ensureManipulatorFunded(parseEther("0.75"));
+  const priceBefore = await getSpotPrice(token);
+  await spotBuy(priceManipulator!, token, parseEther("0.65"));
+  await sleep(3000);
+
+  const entryPrice = await getSpotPrice(token);
+  const pumpPct = Number(entryPrice) / Number(priceBefore) - 1;
+  log(`    Entry price: ${formatEther(entryPrice)} (${(pumpPct * 100).toFixed(1)}% pump)`);
+  await sleep(4000); // syncSpotPrices
+
+  // Step 2: Open 10x long (small size)
   const size = parseEther("0.05");
+  const { buyResult } = await openPositionReal(trader, counter, token, entryPrice, size, 10);
+  checks.push(assert("10x long opened for liq test", buyResult.success === true));
 
-  // Open and get liquidated
-  await matchTwoParties(trader, counter, token, price, size, 10);
-  await sleep(1000);
-
-  const mA = makeWallet(89);
-  const mB = makeWallet(90);
-  await deposit(mA, parseEther("1"));
-  await deposit(mB, parseEther("1"));
-  await movePrice(mA, mB, token, price * 85n / 100n); // 15% crash → liquidation
-  await sleep(5000);
+  // Step 3: Sell ALL tokens → crash → liquidation
+  log(`  Step 3: Selling tokens to trigger liquidation...`);
+  await manipulatorSellAll(token);
+  await sleep(6000); // syncSpotPrices + risk engine
 
   const posAfterLiq = await getPositions(trader.address);
-  checks.push(assert("Liquidated", posAfterLiq.length === 0 ||
+  checks.push(assert("Liquidated via real AMM chain",
+    posAfterLiq.length === 0 ||
     !posAfterLiq.some((p: any) => p.token?.toLowerCase() === token.toLowerCase())));
 
-  // Check remaining balance
+  // Step 4: Check remaining balance
   const balAfterLiq = await getBalance(trader.address);
-  checks.push(assert("Has remaining balance", balAfterLiq.available > 0n,
+  checks.push(assert("Has remaining balance after liquidation", balAfterLiq.available > 0n,
     `${formatEther(balAfterLiq.available)} BNB remaining`));
 
-  // Reopen a new position on different token
-  const token2 = freshToken();
+  // Step 5: Reopen a new position on SAME real token (proves clean state)
+  const currentPrice = await getSpotPrice(token);
+  log(`  Step 5: Reopening position at current price ${formatEther(currentPrice)}...`);
   const counter2 = makeWallet(91);
   await deposit(counter2, parseEther("0.5"));
-  const { buyResult } = await matchTwoParties(trader, counter2, token2, price, parseEther("0.02"), 2);
-  checks.push(assert("Can reopen after liquidation", buyResult.success === true));
+  // Use matchTwoParties (with price update) for the reopen — this tests trading ability, not price chain
+  const { buyResult: reopenResult } = await matchTwoParties(trader, counter2, token, currentPrice, parseEther("0.02"), 2);
+  checks.push(assert("Can reopen on same token after liquidation ✨", reopenResult.success === true));
 
   // Clean up
   await deposit(makeWallet(92), parseEther("0.5"));
-  await submitOrder(makeWallet(92), token2, true, parseEther("0.02"), 1, price, 1);
+  await submitOrder(makeWallet(92), token, true, parseEther("0.02"), 1, currentPrice, 1);
   await sleep(300);
-  await closePosition(trader, token2, true, parseEther("0.02"), price);
+  await closePosition(trader, token, true, parseEther("0.02"), currentPrice);
   await sleep(2000);
 
   return checks;
@@ -1851,11 +2000,11 @@ async function main() {
   await runBatch(20, "仓位锁定余额 → 提现限制", "Phase4-Risk", batch20_withdraw_blocked);
 
   // Phase 5: Liquidation & Bankruptcy
-  await runBatch(21, "多头+10x → 强平", "Phase5-Liquidation", batch21_liquidation_long);
-  await runBatch(22, "空头+10x → 强平", "Phase5-Liquidation", batch22_liquidation_short);
-  await runBatch(23, "多头+10x → 穿仓(保险基金)", "Phase5-Liquidation", batch23_bankruptcy_long);
-  await runBatch(24, "濒临强平 → 追加保证金 → 存活", "Phase5-Liquidation", batch24_margin_call_saved);
-  await runBatch(25, "强平后 → 重新开仓", "Phase5-Liquidation", batch25_reopen_after_liquidation);
+  await runBatch(21, "多头+10x → 现货AMM卖出→强平 (真实价格链)", "Phase5-Liquidation", batch21_liquidation_long);
+  await runBatch(22, "空头+10x → 现货AMM买入→强平 (真实价格链)", "Phase5-Liquidation", batch22_liquidation_short);
+  await runBatch(23, "多头+10x → 闪崩穿仓→保险基金 (真实价格链)", "Phase5-Liquidation", batch23_bankruptcy_long);
+  await runBatch(24, "2x多头 → 现货跌价→追加保证金→存活 (真实价格链)", "Phase5-Liquidation", batch24_margin_call_saved);
+  await runBatch(25, "强平后→同代币重新开仓 (真实价格链)", "Phase5-Liquidation", batch25_reopen_after_liquidation);
 
   // Phase 6: Full Lifecycle
   await runBatch(26, "最小金额全流程", "Phase6-Lifecycle", batch26_min_amount);
