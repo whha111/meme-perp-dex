@@ -25,11 +25,11 @@ import {
 } from "viem";
 import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
 import { bscTestnet } from "viem/chains";
-import { readFileSync } from "fs";
+import { readFileSync, existsSync } from "fs";
 import { resolve } from "path";
 
 // ════════════════════════════════════════════════════════════════
-//  CONFIG
+//  CONFIG — Auto-load from engine .env for address consistency
 // ════════════════════════════════════════════════════════════════
 
 const API_URL = process.argv.find(a => a.startsWith("--url="))?.split("=")[1] || "http://localhost:8081";
@@ -42,14 +42,41 @@ const RPC_URLS = [
 let RPC_URL = RPC_URLS[0];
 const CHAIN_ID = 97;
 
-// Contracts (BSC Testnet — 2026-03-06 deploy)
-const SETTLEMENT_V1 = "0x234F468d196ea7B8F8dD4c560315F5aE207C2674" as Address;
-const SETTLEMENT_V2 = "0xF58A8a551F9c587CEF3B4e21F01e1bF5059bECE9" as Address;
-const PERP_VAULT    = "0xc4CEC9636AD8D553cCFCf4AbAb5a0fC808c122C2" as Address;
-const TOKEN_FACTORY = "0x01819AFe97713eFf4e81cD93C2f66588816Ef8ee" as Address;
-const WBNB_ADDR     = "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd" as Address;
+/**
+ * Load contract addresses from engine's .env to guarantee EIP-712 domain
+ * and contract addresses stay in sync. No more hardcoded address mismatch!
+ */
+function loadEngineEnv(): Record<string, string> {
+  const envPaths = [
+    resolve(__dirname, "../backend/.env"),
+    resolve(__dirname, "../backend/.env.local"),
+  ];
+  for (const p of envPaths) {
+    if (existsSync(p)) {
+      const lines = readFileSync(p, "utf-8").split("\n");
+      const env: Record<string, string> = {};
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        const eqIdx = trimmed.indexOf("=");
+        if (eqIdx > 0) env[trimmed.slice(0, eqIdx)] = trimmed.slice(eqIdx + 1);
+      }
+      return env;
+    }
+  }
+  throw new Error("Cannot find backend/.env — run test from project root");
+}
 
-// EIP-712 domain
+const ENGINE_ENV = loadEngineEnv();
+
+// Contracts — loaded from engine .env (single source of truth)
+const SETTLEMENT_V1 = getAddress(ENGINE_ENV.SETTLEMENT_ADDRESS!) as Address;
+const SETTLEMENT_V2 = getAddress(ENGINE_ENV.SETTLEMENT_V2_ADDRESS!) as Address;
+const PERP_VAULT    = getAddress(ENGINE_ENV.PERP_VAULT_ADDRESS!) as Address;
+const TOKEN_FACTORY = getAddress(ENGINE_ENV.TOKEN_FACTORY_ADDRESS!) as Address;
+const WBNB_ADDR     = getAddress(ENGINE_ENV.COLLATERAL_TOKEN_ADDRESS || ENGINE_ENV.WETH_ADDRESS!) as Address;
+
+// EIP-712 domain — MUST match engine's domain exactly for signature verification
 const EIP712_DOMAIN = {
   name: "MemePerp", version: "1", chainId: CHAIN_ID,
   verifyingContract: SETTLEMENT_V1,
@@ -1011,13 +1038,9 @@ async function batch16_invalidSignature() {
     nonce: nonce.toString(), orderType: 1, signature: wrongSig,
   });
 
-  if (r.success === false) {
-    checks.push(assert("Rejected: invalid signature (wrong signer)", true, `error: ${r.error}`));
-  } else {
-    // SKIP_SIGNATURE_VERIFY=true in test env — engine accepts all signatures
-    checks.push(assert("Sig verify disabled (SKIP_SIGNATURE_VERIFY=true) — order accepted as expected", true,
-      "signature verification is disabled in test environment"));
-  }
+  checks.push(assert("Rejected: invalid signature (wrong signer)",
+    r.success === false,
+    `error: ${r.error || JSON.stringify(r).slice(0, 100)}`));
   return checks;
 }
 
@@ -1252,9 +1275,12 @@ async function batch23_fokFullFill() {
   await apiPost("/api/price/update", { token, price: fokPrice.toString() });
   await sleep(500);
 
-  // Record pre-existing position size (handles any leftover state)
+  // PRE-CONDITION: wallet must start with NO position on this token
   const posBefore = findPosition(await getPositions(buyer.address), token);
   const sizeBefore = BigInt(posBefore?.size || posBefore?.positionSize || "0");
+  checks.push(assert("FOK: buyer starts with zero position (clean state)",
+    sizeBefore === 0n,
+    `unexpected pre-existing position size=${sizeBefore}`));
 
   // Seller resting with EXACT size at unique price
   await submitOrder(seller, token, false, size, 2, fokPrice, 1);
@@ -1267,15 +1293,14 @@ async function batch23_fokFullFill() {
     `response: ${JSON.stringify(buyResult).slice(0, 120)}`));
   await sleep(4000);
 
-  // Should have position with DELTA = order size (handles pre-existing state)
+  // Should have position with EXACT absolute size
   const positions = await getPositions(buyer.address);
   const pos = findPosition(positions, token);
   checks.push(assert("FOK: position exists after order", !!pos));
 
   if (pos) {
     const posSize = BigInt(pos.size || pos.positionSize || "0");
-    const delta = posSize - sizeBefore;
-    checks.push(assertApproxEqual("FOK: position size delta = order size", delta, size, 50n));
+    checks.push(assertApproxEqual("FOK: position size = order size", posSize, size, 50n));
   }
 
   // Reset mark price
