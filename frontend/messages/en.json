@@ -1515,6 +1515,8 @@
     "step2RealDesc": "Wrap BNB to WBNB (ERC-20)",
     "step3RealLabel": "Deposit to Contract",
     "step3RealDesc": "Approve and deposit WBNB to SettlementV2",
+    "withdrawGasFunding": "Funding gas for withdrawal...",
+    "withdrawGasFundingDesc": "Sending a small amount of BNB for transaction fees",
     "withdrawWalletTransfer": "Transferring from trading wallet...",
     "withdrawWalletTransferDesc": "Sending BNB from trading wallet to main wallet",
     "withdrawProcessing": "Processing withdrawal...",
