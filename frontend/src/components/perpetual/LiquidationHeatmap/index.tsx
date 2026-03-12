@@ -42,7 +42,7 @@ export function LiquidationHeatmap({ token }: Props) {
     return (
       <div className="bg-gray-900 rounded-lg p-3">
         <div className="flex justify-between items-center mb-2">
-          <h3 className="text-sm font-bold text-white">{t("liquidationMap")}</h3>
+          <h3 className="text-sm font-bold text-okx-text-primary">{t("liquidationMap")}</h3>
         </div>
         <div className="animate-pulse">
           <div className="h-[200px] bg-gray-800 rounded" />
@@ -55,7 +55,7 @@ export function LiquidationHeatmap({ token }: Props) {
     return (
       <div className="bg-gray-900 rounded-lg p-3">
         <div className="flex justify-between items-center mb-2">
-          <h3 className="text-sm font-bold text-white">{t("liquidationMap")}</h3>
+          <h3 className="text-sm font-bold text-okx-text-primary">{t("liquidationMap")}</h3>
         </div>
         <div className="text-center text-red-400 py-4 text-xs">
           <p>{error}</p>
@@ -74,7 +74,7 @@ export function LiquidationHeatmap({ token }: Props) {
     <div className="bg-gray-900 rounded-lg p-3">
       {/* 头部 */}
       <div className="flex justify-between items-center mb-2">
-        <h3 className="text-sm font-bold text-white">{t("liquidationMap")}</h3>
+        <h3 className="text-sm font-bold text-okx-text-primary">{t("liquidationMap")}</h3>
         <HeatmapControls
           timeRange={timeRange}
           onTimeRangeChange={handleTimeRangeChange}

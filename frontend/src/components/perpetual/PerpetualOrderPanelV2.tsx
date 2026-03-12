@@ -414,7 +414,7 @@ export function PerpetualOrderPanelV2({
           // 未连接钱包
           <button
             onClick={() => openConnectModal?.()}
-            className="w-full py-2.5 text-[13px] font-medium bg-[#A3E635] hover:bg-[#84cc16] text-black rounded transition-colors"
+            className="w-full py-2.5 text-[13px] font-medium bg-meme-lime hover:brightness-110 text-black rounded transition-colors"
           >
             {tc("connectWallet") || "Connect Wallet"}
           </button>
@@ -431,7 +431,7 @@ export function PerpetualOrderPanelV2({
             <button
               onClick={generateWallet}
               disabled={isTradingWalletLoading}
-              className="w-full py-2 text-[12px] font-medium bg-[#A3E635] hover:bg-[#84cc16] disabled:bg-gray-600 text-black rounded transition-colors"
+              className="w-full py-2 text-[12px] font-medium bg-meme-lime hover:brightness-110 disabled:bg-gray-600 text-black rounded transition-colors"
             >
               {isTradingWalletLoading ? tw("activating") : tw("activateAccount")}
             </button>
@@ -450,7 +450,7 @@ export function PerpetualOrderPanelV2({
             <div className="flex gap-2 mt-2">
               <button
                 onClick={() => setShowDepositModal(true)}
-                className="flex-1 py-2 text-[12px] font-medium bg-[#A3E635] hover:bg-[#84cc16] text-black rounded transition-colors"
+                className="flex-1 py-2 text-[12px] font-medium bg-meme-lime hover:brightness-110 text-black rounded transition-colors"
               >
                 充值 BNB/WBNB
               </button>
@@ -649,7 +649,7 @@ export function PerpetualOrderPanelV2({
           </span>
           <button
             onClick={() => setShowLeverageSlider(!showLeverageSlider)}
-            className="flex items-center gap-1 text-[14px] text-okx-text-primary font-medium hover:text-[#A3E635] transition-colors"
+            className="flex items-center gap-1 text-[14px] text-okx-text-primary font-medium hover:text-meme-lime transition-colors"
           >
             {leverage}x
             <svg
@@ -686,7 +686,7 @@ export function PerpetualOrderPanelV2({
                   onClick={() => setLeverage(lev)}
                   className={`px-1 py-0.5 rounded ${
                     leverage === lev
-                      ? "text-[#A3E635]"
+                      ? "text-meme-lime"
                       : "hover:text-okx-text-secondary"
                   }`}
                 >
@@ -762,7 +762,7 @@ export function PerpetualOrderPanelV2({
               value={limitPrice}
               onChange={(e) => setLimitPrice(e.target.value)}
               placeholder="0.00"
-              className="w-full bg-okx-bg-hover border border-okx-border-primary rounded px-3 py-2 text-[14px] text-okx-text-primary placeholder:text-okx-text-tertiary outline-none focus:border-[#A3E635]"
+              className="w-full bg-okx-bg-hover border border-okx-border-primary rounded px-3 py-2 text-[14px] text-okx-text-primary placeholder:text-okx-text-tertiary outline-none focus:border-meme-lime"
             />
           </div>
         )}
@@ -782,7 +782,7 @@ export function PerpetualOrderPanelV2({
                   }}
                   className={`px-2 py-0.5 text-[10px] rounded transition-colors ${
                     amountUnit === unit
-                      ? "bg-[#A3E635] text-black font-medium"
+                      ? "bg-meme-lime text-black font-medium"
                       : "text-okx-text-tertiary hover:text-okx-text-secondary"
                   }`}
                 >
@@ -803,10 +803,10 @@ export function PerpetualOrderPanelV2({
               className={`w-full bg-okx-bg-hover border rounded px-3 py-2 pr-20 text-[14px] text-okx-text-primary placeholder:text-okx-text-tertiary outline-none ${
                 amountError
                   ? "border-okx-down focus:border-okx-down"
-                  : "border-okx-border-primary focus:border-[#A3E635]"
+                  : "border-okx-border-primary focus:border-meme-lime"
               }`}
             />
-            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-[#A3E635] font-medium">
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-meme-lime font-medium">
               {amountUnit === "TOKEN" ? "代币" : amountUnit}
             </span>
           </div>
@@ -843,7 +843,7 @@ export function PerpetualOrderPanelV2({
             className="flex items-center gap-2 text-[12px] text-okx-text-secondary hover:text-okx-text-primary transition-colors"
           >
             <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
-              showTpSl ? "bg-[#A3E635] border-[#A3E635]" : "border-okx-border-primary"
+              showTpSl ? "bg-meme-lime border-meme-lime" : "border-okx-border-primary"
             }`}>
               {showTpSl && (
                 <svg className="w-3 h-3 text-black" fill="none" viewBox="0 0 24 24" stroke="currentColor">

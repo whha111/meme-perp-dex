@@ -104,8 +104,8 @@ export function MyHoldings({
     return (
       <div className={`p-4 ${className}`}>
         <div className="animate-pulse space-y-2">
-          <div className="h-12 bg-[#1F1F1F] rounded" />
-          <div className="h-12 bg-[#1F1F1F] rounded" />
+          <div className="h-12 bg-okx-bg-hover rounded" />
+          <div className="h-12 bg-okx-bg-hover rounded" />
         </div>
       </div>
     );

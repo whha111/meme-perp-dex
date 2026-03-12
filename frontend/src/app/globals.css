@@ -165,8 +165,8 @@
 }
 
 html {
-  /* Prevent white flash during loading */
-  background: #000000;
+  /* Use theme-aware background */
+  background: var(--background);
 }
 
 body {

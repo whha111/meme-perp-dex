@@ -90,7 +90,7 @@ function Column({ title, assets, noTokensText, ethPrice }: { title: string; asse
           );
         })}
         {assets.length === 0 && (
-          <div className="text-[#636366] text-sm text-center py-10">{noTokensText}</div>
+          <div className="text-okx-text-tertiary text-sm text-center py-10">{noTokensText}</div>
         )}
       </div>
     </div>

@@ -169,7 +169,7 @@ export function AllPositions({ token, apiUrl = MATCHING_ENGINE_URL }: Props) {
   if (loading) {
     return (
       <div className="bg-gray-900 rounded-lg p-3 h-full">
-        <h3 className="text-sm font-bold text-white mb-2">{t("allPositions")}</h3>
+        <h3 className="text-sm font-bold text-okx-text-primary mb-2">{t("allPositions")}</h3>
         <div className="animate-pulse space-y-1">
           {[...Array(8)].map((_, i) => (
             <div key={i} className="h-8 bg-gray-800 rounded" />
@@ -182,7 +182,7 @@ export function AllPositions({ token, apiUrl = MATCHING_ENGINE_URL }: Props) {
   if (!data) {
     return (
       <div className="bg-gray-900 rounded-lg p-3 h-full">
-        <h3 className="text-sm font-bold text-white mb-2">{t("allPositions")}</h3>
+        <h3 className="text-sm font-bold text-okx-text-primary mb-2">{t("allPositions")}</h3>
         <p className="text-gray-500 text-sm">{t("noDataAvailable")}</p>
       </div>
     );
@@ -193,7 +193,7 @@ export function AllPositions({ token, apiUrl = MATCHING_ENGINE_URL }: Props) {
       {/* 头部 */}
       <div className="flex justify-between items-center mb-2 flex-shrink-0">
         <div className="flex items-center gap-2">
-          <h3 className="text-sm font-bold text-white">{t("allPositions")}</h3>
+          <h3 className="text-sm font-bold text-okx-text-primary">{t("allPositions")}</h3>
           <span className="text-xs text-gray-400">({data.totalPositions})</span>
         </div>
 
@@ -273,7 +273,7 @@ export function AllPositions({ token, apiUrl = MATCHING_ENGINE_URL }: Props) {
                   >
                     {/* Trader */}
                     <td className="py-1.5 px-1">
-                      <span className="font-mono text-white">{formatAddress(pos.trader)}</span>
+                      <span className="font-mono text-okx-text-primary">{formatAddress(pos.trader)}</span>
                     </td>
 
                     {/* Side */}
@@ -287,12 +287,12 @@ export function AllPositions({ token, apiUrl = MATCHING_ENGINE_URL }: Props) {
 
                     {/* Size */}
                     <td className="py-1.5 px-1 text-right">
-                      <div className="text-white">{formatSize(pos.size)}</div>
+                      <div className="text-okx-text-primary">{formatSize(pos.size)}</div>
                       <div className="text-gray-500 text-[9px]">{formatETH(pos.collateral)}</div>
                     </td>
 
                     {/* Entry Price */}
-                    <td className="py-1.5 px-1 text-right font-mono text-white">
+                    <td className="py-1.5 px-1 text-right font-mono text-okx-text-primary">
                       {formatPrice(pos.entryPrice)}
                     </td>
 
@@ -330,7 +330,7 @@ export function AllPositions({ token, apiUrl = MATCHING_ENGINE_URL }: Props) {
 
       {/* 当前价格 */}
       <div className="pt-2 border-t border-gray-700 text-center text-[10px] text-gray-400 flex-shrink-0">
-        {t("currentPrice")}: <span className="text-white font-mono">{formatPrice(data.currentPrice)}</span>
+        {t("currentPrice")}: <span className="text-okx-text-primary font-mono">{formatPrice(data.currentPrice)}</span>
       </div>
     </div>
   );

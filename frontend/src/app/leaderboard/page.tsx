@@ -98,7 +98,7 @@ export default function LeaderboardPage() {
       <Navbar />
 
       {/* Hero Section */}
-      <div className="w-full bg-gradient-to-b from-meme-darker to-okx-bg-primary py-8 md:py-10 px-4 md:px-8 lg:px-16">
+      <div className="w-full bg-gradient-to-b from-okx-bg-secondary to-okx-bg-primary py-8 md:py-10 px-4 md:px-8 lg:px-16">
         <div className="max-w-[1440px] mx-auto">
           <div className="flex items-center gap-4 mb-4">
             <h1 className="text-3xl font-extrabold">{t("title")}</h1>
@@ -189,7 +189,7 @@ export default function LeaderboardPage() {
       <div className="max-w-[1440px] mx-auto px-4 md:px-8 lg:px-16 pb-12 overflow-x-auto">
         <div className="min-w-[640px]">
         {/* Table Header */}
-        <div className="grid grid-cols-6 bg-meme-darker rounded-lg px-4 py-3 text-xs font-semibold text-okx-text-secondary">
+        <div className="grid grid-cols-6 bg-okx-bg-secondary rounded-lg px-4 py-3 text-xs font-semibold text-okx-text-secondary">
           <span>{t("rank")}</span>
           <span>{t("trader")}</span>
           <span className="text-right">{t("pnl")}</span>

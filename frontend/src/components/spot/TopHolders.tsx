@@ -44,11 +44,11 @@ export function TopHolders({ instId, creatorAddress, className }: TopHoldersProp
     const risk = holdersData?.concentration_risk;
     switch (risk) {
       case "HIGH":
-        return "text-[#FF3B30]";
+        return "text-okx-down";
       case "MEDIUM":
-        return "text-[#FF9500]";
+        return "text-okx-warning";
       case "LOW":
-        return "text-[#00D26A]";
+        return "text-okx-up";
       default:
         return "text-okx-text-secondary";
     }
@@ -76,19 +76,19 @@ export function TopHolders({ instId, creatorAddress, className }: TopHoldersProp
   // 获取标签样式
   const getLabelStyle = (holder: HolderInfo) => {
     if (holder.label === "BONDING_CURVE") {
-      return "bg-[#34C759]/20 text-[#34C759] border border-[#34C759]/30";
+      return "bg-okx-up/20 text-okx-up border border-okx-up/30";
     }
     if (holder.is_creator || holder.label === "CREATOR") {
-      return "bg-[#007AFF]/20 text-[#007AFF] border border-[#007AFF]/30";
+      return "bg-okx-accent/20 text-okx-accent border border-okx-accent/30";
     }
     if (holder.is_dev || holder.label === "DEV") {
-      return "bg-[#FF9500]/20 text-[#FF9500] border border-[#FF9500]/30";
+      return "bg-okx-warning/20 text-okx-warning border border-okx-warning/30";
     }
     if (holder.label === "WHALE") {
-      return "bg-[#5856D6]/20 text-[#5856D6] border border-[#5856D6]/30";
+      return "bg-purple-500/20 text-purple-500 border border-purple-500/30";
     }
     if (holder.label === "SNIPER") {
-      return "bg-[#FF2D55]/20 text-[#FF2D55] border border-[#FF2D55]/30";
+      return "bg-rose-500/20 text-rose-500 border border-rose-500/30";
     }
     return "";
   };
@@ -105,20 +105,20 @@ export function TopHolders({ instId, creatorAddress, className }: TopHoldersProp
 
   // 进度条颜色
   const getProgressColor = (percentage: number, isCreator: boolean, isDev: boolean) => {
-    if (isCreator) return "bg-[#007AFF]";
-    if (isDev) return "bg-[#FF9500]";
-    if (percentage > 10) return "bg-[#FF3B30]";
-    if (percentage > 5) return "bg-[#FF9500]";
-    return "bg-[#00D26A]";
+    if (isCreator) return "bg-okx-accent";
+    if (isDev) return "bg-okx-warning";
+    if (percentage > 10) return "bg-okx-down";
+    if (percentage > 5) return "bg-okx-warning";
+    return "bg-okx-up";
   };
 
   if (isLoading) {
     return (
       <div className={`bg-okx-bg-secondary rounded-lg p-4 ${className}`}>
         <div className="animate-pulse space-y-3">
-          <div className="h-5 bg-[#1F1F1F] rounded w-1/3"></div>
+          <div className="h-5 bg-okx-bg-hover rounded w-1/3"></div>
           {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-8 bg-[#1F1F1F] rounded"></div>
+            <div key={i} className="h-8 bg-okx-bg-hover rounded"></div>
           ))}
         </div>
       </div>
@@ -154,10 +154,10 @@ export function TopHolders({ instId, creatorAddress, className }: TopHoldersProp
 
       {/* 集中度警告 */}
       {holdersData.concentration_risk === "HIGH" && (
-        <div className="mx-4 mt-3 px-3 py-2 bg-[#FF3B30]/10 border border-[#FF3B30]/30 rounded-lg">
+        <div className="mx-4 mt-3 px-3 py-2 bg-okx-down/10 border border-okx-down/30 rounded-lg">
           <div className="flex items-center gap-2">
-            <svg className="w-4 h-4 text-[#FF3B30] flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" /></svg>
-            <span className="text-[#FF3B30] text-[11px]">
+            <svg className="w-4 h-4 text-okx-down flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" /></svg>
+            <span className="text-okx-down text-[11px]">
               {t('holders.top10Warning', { percent: holdersData.top10_percentage?.toFixed(1) })}
             </span>
           </div>
@@ -166,10 +166,10 @@ export function TopHolders({ instId, creatorAddress, className }: TopHoldersProp
 
       {/* 创建者持仓提示 */}
       {holdersData.creator_holding && holdersData.creator_holding > 5 && (
-        <div className="mx-4 mt-2 px-3 py-2 bg-[#FF9500]/10 border border-[#FF9500]/30 rounded-lg">
+        <div className="mx-4 mt-2 px-3 py-2 bg-okx-warning/10 border border-okx-warning/30 rounded-lg">
           <div className="flex items-center gap-2">
-            <svg className="w-4 h-4 text-[#FF9500] flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" /></svg>
-            <span className="text-[#FF9500] text-[11px]">
+            <svg className="w-4 h-4 text-okx-warning flex-shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" /></svg>
+            <span className="text-okx-warning text-[11px]">
               {t('holders.creatorHolding', { percent: holdersData.creator_holding?.toFixed(2) })}
             </span>
           </div>
@@ -185,7 +185,7 @@ export function TopHolders({ instId, creatorAddress, className }: TopHoldersProp
           >
             {/* 排名 */}
             <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold ${
-              index < 3 ? "bg-[#FFD700]/20 text-[#FFD700]" : "bg-[#1F1F1F] text-okx-text-tertiary"
+              index < 3 ? "bg-okx-warning/20 text-okx-warning" : "bg-okx-bg-hover text-okx-text-tertiary"
             }`}>
               {holder.rank || index + 1}
             </div>
@@ -197,7 +197,7 @@ export function TopHolders({ instId, creatorAddress, className }: TopHoldersProp
                   href={`https://sepolia.basescan.org/address/${holder.address}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-okx-text-primary font-mono text-[12px] hover:text-[#007AFF] transition-colors"
+                  className="text-okx-text-primary font-mono text-[12px] hover:text-okx-accent transition-colors"
                 >
                   {formatAddress(holder.address)}
                 </a>
@@ -226,13 +226,13 @@ export function TopHolders({ instId, creatorAddress, className }: TopHoldersProp
             <div className="w-24">
               <div className="flex items-center justify-between mb-1">
                 <span className={`text-[11px] font-bold ${
-                  holder.percentage > 10 ? "text-[#FF3B30]" :
-                  holder.percentage > 5 ? "text-[#FF9500]" : "text-okx-text-primary"
+                  holder.percentage > 10 ? "text-okx-down" :
+                  holder.percentage > 5 ? "text-okx-warning" : "text-okx-text-primary"
                 }`}>
                   {holder.percentage?.toFixed(2)}%
                 </span>
               </div>
-              <div className="h-1.5 bg-[#1F1F1F] rounded-full overflow-hidden">
+              <div className="h-1.5 bg-okx-bg-hover rounded-full overflow-hidden">
                 <div
                   className={`h-full rounded-full transition-all duration-300 ${getProgressColor(
                     holder.percentage,
@@ -247,7 +247,7 @@ export function TopHolders({ instId, creatorAddress, className }: TopHoldersProp
             {/* PnL 显示 */}
             {holder.pnl_percentage !== undefined && (
               <div className={`text-[11px] font-medium w-16 text-right ${
-                holder.pnl_percentage >= 0 ? "text-[#00D26A]" : "text-[#FF3B30]"
+                holder.pnl_percentage >= 0 ? "text-okx-up" : "text-okx-down"
               }`}>
                 {holder.pnl_percentage >= 0 ? "+" : ""}{holder.pnl_percentage.toFixed(1)}%
               </div>
@@ -261,14 +261,14 @@ export function TopHolders({ instId, creatorAddress, className }: TopHoldersProp
         <div className="flex items-center gap-4">
           <span className="text-okx-text-tertiary">
             {t('holders.top10Share')}: <span className={`font-bold ${
-              (holdersData.top10_percentage || 0) > 50 ? "text-[#FF3B30]" :
-              (holdersData.top10_percentage || 0) > 30 ? "text-[#FF9500]" : "text-[#00D26A]"
+              (holdersData.top10_percentage || 0) > 50 ? "text-okx-down" :
+              (holdersData.top10_percentage || 0) > 30 ? "text-okx-warning" : "text-okx-up"
             }`}>
               {holdersData.top10_percentage?.toFixed(1)}%
             </span>
           </span>
         </div>
-        <button className="text-[#007AFF] hover:text-[#0056b3] transition-colors flex items-center gap-1">
+        <button className="text-okx-accent hover:text-okx-accent/80 transition-colors flex items-center gap-1">
           <span>{t('holders.generateBubble')}</span>
           <span>→</span>
         </button>

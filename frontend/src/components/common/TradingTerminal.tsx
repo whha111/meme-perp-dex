@@ -76,7 +76,7 @@ const TokenPriceChart = dynamic(
   () => import('@/components/spot/TokenPriceChart').then((mod) => mod.TokenPriceChart),
   {
     ssr: false,
-    loading: () => <div className="w-full h-full bg-[#131722] animate-pulse" />
+    loading: () => <div className="w-full h-full bg-okx-bg-card animate-pulse" />
   }
 );
 
@@ -458,7 +458,7 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
         {/* 中间图表 + 底部列表 (75%) */}
         <div className="flex-[3] border-r border-okx-border-primary flex flex-col overflow-hidden">
            {/* K线图本体 - TradingView 官方 Lightweight Charts */}
-           <div className="h-[400px] bg-[#131722]">
+           <div className="h-[400px] bg-okx-bg-card">
               <TradingErrorBoundary module="SpotChart">
                 <TokenPriceChart symbol={symbol} displaySymbol={displaySymbol} latestTrade={latestTrade} />
               </TradingErrorBoundary>
@@ -482,7 +482,7 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
                       className={`py-2 px-4 text-[12px] transition-colors relative ${activeTab === tab.key ? 'text-okx-text-primary font-bold' : 'text-okx-text-secondary'}`}
                     >
                       {tab.label}
-                      {activeTab === tab.key && <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-[#A3E635]"></div>}
+                      {activeTab === tab.key && <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-meme-lime"></div>}
                     </button>
                  ))}
               </div>

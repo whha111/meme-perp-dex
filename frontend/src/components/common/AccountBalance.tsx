@@ -213,12 +213,12 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
     : "提现到主钱包";
 
   return (
-    <div className="bg-[#131722] rounded-xl border border-gray-800">
+    <div className="bg-okx-bg-card rounded-xl border border-gray-800">
       {/* 标题 */}
       <div className="flex justify-between items-center p-4 border-b border-gray-800">
-        <span className="text-white font-semibold">账户</span>
+        <span className="text-okx-text-primary font-semibold">账户</span>
         {onClose && (
-          <button onClick={onClose} className="text-gray-500 hover:text-white">
+          <button onClick={onClose} className="text-gray-500 hover:text-okx-text-primary">
             &times;
           </button>
         )}
@@ -226,7 +226,7 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
 
       {/* 交易账户余额 */}
       <div className="p-4 text-center border-b border-gray-800">
-        <div className="text-3xl font-bold text-white">
+        <div className="text-3xl font-bold text-okx-text-primary">
           BNB {formattedWethBalance}
         </div>
         <div className="text-gray-500 text-sm mb-2">交易账户总余额</div>
@@ -250,7 +250,7 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
           <input
             value={tradingWallet || ""}
             readOnly
-            className="flex-1 bg-[#1e222d] text-gray-300 text-xs px-3 py-2 rounded font-mono"
+            className="flex-1 bg-okx-bg-secondary text-gray-300 text-xs px-3 py-2 rounded font-mono"
           />
           <button
             onClick={copy}
@@ -264,7 +264,7 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
       {/* 充值/提现 */}
       <div className="p-4 space-y-4">
         {/* Tab 切换 */}
-        <div className="flex gap-2 bg-[#1e222d] rounded-lg p-1">
+        <div className="flex gap-2 bg-okx-bg-secondary rounded-lg p-1">
           <button
             onClick={() => {
               setActiveTab("deposit");
@@ -274,7 +274,7 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
             className={`flex-1 py-2 rounded text-sm font-medium transition-colors ${
               activeTab === "deposit"
                 ? "bg-blue-600 text-white"
-                : "text-gray-400 hover:text-white"
+                : "text-gray-400 hover:text-okx-text-primary"
             }`}
           >
             充值
@@ -288,7 +288,7 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
             className={`flex-1 py-2 rounded text-sm font-medium transition-colors ${
               activeTab === "withdraw"
                 ? "bg-blue-600 text-white"
-                : "text-gray-400 hover:text-white"
+                : "text-gray-400 hover:text-okx-text-primary"
             }`}
           >
             提现
@@ -300,7 +300,7 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
           <span className="text-gray-500">
             {activeTab === "deposit" ? "钱包余额" : "交易账户余额"}
           </span>
-          <span className="text-white">
+          <span className="text-okx-text-primary">
             BNB {activeTab === "deposit"
               ? fmtETH(mainWalletBalance?.value)
               : formattedWethBalance}
@@ -315,7 +315,7 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
             onChange={(e) => setAmount(e.target.value)}
             placeholder="0"
             disabled={isProcessing}
-            className="w-full bg-[#1e222d] text-white text-lg px-4 py-3 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
+            className="w-full bg-okx-bg-secondary text-okx-text-primary text-lg px-4 py-3 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
           />
           <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
             <span className="text-gray-400 text-sm">BNB</span>
@@ -349,7 +349,7 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
               key={v}
               onClick={() => setAmount(v)}
               disabled={isProcessing}
-              className="flex-1 py-2 bg-[#1e222d] text-gray-400 text-sm rounded hover:text-white disabled:opacity-50"
+              className="flex-1 py-2 bg-okx-bg-secondary text-gray-400 text-sm rounded hover:text-okx-text-primary disabled:opacity-50"
             >
               BNB {v}
             </button>

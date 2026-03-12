@@ -136,7 +136,7 @@ export function TokenSelector({
             {selectedToken?.symbol || t("selectToken")}
           </span>
           {selectedToken?.isGraduated && (
-            <span className="px-1.5 py-0.5 text-[10px] bg-[#FFB800]/20 text-[#FFB800] rounded font-medium">
+            <span className="px-1.5 py-0.5 text-[10px] bg-okx-warning/20 text-okx-warning rounded font-medium">
               DEX
             </span>
           )}
@@ -263,7 +263,7 @@ function TokenRow({
               {token.symbol}
             </p>
             {token.isGraduated ? (
-              <span className="px-1.5 py-0.5 text-[9px] bg-[#FFB800]/20 text-[#FFB800] rounded font-medium flex-shrink-0">
+              <span className="px-1.5 py-0.5 text-[9px] bg-okx-warning/20 text-okx-warning rounded font-medium flex-shrink-0">
                 DEX
               </span>
             ) : token.isActive ? (

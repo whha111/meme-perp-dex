@@ -3,8 +3,9 @@
 import React, { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { WssOnChainToken } from "@/lib/stores/tradingDataStore";
+import { WssOnChainToken, useTradingDataStore } from "@/lib/stores/tradingDataStore";
 import { formatTokenPrice } from "@/utils/formatters";
+import type { Address } from "viem";
 
 // Avatar color palette for deterministic token colors
 const AVATAR_COLORS = [
@@ -63,34 +64,59 @@ function getGradProgress(token: WssOnChainToken): number {
   return Math.min(pct, 100);
 }
 
+// Filter out stress test tokens (ST + 4-6 alphanumeric chars, e.g. STL397, STEQ6V)
+function isStressTestToken(symbol: string): boolean {
+  return /^ST[0-9A-Z]{4,6}$/i.test(symbol);
+}
+
 type SpotFilter = "all" | "active" | "graduated" | "new";
 
 interface SpotListingViewProps {
   tokens: WssOnChainToken[];
 }
 
-export function SpotListingView({ tokens }: SpotListingViewProps) {
+export function SpotListingView({ tokens: rawTokens }: SpotListingViewProps) {
   const t = useTranslations("spotListing");
   const router = useRouter();
   const [filter, setFilter] = useState<SpotFilter>("all");
+  const tokenStatsMap = useTradingDataStore(state => state.tokenStats);
 
-  // Compute stats
+  // Exclude stress test tokens
+  const tokens = useMemo(() => {
+    return rawTokens.filter(tk => !isStressTestToken(tk.symbol));
+  }, [rawTokens]);
+
+  // Helper: get real stats for a token
+  const getStats = (address: string) => {
+    return tokenStatsMap.get(address.toLowerCase() as Address);
+  };
+
+  // Compute stats from real data
   const stats = useMemo(() => {
     const totalTokens = tokens.length;
-    const graduated = tokens.filter(t => t.isGraduated).length;
-    const totalVolume = tokens.reduce((sum, t) => sum + Number(t.realETHReserve || "0") / 1e18, 0);
-    return { totalTokens, graduated, totalVolume };
-  }, [tokens]);
+    const graduated = tokens.filter(tk => tk.isGraduated).length;
+    let totalVolumeWei = 0;
+    let totalTrades = 0;
+    for (const tk of tokens) {
+      const s = tokenStatsMap.get(tk.address.toLowerCase() as Address);
+      if (s) {
+        totalVolumeWei += Number(s.volume24h || "0") / 1e18;
+        totalTrades += s.trades24h || 0;
+      }
+    }
+    const totalVolume = totalVolumeWei;
+    return { totalTokens, graduated, totalVolume, totalTrades };
+  }, [tokens, tokenStatsMap]);
 
   // Filter tokens
   const filteredTokens = useMemo(() => {
     let list = [...tokens];
     switch (filter) {
       case "active":
-        list = list.filter(t => t.isActive && !t.isGraduated);
+        list = list.filter(tk => tk.isActive && !tk.isGraduated);
         break;
       case "graduated":
-        list = list.filter(t => t.isGraduated);
+        list = list.filter(tk => tk.isGraduated);
         break;
       case "new":
         list = list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -122,41 +148,39 @@ export function SpotListingView({ tokens }: SpotListingViewProps) {
   return (
     <div className="w-full">
       {/* ── Stats Banner ── */}
-      <div
-        className="w-full flex px-12 py-6"
-        style={{ background: "linear-gradient(180deg, #0A0A0A 0%, #111111 100%)" }}
-      >
+      <div className="w-full flex px-12 py-6 bg-okx-bg-secondary">
         {/* Stat 1: Total Tokens */}
         <div className="flex-1 flex flex-col items-center gap-1 py-4">
-          <span className="text-[28px] font-semibold text-white">{stats.totalTokens.toLocaleString()}</span>
-          <span className="font-mono text-[11px] text-[#6e6e6e]">{t("statTokensCreated")}</span>
+          <span className="text-[28px] font-semibold text-okx-text-primary">{stats.totalTokens.toLocaleString()}</span>
+          <span className="font-mono text-[11px] text-okx-text-secondary">{t("statTokensCreated")}</span>
         </div>
 
         {/* Stat 2: 24h Volume */}
-        <div className="flex-1 flex flex-col items-center gap-1 py-4 border-l border-[#1A1A1A]">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[28px] font-semibold text-white">
-              {stats.totalVolume < 1000
-                ? `$${stats.totalVolume.toFixed(0)}`
-                : `$${(stats.totalVolume / 1000).toFixed(1)}K`}
-            </span>
-            <span className="font-mono text-[12px] font-semibold text-meme-lime">+12.4%</span>
-          </div>
-          <span className="font-mono text-[11px] text-[#6e6e6e]">{t("stat24hVolume")}</span>
+        <div className="flex-1 flex flex-col items-center gap-1 py-4 border-l border-okx-border-primary">
+          <span className="text-[28px] font-semibold text-okx-text-primary">
+            {stats.totalVolume < 0.01
+              ? "0"
+              : stats.totalVolume < 1
+                ? `${stats.totalVolume.toFixed(2)} BNB`
+                : stats.totalVolume < 1000
+                  ? `${stats.totalVolume.toFixed(1)} BNB`
+                  : `${(stats.totalVolume / 1000).toFixed(1)}K BNB`}
+          </span>
+          <span className="font-mono text-[11px] text-okx-text-secondary">{t("stat24hVolume")}</span>
         </div>
 
         {/* Stat 3: Total Trades */}
-        <div className="flex-1 flex flex-col items-center gap-1 py-4 border-l border-[#1A1A1A]">
-          <span className="text-[28px] font-semibold text-white">
-            {(stats.totalTokens * 5).toLocaleString()}
+        <div className="flex-1 flex flex-col items-center gap-1 py-4 border-l border-okx-border-primary">
+          <span className="text-[28px] font-semibold text-okx-text-primary">
+            {stats.totalTrades.toLocaleString()}
           </span>
-          <span className="font-mono text-[11px] text-[#6e6e6e]">{t("statTotalTrades")}</span>
+          <span className="font-mono text-[11px] text-okx-text-secondary">{t("statTotalTrades")}</span>
         </div>
 
         {/* Stat 4: Graduated */}
-        <div className="flex-1 flex flex-col items-center gap-1 py-4 border-l border-[#1A1A1A]">
+        <div className="flex-1 flex flex-col items-center gap-1 py-4 border-l border-okx-border-primary">
           <span className="text-[28px] font-semibold text-meme-lime">{stats.graduated}</span>
-          <span className="font-mono text-[11px] text-[#6e6e6e]">{t("statGraduated")}</span>
+          <span className="font-mono text-[11px] text-okx-text-secondary">{t("statGraduated")}</span>
         </div>
       </div>
 
@@ -166,7 +190,7 @@ export function SpotListingView({ tokens }: SpotListingViewProps) {
         <div className="flex items-center justify-between mb-5">
           <div className="flex items-center gap-2.5">
             <svg className="w-5 h-5 text-meme-lime" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18L9 11.25l4.306 4.307a11.95 11.95 0 015.814-5.519l2.74-1.22m0 0l-5.94-2.28m5.94 2.28l-2.28 5.941" /></svg>
-            <h2 className="text-[20px] font-semibold text-white">{t("trendingTitle")}</h2>
+            <h2 className="text-[20px] font-semibold text-okx-text-primary">{t("trendingTitle")}</h2>
           </div>
           <span className="font-mono text-[12px] font-medium text-meme-lime cursor-pointer hover:underline">
             {t("viewAll")}
@@ -181,7 +205,7 @@ export function SpotListingView({ tokens }: SpotListingViewProps) {
             return (
               <div
                 key={token.address}
-                className="bg-[#111111] border border-[#1A1A1A] rounded-lg p-5 flex flex-col gap-4 cursor-pointer hover:border-[#333] transition-colors"
+                className="bg-okx-bg-card border border-okx-border-primary rounded-lg p-5 flex flex-col gap-4 cursor-pointer hover:border-okx-border-secondary transition-colors"
                 onClick={() => handleTokenClick(token.address)}
               >
                 {/* Top: Avatar + Name + Badge */}
@@ -194,8 +218,8 @@ export function SpotListingView({ tokens }: SpotListingViewProps) {
                       {token.symbol?.charAt(0)?.toUpperCase() || "?"}
                     </div>
                     <div className="flex flex-col gap-0.5">
-                      <span className="text-[14px] font-semibold text-white">{token.symbol}</span>
-                      <span className="font-mono text-[10px] text-[#6e6e6e]">{token.name}</span>
+                      <span className="text-[14px] font-semibold text-okx-text-primary">{token.symbol}</span>
+                      <span className="font-mono text-[10px] text-okx-text-secondary">{token.name}</span>
                     </div>
                   </div>
                   {token.isGraduated ? (
@@ -212,25 +236,32 @@ export function SpotListingView({ tokens }: SpotListingViewProps) {
                 {/* Mid: Price + Change */}
                 <div className="flex items-end justify-between">
                   <div className="flex flex-col gap-0.5">
-                    <span className="font-mono text-[10px] text-[#6e6e6e]">{t("price")}</span>
-                    <span className="font-mono text-[13px] font-semibold text-white">
+                    <span className="font-mono text-[10px] text-okx-text-secondary">{t("price")}</span>
+                    <span className="font-mono text-[13px] font-semibold text-okx-text-primary">
                       {formatPrice(token.price)}
                     </span>
                   </div>
-                  <span className="font-mono text-[14px] font-bold text-meme-lime">
-                    +{(Math.random() * 300).toFixed(1)}%
-                  </span>
+                  {(() => {
+                    const s = getStats(token.address);
+                    const pct = Number(s?.priceChangePercent24h || "0");
+                    const isPos = pct >= 0;
+                    return (
+                      <span className={`font-mono text-[14px] font-bold ${isPos ? "text-meme-lime" : "text-okx-down"}`}>
+                        {isPos ? "+" : ""}{pct.toFixed(1)}%
+                      </span>
+                    );
+                  })()}
                 </div>
 
                 {/* Bottom: Progress Bar */}
                 <div className="flex flex-col gap-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="font-mono text-[10px] text-[#6e6e6e]">{t("gradProgress")}</span>
-                    <span className="font-mono text-[10px] font-medium text-[#999999]">
+                    <span className="font-mono text-[10px] text-okx-text-secondary">{t("gradProgress")}</span>
+                    <span className="font-mono text-[10px] font-medium text-okx-text-tertiary">
                       {progress.toFixed(1)}%
                     </span>
                   </div>
-                  <div className="w-full h-1 bg-[#1A1A1A] rounded-sm overflow-hidden">
+                  <div className="w-full h-1 bg-okx-bg-hover rounded-sm overflow-hidden">
                     <div
                       className="h-full bg-meme-lime rounded-sm"
                       style={{ width: `${progress}%` }}
@@ -241,15 +272,15 @@ export function SpotListingView({ tokens }: SpotListingViewProps) {
                 {/* Stats: Volume + Trades */}
                 <div className="flex items-center justify-between">
                   <div className="flex flex-col gap-0.5">
-                    <span className="font-mono text-[9px] text-[#404040]">{t("volume")}</span>
-                    <span className="font-mono text-[11px] font-medium text-[#999999]">
-                      {formatVolume(token.realETHReserve)}
+                    <span className="font-mono text-[9px] text-okx-text-tertiary">{t("volume")}</span>
+                    <span className="font-mono text-[11px] font-medium text-okx-text-tertiary">
+                      {formatVolume(getStats(token.address)?.volume24h || "0")}
                     </span>
                   </div>
                   <div className="flex flex-col items-end gap-0.5">
-                    <span className="font-mono text-[9px] text-[#404040]">{t("trades")}</span>
-                    <span className="font-mono text-[11px] font-medium text-[#999999]">
-                      {Math.floor(Math.random() * 2000).toLocaleString()}
+                    <span className="font-mono text-[9px] text-okx-text-tertiary">{t("trades")}</span>
+                    <span className="font-mono text-[11px] font-medium text-okx-text-tertiary">
+                      {(getStats(token.address)?.trades24h || 0).toLocaleString()}
                     </span>
                   </div>
                 </div>
@@ -263,7 +294,7 @@ export function SpotListingView({ tokens }: SpotListingViewProps) {
       <div className="px-12 py-8">
         {/* Title + Filter Tabs */}
         <div className="flex items-center justify-between mb-5">
-          <h2 className="text-[20px] font-semibold text-white">{t("allTokens")}</h2>
+          <h2 className="text-[20px] font-semibold text-okx-text-primary">{t("allTokens")}</h2>
           <div className="flex items-center gap-1">
             {filters.map((f) => (
               <button
@@ -272,7 +303,7 @@ export function SpotListingView({ tokens }: SpotListingViewProps) {
                 className={`font-mono text-[11px] font-medium px-3.5 py-1.5 rounded transition-colors ${
                   filter === f.key
                     ? "bg-meme-lime text-black font-semibold"
-                    : "bg-[#111111] text-[#6e6e6e] border border-[#1A1A1A] hover:text-white"
+                    : "bg-okx-bg-card text-okx-text-secondary border border-okx-border-primary hover:text-okx-text-primary"
                 }`}
               >
                 {f.label}
@@ -282,35 +313,36 @@ export function SpotListingView({ tokens }: SpotListingViewProps) {
         </div>
 
         {/* Table */}
-        <div className="bg-[#111111] border border-[#1A1A1A] rounded-lg overflow-hidden">
+        <div className="bg-okx-bg-card border border-okx-border-primary rounded-lg overflow-hidden">
           {/* Table Header */}
-          <div className="flex items-center px-5 py-3 bg-[#0A0A0A]">
-            <span className="w-[240px] font-mono text-[11px] font-semibold text-[#404040]">{t("colToken")}</span>
-            <span className="w-[160px] font-mono text-[11px] font-semibold text-[#404040]">{t("colPrice")}</span>
-            <span className="w-[100px] font-mono text-[11px] font-semibold text-[#404040]">{t("col24hChange")}</span>
-            <span className="w-[120px] font-mono text-[11px] font-semibold text-[#404040]">{t("colVolume")}</span>
-            <span className="w-[120px] font-mono text-[11px] font-semibold text-[#404040]">{t("colLiquidity")}</span>
-            <span className="w-[140px] font-mono text-[11px] font-semibold text-[#404040]">{t("colProgress")}</span>
-            <span className="w-[80px] font-mono text-[11px] font-semibold text-[#404040]">{t("colStatus")}</span>
-            <span className="flex-1 font-mono text-[11px] font-semibold text-[#404040]">{t("colTime")}</span>
+          <div className="flex items-center px-5 py-3 bg-okx-bg-secondary">
+            <span className="w-[240px] font-mono text-[11px] font-semibold text-okx-text-tertiary">{t("colToken")}</span>
+            <span className="w-[160px] font-mono text-[11px] font-semibold text-okx-text-tertiary">{t("colPrice")}</span>
+            <span className="w-[100px] font-mono text-[11px] font-semibold text-okx-text-tertiary">{t("col24hChange")}</span>
+            <span className="w-[120px] font-mono text-[11px] font-semibold text-okx-text-tertiary">{t("colVolume")}</span>
+            <span className="w-[120px] font-mono text-[11px] font-semibold text-okx-text-tertiary">{t("colLiquidity")}</span>
+            <span className="w-[140px] font-mono text-[11px] font-semibold text-okx-text-tertiary">{t("colProgress")}</span>
+            <span className="w-[80px] font-mono text-[11px] font-semibold text-okx-text-tertiary">{t("colStatus")}</span>
+            <span className="flex-1 font-mono text-[11px] font-semibold text-okx-text-tertiary">{t("colTime")}</span>
           </div>
 
           {/* Table Rows */}
           {filteredTokens.length === 0 ? (
-            <div className="flex items-center justify-center py-16 text-[#666] text-sm">
+            <div className="flex items-center justify-center py-16 text-okx-text-secondary text-sm">
               {t("noTokens")}
             </div>
           ) : (
             filteredTokens.map((token) => {
               const progress = getGradProgress(token);
               const color = getAvatarColor(token.address);
-              const change = (Math.random() * 600 - 100);
+              const tokenStat = getStats(token.address);
+              const change = Number(tokenStat?.priceChangePercent24h || "0");
               const isPositive = change >= 0;
 
               return (
                 <div
                   key={token.address}
-                  className="flex items-center px-5 py-3.5 border-b border-[#1A1A1A] hover:bg-[#0A0A0A] cursor-pointer transition-colors"
+                  className="flex items-center px-5 py-3.5 border-b border-okx-border-primary hover:bg-okx-bg-secondary cursor-pointer transition-colors"
                   onClick={() => handleTokenClick(token.address)}
                 >
                   {/* Token */}
@@ -322,44 +354,44 @@ export function SpotListingView({ tokens }: SpotListingViewProps) {
                       {token.symbol?.charAt(0)?.toUpperCase() || "?"}
                     </div>
                     <div className="flex flex-col gap-px">
-                      <span className="text-[13px] font-semibold text-white">{token.symbol}</span>
-                      <span className="font-mono text-[10px] text-[#6e6e6e] truncate max-w-[160px]">
+                      <span className="text-[13px] font-semibold text-okx-text-primary">{token.symbol}</span>
+                      <span className="font-mono text-[10px] text-okx-text-secondary truncate max-w-[160px]">
                         {token.name}
                       </span>
                     </div>
                   </div>
 
                   {/* Price */}
-                  <span className="w-[160px] font-mono text-[12px] font-medium text-white">
+                  <span className="w-[160px] font-mono text-[12px] font-medium text-okx-text-primary">
                     {formatPrice(token.price)}
                   </span>
 
                   {/* 24h Change */}
                   <span className={`w-[100px] font-mono text-[12px] font-semibold ${
-                    isPositive ? "text-meme-lime" : "text-[#FF4444]"
+                    isPositive ? "text-meme-lime" : "text-okx-down"
                   }`}>
                     {isPositive ? "+" : ""}{change.toFixed(1)}%
                   </span>
 
                   {/* Volume */}
-                  <span className="w-[120px] font-mono text-[12px] font-medium text-[#999999]">
-                    {formatVolume(token.realETHReserve)}
+                  <span className="w-[120px] font-mono text-[12px] font-medium text-okx-text-tertiary">
+                    {formatVolume(tokenStat?.volume24h || "0")}
                   </span>
 
                   {/* Liquidity */}
-                  <span className="w-[120px] font-mono text-[12px] font-medium text-[#999999]">
+                  <span className="w-[120px] font-mono text-[12px] font-medium text-okx-text-tertiary">
                     {formatVolume(token.realETHReserve)}
                   </span>
 
                   {/* Progress */}
                   <div className="w-[140px] flex items-center gap-2">
-                    <div className="w-20 h-1 bg-[#1A1A1A] rounded-sm overflow-hidden">
+                    <div className="w-20 h-1 bg-okx-bg-hover rounded-sm overflow-hidden">
                       <div
                         className="h-full bg-meme-lime rounded-sm"
                         style={{ width: `${progress}%` }}
                       />
                     </div>
-                    <span className="font-mono text-[11px] font-medium text-[#999999]">
+                    <span className="font-mono text-[11px] font-medium text-okx-text-tertiary">
                       {progress.toFixed(0)}%
                     </span>
                   </div>
@@ -378,7 +410,7 @@ export function SpotListingView({ tokens }: SpotListingViewProps) {
                   </div>
 
                   {/* Time */}
-                  <span className="flex-1 font-mono text-[11px] text-[#6e6e6e]">
+                  <span className="flex-1 font-mono text-[11px] text-okx-text-secondary">
                     {token.createdAt ? timeAgo(token.createdAt) : "--"}
                   </span>
                 </div>

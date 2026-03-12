@@ -179,25 +179,25 @@ function ToastItem({ toast, onClose }: { toast: ToastMessage; onClose: () => voi
 
   const config = {
     info: {
-      bg: "bg-[#1a1f2e]",
+      bg: "bg-blue-950/50",
       border: "border-blue-500/30",
       icon: "text-blue-400",
       text: "text-gray-100",
     },
     success: {
-      bg: "bg-[#1a2e1f]",
+      bg: "bg-green-950/50",
       border: "border-green-500/30",
       icon: "text-green-400",
       text: "text-gray-100",
     },
     warning: {
-      bg: "bg-[#2e2a1a]",
+      bg: "bg-yellow-950/50",
       border: "border-yellow-500/30",
       icon: "text-yellow-400",
       text: "text-gray-100",
     },
     error: {
-      bg: "bg-[#2e1a1a]",
+      bg: "bg-red-950/50",
       border: "border-red-500/30",
       icon: "text-red-400",
       text: "text-gray-100",

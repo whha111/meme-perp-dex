@@ -342,10 +342,10 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
     <div className={`flex flex-col gap-3 ${className}`}>
       {/* 毕业/不活跃提示 */}
       {isTradingDisabled && (
-        <div className="bg-gradient-to-r from-[#FFB800]/20 to-[#FF9500]/20 border border-[#FFB800]/50 rounded-lg p-3">
+        <div className="bg-gradient-to-r from-okx-warning/20 to-okx-warning/20 border border-okx-warning/50 rounded-lg p-3">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-lg">🎓</span>
-            <span className="text-[#FFB800] font-bold text-[13px]">
+            <span className="text-okx-warning font-bold text-[13px]">
               {isGraduated ? t("tokenGraduated") : t("poolPaused")}
             </span>
           </div>
@@ -359,7 +359,7 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
               href={`https://pancakeswap.finance/swap?chain=bsc&inputCurrency=BNB&outputCurrency=${tokenAddress}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-2 inline-block bg-[#1FC7D4] text-okx-text-primary px-3 py-1.5 rounded-lg text-[12px] font-bold hover:opacity-90"
+              className="mt-2 inline-block bg-okx-accent text-okx-text-primary px-3 py-1.5 rounded-lg text-[12px] font-bold hover:opacity-90"
             >
               🥞 {t("tradeOnUniswap")}
             </a>
@@ -371,13 +371,13 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
       <div className="flex bg-okx-bg-card p-1 rounded-lg border border-okx-border-primary">
         <button
           onClick={() => setMode("buy")}
-          className={`flex-1 py-1.5 text-[13px] font-bold rounded-md transition-all ${mode === 'buy' ? 'bg-[#1C1C1C] text-[#00D26A]' : 'text-okx-text-tertiary hover:text-okx-text-secondary'}`}
+          className={`flex-1 py-1.5 text-[13px] font-bold rounded-md transition-all ${mode === 'buy' ? 'bg-okx-bg-hover text-okx-up' : 'text-okx-text-tertiary hover:text-okx-text-secondary'}`}
         >
           {t("buy")}
         </button>
         <button
           onClick={() => setMode("sell")}
-          className={`flex-1 py-1.5 text-[13px] font-bold rounded-md transition-all ${mode === 'sell' ? 'bg-[#1C1C1C] text-[#FF3B30]' : 'text-okx-text-tertiary hover:text-okx-text-secondary'}`}
+          className={`flex-1 py-1.5 text-[13px] font-bold rounded-md transition-all ${mode === 'sell' ? 'bg-okx-bg-hover text-okx-down' : 'text-okx-text-tertiary hover:text-okx-text-secondary'}`}
         >
           {t("sell")}
         </button>
@@ -391,14 +391,14 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
             className={`pb-2 text-[13px] font-bold relative ${orderType === 'market' ? 'text-okx-text-primary' : 'text-okx-text-tertiary'}`}
           >
             {t("market")}
-            {orderType === 'market' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-white"></div>}
+            {orderType === 'market' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-okx-text-primary"></div>}
           </button>
           <button
             onClick={() => setOrderType("limit")}
             className={`pb-2 text-[13px] font-bold relative ${orderType === 'limit' ? 'text-okx-text-primary' : 'text-okx-text-tertiary'}`}
           >
             {t("limit")} <span className="text-[10px] ml-0.5">ⓘ</span>
-            {orderType === 'limit' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-white"></div>}
+            {orderType === 'limit' && <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-okx-text-primary"></div>}
           </button>
         </div>
 
@@ -417,7 +417,7 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
                   setAmount(formatUnits(effectiveBalance.value, 18));
                 }
               }}
-              className="text-okx-text-tertiary text-[11px] hover:text-[#A3E635] transition-colors cursor-pointer"
+              className="text-okx-text-tertiary text-[11px] hover:text-meme-lime transition-colors cursor-pointer"
             >
               {t("balance")}: <span className="text-okx-text-primary font-mono">
                 {mode === "buy"
@@ -427,7 +427,7 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
               </span> {mode === "buy" ? "BNB" : tokenLabel}
             </button>
           </div>
-          <div className="bg-okx-bg-primary border border-okx-border-primary rounded-lg p-3 flex items-center focus-within:border-[#A3E635] transition-colors">
+          <div className="bg-okx-bg-primary border border-okx-border-primary rounded-lg p-3 flex items-center focus-within:border-meme-lime transition-colors">
             <input
               type="number"
               value={amount}
@@ -438,7 +438,7 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
             <div className="flex items-center gap-2">
               <span className="text-okx-text-secondary text-[14px] font-bold">{mode === "buy" ? "BNB" : tokenLabel}</span>
               {mode === "buy" && (
-                <div className="w-5 h-5 rounded-full bg-[#F3BA2F] flex items-center justify-center">
+                <div className="w-5 h-5 rounded-full bg-okx-warning flex items-center justify-center">
                   <span className="text-[10px] font-bold text-black">B</span>
                 </div>
               )}
@@ -457,8 +457,8 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
                   onClick={() => setAmount(val)}
                   className={`flex-1 py-2 text-[12px] font-bold rounded-lg border transition-all ${
                     amount === val
-                      ? "bg-[#00D26A]/20 border-[#00D26A] text-[#00D26A]"
-                      : "bg-okx-bg-hover border-okx-border-primary text-okx-text-primary hover:border-[#333] hover:bg-[#222]"
+                      ? "bg-okx-up/20 border-okx-up text-okx-up"
+                      : "bg-okx-bg-hover border-okx-border-primary text-okx-text-primary hover:border-okx-border-secondary hover:bg-okx-bg-active"
                   }`}
                 >
                   {val}
@@ -482,7 +482,7 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
                       setAmount(formatUnits(sellAmount, 18));
                     }
                   }}
-                  className="flex-1 py-2 text-[12px] text-okx-text-primary font-bold rounded-lg border border-okx-border-primary bg-okx-bg-hover hover:border-[#FF3B30] hover:bg-[#FF3B30]/10 transition-all"
+                  className="flex-1 py-2 text-[12px] text-okx-text-primary font-bold rounded-lg border border-okx-border-primary bg-okx-bg-hover hover:border-okx-down hover:bg-okx-down/10 transition-all"
                 >
                   {label}
                 </button>
@@ -504,7 +504,7 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
         {!address ? (
           <button
             onClick={openConnectModal}
-            className="w-full bg-[#A3E635] text-black font-bold py-3 rounded-lg text-[15px] hover:opacity-90 transition-opacity mb-4"
+            className="w-full bg-meme-lime text-black font-bold py-3 rounded-lg text-[15px] hover:opacity-90 transition-opacity mb-4"
           >
             {t("connectWallet")}
           </button>
@@ -512,7 +512,7 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
           <button
             disabled={isPending || isApprovalConfirming}
             onClick={handleApprove}
-            className="w-full bg-[#00D26A] text-okx-text-primary font-bold py-3 rounded-lg text-[15px] hover:opacity-90 transition-opacity mb-4 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full bg-okx-up text-okx-text-primary font-bold py-3 rounded-lg text-[15px] hover:opacity-90 transition-opacity mb-4 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {(isPending || isApprovalConfirming) && <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>}
             {isApprovalConfirming ? t("approving") : t("approveSell")}
@@ -569,7 +569,7 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
               }
             }}
             className={`w-full font-bold py-3 rounded-lg text-[15px] hover:opacity-90 transition-opacity mb-4 flex items-center justify-center gap-2 ${
-              mode === "buy" ? "bg-[#00D26A] text-okx-text-primary" : "bg-[#FF3B30] text-okx-text-primary"
+              mode === "buy" ? "bg-okx-up text-okx-text-primary" : "bg-okx-down text-okx-text-primary"
             } disabled:opacity-50 disabled:cursor-not-allowed`}
           >
             {(isPending || isQuoting) && <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>}
@@ -611,8 +611,8 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
                     }}
                     className={`py-1.5 text-[11px] font-bold rounded border transition-all ${
                       slippageBps === preset.value
-                        ? "bg-[#1C1C1C] border-[#A3E635] text-[#A3E635]"
-                        : "bg-okx-bg-hover border-okx-border-primary text-okx-text-primary hover:border-[#333]"
+                        ? "bg-okx-bg-hover border-meme-lime text-meme-lime"
+                        : "bg-okx-bg-hover border-okx-border-primary text-okx-text-primary hover:border-okx-border-secondary"
                     }`}
                   >
                     {preset.label}
@@ -640,12 +640,12 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
                   min="0"
                   max="100"
                   step="0.1"
-                  className="bg-okx-bg-primary border border-okx-border-primary rounded px-2 py-1.5 text-okx-text-primary text-[11px] flex-1 outline-none focus:border-[#A3E635]"
+                  className="bg-okx-bg-primary border border-okx-border-primary rounded px-2 py-1.5 text-okx-text-primary text-[11px] flex-1 outline-none focus:border-meme-lime"
                 />
                 <span className="text-okx-text-secondary text-[11px]">%</span>
               </div>
               {customSlippage && (isNaN(parseFloat(customSlippage)) || parseFloat(customSlippage) < 0 || parseFloat(customSlippage) > 100) && (
-                <div className="text-[#FF3B30] text-[9px] mt-1">{t("slippageRange")}</div>
+                <div className="text-okx-down text-[9px] mt-1">{t("slippageRange")}</div>
               )}
               <div className="flex items-center justify-between text-okx-text-tertiary text-[9px] mt-2">
                 <span>{tc("currentSetting")}: {(slippageBps / 100).toFixed(2)}%</span>
@@ -653,7 +653,7 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
                   onClick={() => {
                     setShowSlippageSettings(false);
                   }}
-                  className="text-[#A3E635] hover:text-[#00D26A] text-[10px] font-bold"
+                  className="text-meme-lime hover:text-okx-up text-[10px] font-bold"
                 >
                   {tc("done")}
                 </button>
@@ -664,7 +664,7 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
 
         {/* 报价信息 */}
         {quoteError && (
-          <div className="text-[#FF3B30] text-[11px] mt-2">
+          <div className="text-okx-down text-[11px] mt-2">
             {t("quoteFailed")}: {quoteError instanceof Error ? quoteError.message : tc("loading")}
           </div>
         )}
@@ -673,10 +673,10 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
         {quote && mode === "sell" && quote.priceImpact > 5 && (
           <div className={`mt-2 p-2 rounded-lg border text-[11px] ${
             quote.priceImpact > 20
-              ? "bg-[#FF3B30]/20 border-[#FF3B30]/50 text-[#FF3B30]"
+              ? "bg-okx-down/20 border-okx-down/50 text-okx-down"
               : quote.priceImpact > 10
-              ? "bg-[#FF9500]/20 border-[#FF9500]/50 text-[#FF9500]"
-              : "bg-[#FFB800]/20 border-[#FFB800]/50 text-[#FFB800]"
+              ? "bg-okx-warning/20 border-okx-warning/50 text-okx-warning"
+              : "bg-okx-warning/20 border-okx-warning/50 text-okx-warning"
           }`}>
             <div className="flex items-center gap-1.5">
               <span>{quote.priceImpact > 20 ? "⚠️" : quote.priceImpact > 10 ? "🔸" : "💡"}</span>
@@ -711,7 +711,7 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
             </div>
             <div className="flex justify-between">
               <span>{t("priceImpact")}</span>
-              <span className={quote.priceImpact > 5 ? "text-[#FF3B30]" : "text-[#00D26A]"}>{quote.priceImpact.toFixed(2)}%</span>
+              <span className={quote.priceImpact > 5 ? "text-okx-down" : "text-okx-up"}>{quote.priceImpact.toFixed(2)}%</span>
             </div>
           </div>
         )}
@@ -737,7 +737,7 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
           <span>{t("target")}: 793M ({t("graduation")})</span>
         </div>
         {(graduationProgress >= 100 || isGraduated) && (
-          <div className="mt-2 text-center text-[10px] text-[#FFB800] font-bold">
+          <div className="mt-2 text-center text-[10px] text-okx-warning font-bold">
             🎓 {t("graduatedMessage")}
           </div>
         )}

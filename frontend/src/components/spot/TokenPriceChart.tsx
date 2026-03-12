@@ -800,7 +800,7 @@ export function TokenPriceChart({ symbol, displaySymbol, className, latestTrade 
           <>
             {/* 当前价格 - 大字显示 (ETH 本位) */}
             <div className="ml-6">
-              <span className={`font-bold text-[20px] ${displayOHLC.isUp ? 'text-[#26a69a]' : 'text-[#ef5350]'}`}>
+              <span className={`font-bold text-[20px] ${displayOHLC.isUp ? 'text-okx-up' : 'text-okx-down'}`}>
                 {formatPriceETH(displayOHLC.close)}
               </span>
             </div>
@@ -808,28 +808,28 @@ export function TokenPriceChart({ symbol, displaySymbol, className, latestTrade 
             {/* 涨跌幅 */}
             <div className={`ml-3 px-2 py-1 rounded text-[13px] font-medium ${
               displayOHLC.isUp
-                ? 'text-[#26a69a] bg-[#26a69a]/15'
-                : 'text-[#ef5350] bg-[#ef5350]/15'
+                ? 'text-okx-up bg-okx-up/15'
+                : 'text-okx-down bg-okx-down/15'
             }`}>
               {displayOHLC.isUp ? '+' : ''}{displayOHLC.changePercent.toFixed(2)}%
             </div>
 
             {/* 分隔线 */}
-            <div className="mx-4 h-6 w-px bg-[#2A2E39]" />
+            <div className="mx-4 h-6 w-px bg-okx-border-secondary" />
 
             {/* High/Low (ETH 本位) */}
             <div className="flex items-center gap-4 text-[12px]">
               <div className="flex items-center gap-1.5">
-                <span className="text-[#787B86]">{t("high")}</span>
-                <span className="text-[#26a69a]">{formatPriceETH(displayOHLC.high)}</span>
+                <span className="text-okx-text-secondary">{t("high")}</span>
+                <span className="text-okx-up">{formatPriceETH(displayOHLC.high)}</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="text-[#787B86]">{t("low")}</span>
-                <span className="text-[#ef5350]">{formatPriceETH(displayOHLC.low)}</span>
+                <span className="text-okx-text-secondary">{t("low")}</span>
+                <span className="text-okx-down">{formatPriceETH(displayOHLC.low)}</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <span className="text-[#787B86]">{t("vol")}</span>
-                <span className="text-[#9CA3AF]">{formatVolume(displayOHLC.volume)}</span>
+                <span className="text-okx-text-secondary">{t("vol")}</span>
+                <span className="text-okx-text-tertiary">{formatVolume(displayOHLC.volume)}</span>
               </div>
             </div>
           </>
@@ -845,8 +845,8 @@ export function TokenPriceChart({ symbol, displaySymbol, className, latestTrade 
               onClick={() => setResolution(key)}
               className={`px-2 py-0.5 text-[11px] font-medium rounded transition-all ${
                 resolution === key
-                  ? 'text-okx-text-primary bg-[#2962FF]'
-                  : 'text-[#787B86] hover:text-okx-text-primary hover:bg-[#2A2E39]'
+                  ? 'text-okx-text-primary bg-blue-500'
+                  : 'text-okx-text-secondary hover:text-okx-text-primary hover:bg-okx-bg-hover'
               }`}
             >
               {tc(RESOLUTION_KEYS[key])}
@@ -857,15 +857,15 @@ export function TokenPriceChart({ symbol, displaySymbol, className, latestTrade 
         <div className="flex-1" />
 
         <div className="flex items-center gap-3 text-[12px]">
-          <span className="text-[#787B86]">{currentTime} UTC</span>
-          <span className="text-[#363A45]">|</span>
+          <span className="text-okx-text-secondary">{currentTime} UTC</span>
+          <span className="text-okx-text-tertiary">|</span>
 
           <button
             onClick={toggleLogScale}
             className={`px-2 py-1 rounded transition-all ${
               isLogScale
-                ? 'text-okx-text-primary bg-[#2962FF]'
-                : 'text-[#787B86] hover:text-okx-text-primary hover:bg-[#2A2E39]'
+                ? 'text-okx-text-primary bg-blue-500'
+                : 'text-okx-text-secondary hover:text-okx-text-primary hover:bg-okx-bg-hover'
             }`}
           >
             log
@@ -873,19 +873,19 @@ export function TokenPriceChart({ symbol, displaySymbol, className, latestTrade 
 
           <button
             onClick={handleAutoScale}
-            className="px-2 py-1 rounded text-[#26a69a] hover:bg-[#2A2E39] transition-all"
+            className="px-2 py-1 rounded text-okx-up hover:bg-okx-bg-hover transition-all"
           >
             {t("auto")}
           </button>
 
-          <span className="text-[#363A45]">|</span>
+          <span className="text-okx-text-tertiary">|</span>
 
           {/* Connection status */}
           <div className="flex items-center gap-1.5">
             {tradeCount > 0 ? (
               <>
-                <span className="w-1.5 h-1.5 rounded-full bg-[#26a69a] animate-pulse" />
-                <span className="text-[#26a69a]">{t("realtime")} ({tradeCount})</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-okx-up animate-pulse" />
+                <span className="text-okx-up">{t("realtime")} ({tradeCount})</span>
               </>
             ) : wsLoading ? (
               <>
@@ -894,8 +894,8 @@ export function TokenPriceChart({ symbol, displaySymbol, className, latestTrade 
               </>
             ) : (
               <>
-                <span className="w-1.5 h-1.5 rounded-full bg-[#787B86]" />
-                <span className="text-[#787B86]">{t("noTradeData")}</span>
+                <span className="w-1.5 h-1.5 rounded-full bg-okx-text-secondary" />
+                <span className="text-okx-text-secondary">{t("noTradeData")}</span>
               </>
             )}
           </div>
@@ -913,19 +913,19 @@ export function TokenPriceChart({ symbol, displaySymbol, className, latestTrade 
             <div className="flex flex-col items-center gap-3 text-center">
               <div className="w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: chartColors.hoverBg }}>
                 {isLoadingHistory || wsLoading ? (
-                  <div className="w-6 h-6 border-2 border-[#2962FF] border-t-transparent rounded-full animate-spin" />
+                  <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
                 ) : historyError ? (
-                  <svg className="w-6 h-6 text-[#ef5350]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-6 h-6 text-okx-down" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                   </svg>
                 ) : (
-                  <svg className="w-6 h-6 text-[#787B86]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <svg className="w-6 h-6 text-okx-text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                   </svg>
                 )}
               </div>
               <div>
-                <p className="text-[#787B86] text-[13px]">
+                <p className="text-okx-text-secondary text-[13px]">
                   {wsLoading || isLoadingHistory
                     ? t("loadingKline")
                     : historyError
@@ -935,7 +935,7 @@ export function TokenPriceChart({ symbol, displaySymbol, className, latestTrade 
                 {historyError && (
                   <button
                     onClick={() => refreshKlines()}
-                    className="mt-2 px-3 py-1 text-xs text-[#2962FF] hover:bg-[#2962FF]/10 rounded"
+                    className="mt-2 px-3 py-1 text-xs text-blue-500 hover:bg-blue-500/10 rounded"
                   >
                     {t("retry")}
                   </button>

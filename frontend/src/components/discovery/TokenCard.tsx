@@ -97,11 +97,11 @@ export function TokenCard({
         <div className="flex items-center gap-2">
           <div className="w-16 h-1.5 bg-okx-bg-hover rounded-full overflow-hidden">
             <div
-              className="h-full bg-[#A3E635] rounded-full transition-all"
+              className="h-full bg-meme-lime rounded-full transition-all"
               style={{ width: `${Math.min(progress, 100)}%` }}
             />
           </div>
-          <span className="text-[10px] text-[#A3E635] font-bold">{progress.toFixed(0)}%</span>
+          <span className="text-[10px] text-meme-lime font-bold">{progress.toFixed(0)}%</span>
         </div>
       </div>
     </div>

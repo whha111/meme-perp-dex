@@ -106,10 +106,10 @@ export function LiquidityPanel({
         <span
           className={`px-2 py-0.5 rounded text-[11px] font-medium ${
             poolState.isGraduated
-              ? "bg-[#5856D6]/20 text-[#5856D6]"
+              ? "bg-purple-500/20 text-purple-500"
               : poolState.isActive
-                ? "bg-[#00D26A]/20 text-[#00D26A]"
-                : "bg-[#FF3B30]/20 text-[#FF3B30]"
+                ? "bg-okx-up/20 text-okx-up"
+                : "bg-okx-down/20 text-okx-down"
           }`}
         >
           {poolState.isGraduated
@@ -132,9 +132,9 @@ export function LiquidityPanel({
             <span className="text-okx-text-secondary">{t("trading.graduationProgress")}</span>
             <span className="text-okx-text-primary font-bold">{progressPct.toFixed(1)}%</span>
           </div>
-          <div className="h-2 bg-[#1F1F1F] rounded-full overflow-hidden">
+          <div className="h-2 bg-okx-bg-hover rounded-full overflow-hidden">
             <div
-              className="h-full rounded-full bg-gradient-to-r from-[#A3E635] to-[#22C55E] transition-all duration-500"
+              className="h-full rounded-full bg-gradient-to-r from-meme-lime to-okx-up transition-all duration-500"
               style={{ width: `${progressPct}%` }}
             />
           </div>

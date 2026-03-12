@@ -32,7 +32,7 @@ export default function TradeLoading() {
         <div className="flex flex-1">
           {/* Left: Chart Area */}
           <div className="flex-[3] border-r border-okx-border-primary">
-            <div className="h-[400px] bg-[#131722] flex items-center justify-center">
+            <div className="h-[400px] bg-okx-bg-card flex items-center justify-center">
               <div className="flex flex-col items-center gap-3">
                 <div className="w-10 h-10 border-4 border-okx-up border-t-transparent rounded-full animate-spin" />
                 <p className="text-okx-text-tertiary text-sm">Loading chart...</p>

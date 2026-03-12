@@ -171,15 +171,15 @@ export default function CreateTokenPage() {
   const totalCost = (parseFloat(serviceFeeEth) || 0.001) + buyVal;
 
   return (
-    <main className="min-h-screen bg-[#000000] text-okx-text-primary">
+    <main className="min-h-screen bg-okx-bg-primary text-okx-text-primary">
       <Navbar />
 
       {/* Title Section — full width */}
       <div className="px-12 pt-10">
-        <h1 className="text-[32px] font-semibold text-white">
+        <h1 className="text-[32px] font-semibold text-okx-text-primary">
           {t("title")}
         </h1>
-        <p className="text-sm text-[#6e6e6e] font-mono mt-2">
+        <p className="text-sm text-okx-text-secondary font-mono mt-2">
           {t("subtitle")}
         </p>
       </div>
@@ -190,8 +190,8 @@ export default function CreateTokenPage() {
         <div className="flex-1 flex flex-col gap-8">
 
           {/* Token Info Card */}
-          <div className="bg-[#111111] border border-[#1A1A1A] rounded-lg p-6 space-y-6">
-            <h2 className="text-lg font-semibold text-white">{t("descriptionLabel") === "描述" ? "代币信息" : "Token Info"}</h2>
+          <div className="bg-okx-bg-card border border-okx-border-primary rounded-lg p-6 space-y-6">
+            <h2 className="text-lg font-semibold text-okx-text-primary">{t("descriptionLabel") === "描述" ? "代币信息" : "Token Info"}</h2>
 
             <div className="flex gap-6">
               {/* Logo Upload */}
@@ -206,26 +206,26 @@ export default function CreateTokenPage() {
                   hint=""
                   size="lg"
                 />
-                <p className="text-center text-[#6e6e6e] text-xs mt-2">{t("uploadLogo")}</p>
+                <p className="text-center text-okx-text-secondary text-xs mt-2">{t("uploadLogo")}</p>
               </div>
 
               {/* Name + Symbol fields */}
               <div className="flex-1 space-y-4">
                 <div>
-                  <label className="block text-[#999999] text-xs font-medium font-mono mb-1.5">
-                    {t("nameLabel")} <span className="text-[#FF3B30]">*</span>
+                  <label className="block text-okx-text-tertiary text-xs font-medium font-mono mb-1.5">
+                    {t("nameLabel")} <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="text"
                     value={tokenName}
                     onChange={(e) => setTokenName(e.target.value)}
                     placeholder={t("namePlaceholder")}
-                    className="w-full bg-[#1A1A1A] border border-[#2A2A2A] rounded-lg px-3.5 py-3 text-white placeholder:text-[#6e6e6e] focus:outline-none focus:border-[#BFFF00] transition-colors"
+                    className="w-full bg-okx-bg-hover border border-okx-border-secondary rounded-lg px-3.5 py-3 text-okx-text-primary placeholder:text-okx-text-secondary focus:outline-none focus:border-meme-lime transition-colors"
                   />
                 </div>
                 <div>
-                  <label className="block text-[#999999] text-xs font-medium font-mono mb-1.5">
-                    {t("symbolLabel")} <span className="text-[#FF3B30]">*</span>
+                  <label className="block text-okx-text-tertiary text-xs font-medium font-mono mb-1.5">
+                    {t("symbolLabel")} <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="text"
@@ -233,7 +233,7 @@ export default function CreateTokenPage() {
                     onChange={(e) => setTokenSymbol(e.target.value.toUpperCase())}
                     placeholder={t("symbolPlaceholder")}
                     maxLength={10}
-                    className="w-full bg-[#1A1A1A] border border-[#2A2A2A] rounded-lg px-3.5 py-3 text-white placeholder:text-[#6e6e6e] focus:outline-none focus:border-[#BFFF00] transition-colors uppercase"
+                    className="w-full bg-okx-bg-hover border border-okx-border-secondary rounded-lg px-3.5 py-3 text-okx-text-primary placeholder:text-okx-text-secondary focus:outline-none focus:border-meme-lime transition-colors uppercase"
                   />
                 </div>
               </div>
@@ -241,7 +241,7 @@ export default function CreateTokenPage() {
 
             {/* Description */}
             <div>
-              <label className="block text-[#999999] text-xs font-medium font-mono mb-1.5">
+              <label className="block text-okx-text-tertiary text-xs font-medium font-mono mb-1.5">
                 {t("descriptionLabel")}
               </label>
               <textarea
@@ -249,19 +249,19 @@ export default function CreateTokenPage() {
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder={t("descriptionPlaceholder")}
                 rows={3}
-                className="w-full bg-[#1A1A1A] border border-[#2A2A2A] rounded-lg px-3.5 py-3 text-white placeholder:text-[#6e6e6e] focus:outline-none focus:border-[#BFFF00] transition-colors resize-none"
+                className="w-full bg-okx-bg-hover border border-okx-border-secondary rounded-lg px-3.5 py-3 text-okx-text-primary placeholder:text-okx-text-secondary focus:outline-none focus:border-meme-lime transition-colors resize-none"
               />
             </div>
           </div>
 
           {/* Social Links Card */}
-          <div className="bg-[#111111] border border-[#1A1A1A] rounded-lg p-6">
+          <div className="bg-okx-bg-card border border-okx-border-primary rounded-lg p-6">
             <button
               onClick={() => setShowSocials(!showSocials)}
               className="flex items-center justify-between w-full"
             >
-              <span className="text-base font-semibold text-white">{t("addSocialLinks")}</span>
-              <svg className={`w-4 h-4 text-[#6e6e6e] transition-transform ${showSocials ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <span className="text-base font-semibold text-okx-text-primary">{t("addSocialLinks")}</span>
+              <svg className={`w-4 h-4 text-okx-text-secondary transition-transform ${showSocials ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
               </svg>
             </button>
@@ -269,41 +269,41 @@ export default function CreateTokenPage() {
             {showSocials && (
               <div className="grid grid-cols-2 gap-4 mt-5">
                 <div>
-                  <label className="block text-[#999999] text-xs font-medium font-mono mb-1.5">{t("websitePlaceholder")}</label>
+                  <label className="block text-okx-text-tertiary text-xs font-medium font-mono mb-1.5">{t("websitePlaceholder")}</label>
                   <input type="url" value={website} onChange={(e) => setWebsite(e.target.value)} placeholder="https://..."
-                    className="w-full bg-[#1A1A1A] border border-[#2A2A2A] rounded-lg px-3.5 py-2.5 text-white placeholder:text-[#6e6e6e] focus:outline-none focus:border-[#BFFF00] text-sm" />
+                    className="w-full bg-okx-bg-hover border border-okx-border-secondary rounded-lg px-3.5 py-2.5 text-okx-text-primary placeholder:text-okx-text-secondary focus:outline-none focus:border-meme-lime text-sm" />
                 </div>
                 <div>
-                  <label className="block text-[#999999] text-xs font-medium font-mono mb-1.5">Twitter / X</label>
+                  <label className="block text-okx-text-tertiary text-xs font-medium font-mono mb-1.5">Twitter / X</label>
                   <input type="url" value={twitter} onChange={(e) => setTwitter(e.target.value)} placeholder="https://twitter.com/..."
-                    className="w-full bg-[#1A1A1A] border border-[#2A2A2A] rounded-lg px-3.5 py-2.5 text-white placeholder:text-[#6e6e6e] focus:outline-none focus:border-[#BFFF00] text-sm" />
+                    className="w-full bg-okx-bg-hover border border-okx-border-secondary rounded-lg px-3.5 py-2.5 text-okx-text-primary placeholder:text-okx-text-secondary focus:outline-none focus:border-meme-lime text-sm" />
                 </div>
                 <div>
-                  <label className="block text-[#999999] text-xs font-medium font-mono mb-1.5">Telegram</label>
+                  <label className="block text-okx-text-tertiary text-xs font-medium font-mono mb-1.5">Telegram</label>
                   <input type="url" value={telegram} onChange={(e) => setTelegram(e.target.value)} placeholder="https://t.me/..."
-                    className="w-full bg-[#1A1A1A] border border-[#2A2A2A] rounded-lg px-3.5 py-2.5 text-white placeholder:text-[#6e6e6e] focus:outline-none focus:border-[#BFFF00] text-sm" />
+                    className="w-full bg-okx-bg-hover border border-okx-border-secondary rounded-lg px-3.5 py-2.5 text-okx-text-primary placeholder:text-okx-text-secondary focus:outline-none focus:border-meme-lime text-sm" />
                 </div>
                 <div>
-                  <label className="block text-[#999999] text-xs font-medium font-mono mb-1.5">Discord</label>
+                  <label className="block text-okx-text-tertiary text-xs font-medium font-mono mb-1.5">Discord</label>
                   <input type="url" value={discord} onChange={(e) => setDiscord(e.target.value)} placeholder="https://discord.gg/..."
-                    className="w-full bg-[#1A1A1A] border border-[#2A2A2A] rounded-lg px-3.5 py-2.5 text-white placeholder:text-[#6e6e6e] focus:outline-none focus:border-[#BFFF00] text-sm" />
+                    className="w-full bg-okx-bg-hover border border-okx-border-secondary rounded-lg px-3.5 py-2.5 text-okx-text-primary placeholder:text-okx-text-secondary focus:outline-none focus:border-meme-lime text-sm" />
                 </div>
               </div>
             )}
           </div>
 
           {/* Initial Buy Card */}
-          <div className="bg-[#111111] border border-[#1A1A1A] rounded-lg p-6 space-y-5">
+          <div className="bg-okx-bg-card border border-okx-border-primary rounded-lg p-6 space-y-5">
             <div className="flex items-center justify-between">
-              <span className="text-base font-semibold text-white">{t("initialBuyTitle")}</span>
-              <span className="text-xs text-[#6e6e6e] font-mono">{t("initialBuySubtitle")}</span>
+              <span className="text-base font-semibold text-okx-text-primary">{t("initialBuyTitle")}</span>
+              <span className="text-xs text-okx-text-secondary font-mono">{t("initialBuySubtitle")}</span>
             </div>
 
             <div>
-              <label className="block text-[#999999] text-xs font-medium font-mono mb-1.5">
+              <label className="block text-okx-text-tertiary text-xs font-medium font-mono mb-1.5">
                 {t("buyAmountLabel")}
               </label>
-              <div className="flex items-center bg-[#1A1A1A] border border-[#2A2A2A] rounded-lg px-3.5 h-12">
+              <div className="flex items-center bg-okx-bg-hover border border-okx-border-secondary rounded-lg px-3.5 h-12">
                 <input
                   type="number"
                   step="0.01"
@@ -311,13 +311,13 @@ export default function CreateTokenPage() {
                   value={initialBuyEth}
                   onChange={(e) => setInitialBuyEth(e.target.value)}
                   placeholder="0.00"
-                  className="flex-1 bg-transparent text-lg font-bold text-white placeholder:text-[#6e6e6e] focus:outline-none"
+                  className="flex-1 bg-transparent text-lg font-bold text-okx-text-primary placeholder:text-okx-text-secondary focus:outline-none"
                 />
                 <div className="flex items-center gap-2">
-                  <div className="w-5 h-5 rounded-full bg-[#BFFF00] flex items-center justify-center">
+                  <div className="w-5 h-5 rounded-full bg-meme-lime flex items-center justify-center">
                     <span className="text-[10px] text-black font-bold">B</span>
                   </div>
-                  <span className="text-sm font-bold text-white">BNB</span>
+                  <span className="text-sm font-bold text-okx-text-primary">BNB</span>
                 </div>
               </div>
             </div>
@@ -330,8 +330,8 @@ export default function CreateTokenPage() {
                   onClick={() => setInitialBuyEth(val)}
                   className={`flex-1 h-9 text-xs font-medium rounded-lg border transition-all ${
                     initialBuyEth === val
-                      ? "bg-[#1A1A1A] border-[#BFFF00] text-[#BFFF00]"
-                      : "bg-[#1A1A1A] border-[#2A2A2A] text-[#999999] hover:border-[#444] hover:text-white"
+                      ? "bg-okx-bg-hover border-meme-lime text-meme-lime"
+                      : "bg-okx-bg-hover border-okx-border-secondary text-okx-text-tertiary hover:border-okx-border-hover hover:text-okx-text-primary"
                   }`}
                 >
                   {val}
@@ -343,37 +343,37 @@ export default function CreateTokenPage() {
           {/* Fee Summary */}
           <div className="space-y-2.5 px-1">
             <div className="flex items-center justify-between text-xs">
-              <span className="text-[#6e6e6e] font-mono">{t("creationFee")}</span>
-              <span className="text-[#999999] font-mono font-medium">{serviceFeeEth} BNB</span>
+              <span className="text-okx-text-secondary font-mono">{t("creationFee")}</span>
+              <span className="text-okx-text-tertiary font-mono font-medium">{serviceFeeEth} BNB</span>
             </div>
             {buyVal > 0 && (
               <div className="flex items-center justify-between text-xs">
-                <span className="text-[#6e6e6e] font-mono">{t("initialBuy")}</span>
-                <span className="text-[#999999] font-mono font-medium">{initialBuyEth} BNB</span>
+                <span className="text-okx-text-secondary font-mono">{t("initialBuy")}</span>
+                <span className="text-okx-text-tertiary font-mono font-medium">{initialBuyEth} BNB</span>
               </div>
             )}
-            <div className="h-px bg-[#1A1A1A]"></div>
+            <div className="h-px bg-okx-border-primary"></div>
             <div className="flex items-center justify-between text-sm">
-              <span className="text-white font-mono font-semibold">{t("totalLabel")}</span>
-              <span className="text-[#BFFF00] font-mono font-semibold">{totalCost.toFixed(4)} BNB</span>
+              <span className="text-okx-text-primary font-mono font-semibold">{t("totalLabel")}</span>
+              <span className="text-meme-lime font-mono font-semibold">{totalCost.toFixed(4)} BNB</span>
             </div>
           </div>
 
           {/* Create Button */}
           {showWalletLoading ? (
             <div className="flex items-center justify-center py-4">
-              <div className="w-5 h-5 border-2 border-[#BFFF00] border-t-transparent rounded-full animate-spin"></div>
-              <span className="ml-3 text-[#6e6e6e] text-sm">{tc("syncingWallet")}</span>
+              <div className="w-5 h-5 border-2 border-meme-lime border-t-transparent rounded-full animate-spin"></div>
+              <span className="ml-3 text-okx-text-secondary text-sm">{tc("syncingWallet")}</span>
             </div>
           ) : !effectivelyConnected ? (
-            <div className="bg-[#BFFF00]/10 border border-[#BFFF00]/30 rounded-xl p-4">
-              <p className="text-[#BFFF00] text-sm text-center font-medium">{tc("connectWalletFirst")}</p>
+            <div className="bg-meme-lime/10 border border-meme-lime/30 rounded-xl p-4">
+              <p className="text-meme-lime text-sm text-center font-medium">{tc("connectWalletFirst")}</p>
             </div>
           ) : (
             <button
               onClick={handleCreateToken}
               disabled={isCreating || !tokenName || !tokenSymbol}
-              className={`w-full h-14 bg-[#BFFF00] text-black rounded-lg font-bold text-base flex items-center justify-center gap-2.5 transition-all ${
+              className={`w-full h-14 bg-meme-lime text-black rounded-lg font-bold text-base flex items-center justify-center gap-2.5 transition-all ${
                 isCreating || !tokenName || !tokenSymbol ? 'opacity-50 cursor-not-allowed' : 'hover:brightness-110'
               }`}
             >
@@ -396,7 +396,7 @@ export default function CreateTokenPage() {
                 href={`${NETWORK_CONFIG.BLOCK_EXPLORER}/tx/${txHash}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-[#BFFF00] text-xs hover:underline"
+                className="inline-flex items-center gap-1 text-meme-lime text-xs hover:underline"
               >
                 {t("viewTransaction")} ↗
               </a>
@@ -408,65 +408,65 @@ export default function CreateTokenPage() {
         <div className="w-[380px] flex-shrink-0 flex flex-col gap-6">
 
           {/* Token Parameters */}
-          <div className="bg-[#111111] border border-[#1A1A1A] rounded-lg p-6">
-            <h3 className="text-base font-semibold text-white mb-4">{t("tokenParams")}</h3>
+          <div className="bg-okx-bg-card border border-okx-border-primary rounded-lg p-6">
+            <h3 className="text-base font-semibold text-okx-text-primary mb-4">{t("tokenParams")}</h3>
             <div className="space-y-0">
               {[
-                { label: t("totalSupply"), value: "1,000,000,000", color: "text-white" },
-                { label: t("creationFee"), value: `${serviceFeeEth} BNB`, color: "text-white" },
-                { label: t("tradingFee"), value: "1%", color: "text-white" },
-                { label: t("graduationThreshold"), value: "~5.16 BNB", color: "text-[#BFFF00]" },
-                { label: t("bondingCurve"), value: t("bondingCurveFormula"), color: "text-white" },
+                { label: t("totalSupply"), value: "1,000,000,000", color: "text-okx-text-primary" },
+                { label: t("creationFee"), value: `${serviceFeeEth} BNB`, color: "text-okx-text-primary" },
+                { label: t("tradingFee"), value: "1%", color: "text-okx-text-primary" },
+                { label: t("graduationThreshold"), value: "~5.16 BNB", color: "text-meme-lime" },
+                { label: t("bondingCurve"), value: t("bondingCurveFormula"), color: "text-okx-text-primary" },
               ].map((row, i, arr) => (
                 <React.Fragment key={i}>
                   <div className="flex items-center justify-between py-3">
-                    <span className="text-xs text-[#6e6e6e] font-mono">{row.label}</span>
+                    <span className="text-xs text-okx-text-secondary font-mono">{row.label}</span>
                     <span className={`text-xs font-mono font-semibold ${row.color}`}>{row.value}</span>
                   </div>
-                  {i < arr.length - 1 && <div className="h-px bg-[#1A1A1A]"></div>}
+                  {i < arr.length - 1 && <div className="h-px bg-okx-border-primary"></div>}
                 </React.Fragment>
               ))}
             </div>
           </div>
 
           {/* Fee Distribution */}
-          <div className="bg-[#111111] border border-[#1A1A1A] rounded-lg p-6">
-            <h3 className="text-base font-semibold text-white mb-4">{t("feeDistribution")}</h3>
+          <div className="bg-okx-bg-card border border-okx-border-primary rounded-lg p-6">
+            <h3 className="text-base font-semibold text-okx-text-primary mb-4">{t("feeDistribution")}</h3>
             {/* Colored bar */}
             <div className="flex h-2 rounded-full overflow-hidden mb-4">
-              <div className="bg-[#BFFF00]" style={{ width: '50%' }}></div>
-              <div className="bg-[#3B82F6]" style={{ width: '20%' }}></div>
-              <div className="bg-[#404040] flex-1"></div>
+              <div className="bg-meme-lime" style={{ width: '50%' }}></div>
+              <div className="bg-blue-500" style={{ width: '20%' }}></div>
+              <div className="bg-okx-text-tertiary flex-1"></div>
             </div>
             {/* Legend */}
             <div className="space-y-2.5">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-[#BFFF00]"></div>
-                  <span className="text-xs text-[#6e6e6e] font-mono">{t("creator")}</span>
+                  <div className="w-2.5 h-2.5 rounded-full bg-meme-lime"></div>
+                  <span className="text-xs text-okx-text-secondary font-mono">{t("creator")}</span>
                 </div>
-                <span className="text-xs text-white font-mono font-medium">50%</span>
+                <span className="text-xs text-okx-text-primary font-mono font-medium">50%</span>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-[#3B82F6]"></div>
-                  <span className="text-xs text-[#6e6e6e] font-mono">{t("referrer")}</span>
+                  <div className="w-2.5 h-2.5 rounded-full bg-blue-500"></div>
+                  <span className="text-xs text-okx-text-secondary font-mono">{t("referrer")}</span>
                 </div>
-                <span className="text-xs text-white font-mono font-medium">10%</span>
+                <span className="text-xs text-okx-text-primary font-mono font-medium">10%</span>
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-[#404040]"></div>
-                  <span className="text-xs text-[#6e6e6e] font-mono">{t("platform")}</span>
+                  <div className="w-2.5 h-2.5 rounded-full bg-okx-text-tertiary"></div>
+                  <span className="text-xs text-okx-text-secondary font-mono">{t("platform")}</span>
                 </div>
-                <span className="text-xs text-white font-mono font-medium">40%</span>
+                <span className="text-xs text-okx-text-primary font-mono font-medium">40%</span>
               </div>
             </div>
           </div>
 
           {/* How It Works */}
-          <div className="bg-[#111111] border border-[#1A1A1A] rounded-lg p-6">
-            <h3 className="text-base font-semibold text-white mb-5">{t("howItWorks")}</h3>
+          <div className="bg-okx-bg-card border border-okx-border-primary rounded-lg p-6">
+            <h3 className="text-base font-semibold text-okx-text-primary mb-5">{t("howItWorks")}</h3>
             <div className="space-y-5">
               {[
                 { num: "1", title: t("step1Title"), desc: t("step1Desc"), active: true },
@@ -476,14 +476,14 @@ export default function CreateTokenPage() {
                 <div key={s.num} className="flex gap-3">
                   <div className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 text-xs font-bold ${
                     s.active
-                      ? 'bg-[#BFFF00] text-black'
-                      : 'bg-[#1A1A1A] border border-[#2A2A2A] text-[#6e6e6e]'
+                      ? 'bg-meme-lime text-black'
+                      : 'bg-okx-bg-hover border border-okx-border-secondary text-okx-text-secondary'
                   }`}>
                     {s.num}
                   </div>
                   <div>
-                    <div className="text-sm font-semibold text-white">{s.title}</div>
-                    <div className="text-xs text-[#6e6e6e] font-mono mt-1 leading-relaxed">{s.desc}</div>
+                    <div className="text-sm font-semibold text-okx-text-primary">{s.title}</div>
+                    <div className="text-xs text-okx-text-secondary font-mono mt-1 leading-relaxed">{s.desc}</div>
                   </div>
                 </div>
               ))}
@@ -494,8 +494,8 @@ export default function CreateTokenPage() {
 
       {/* Terms */}
       <div className="px-12 pb-8 text-center">
-        <p className="text-[#6e6e6e] text-xs">
-          {t("termsAgree")} <a href="#" className="text-[#999999] hover:text-white">{t("termsOfService")}</a>
+        <p className="text-okx-text-secondary text-xs">
+          {t("termsAgree")} <a href="#" className="text-okx-text-tertiary hover:text-okx-text-primary">{t("termsOfService")}</a>
         </p>
       </div>
     </main>

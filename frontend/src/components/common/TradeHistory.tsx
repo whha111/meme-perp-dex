@@ -53,7 +53,7 @@ export function TradeHistory({ trades, className }: TradeHistoryProps) {
             <th className="py-2 px-3 font-normal">{t('history.details')}</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-[#1F1F1F]/50">
+        <tbody className="divide-y divide-okx-border-primary/50">
           {safeTrades.map((trade, index) => {
             const isBuy = trade.type === "buy";
             return (
@@ -63,7 +63,7 @@ export function TradeHistory({ trades, className }: TradeHistoryProps) {
                 trade.isNew ? "trade-new" : ""
               } ${
                 (trade.isDev || trade.label === "DEV") && trade.type === "sell"
-                  ? "bg-[#FF3B30]/5"
+                  ? "bg-okx-down/5"
                   : ""
               }`}
             >
@@ -76,19 +76,19 @@ export function TradeHistory({ trades, className }: TradeHistoryProps) {
                 <td className="py-3 px-3">
                   <div className="flex items-center gap-1.5">
                     <span className={`px-2 py-0.5 rounded-[4px] font-bold text-[11px] ${
-                      isBuy ? "bg-[#00D26A]/10 text-[#00D26A]" : "bg-[#FF2D55]/10 text-[#FF2D55]"
+                      isBuy ? "bg-okx-up/10 text-okx-up" : "bg-okx-down/10 text-okx-down"
                     }`}>
                       {isBuy ? t('token.buy') : t('token.sell')}
                     </span>
                     {/* Dev Sold 警告标识 */}
                     {!isBuy && (trade.isDev || trade.label === "DEV") && (
-                      <span className="px-1.5 py-0.5 rounded bg-[#FF3B30]/20 text-[#FF3B30] text-[9px] font-bold border border-[#FF3B30]/30 animate-pulse">
+                      <span className="px-1.5 py-0.5 rounded bg-okx-down/20 text-okx-down text-[9px] font-bold border border-okx-down/30 animate-pulse">
                         {t('history.devSold')}
                       </span>
                     )}
                     {/* Creator Sold 警告标识 */}
                     {!isBuy && (trade.isCreator || trade.label === "CREATOR") && (
-                      <span className="px-1.5 py-0.5 rounded bg-[#FF9500]/20 text-[#FF9500] text-[9px] font-bold border border-[#FF9500]/30">
+                      <span className="px-1.5 py-0.5 rounded bg-okx-warning/20 text-okx-warning text-[9px] font-bold border border-okx-warning/30">
                         {t('holders.creator')}
                       </span>
                     )}
@@ -96,7 +96,7 @@ export function TradeHistory({ trades, className }: TradeHistoryProps) {
                 </td>
 
                 {/* 总价值 */}
-                <td className={`py-3 px-3 text-right font-bold ${isBuy ? "text-[#00D26A]" : "text-[#FF2D55]"}`}>
+                <td className={`py-3 px-3 text-right font-bold ${isBuy ? "text-okx-up" : "text-okx-down"}`}>
                   {trade.totalValue}
                 </td>
 
@@ -107,7 +107,7 @@ export function TradeHistory({ trades, className }: TradeHistoryProps) {
 
                 {/* 数量 */}
                 <td className="py-3 px-3 text-right">
-                  <div className={`font-bold ${isBuy ? "text-[#00D26A]" : "text-[#FF2D55]"}`}>
+                  <div className={`font-bold ${isBuy ? "text-okx-up" : "text-okx-down"}`}>
                     {trade.quantity}
                   </div>
                   <div className="text-okx-text-tertiary text-[10px]">
@@ -122,11 +122,11 @@ export function TradeHistory({ trades, className }: TradeHistoryProps) {
                     {/* 地址标签 */}
                     {trade.label && !["DEV", "CREATOR"].includes(trade.label) && (
                       <span className={`px-1 py-0.5 rounded text-[9px] font-medium ${
-                        trade.label === "WHALE" ? "bg-[#5856D6]/20 text-[#5856D6] border border-[#5856D6]/30" :
-                        trade.label === "SNIPER" ? "bg-[#FF2D55]/20 text-[#FF2D55] border border-[#FF2D55]/30" :
-                        trade.label === "KOL" ? "bg-[#007AFF]/20 text-[#007AFF] border border-[#007AFF]/30" :
-                        trade.label === "SMART_MONEY" ? "bg-[#00D26A]/20 text-[#00D26A] border border-[#00D26A]/30" :
-                        "bg-[#636366]/20 text-okx-text-tertiary"
+                        trade.label === "WHALE" ? "bg-purple-500/20 text-purple-500 border border-purple-500/30" :
+                        trade.label === "SNIPER" ? "bg-okx-down/20 text-okx-down border border-okx-down/30" :
+                        trade.label === "KOL" ? "bg-blue-500/20 text-blue-500 border border-blue-500/30" :
+                        trade.label === "SMART_MONEY" ? "bg-okx-up/20 text-okx-up border border-okx-up/30" :
+                        "bg-gray-500/20 text-okx-text-tertiary"
                       }`}>
                         {trade.label === "WHALE" ? t('holders.whale') :
                          trade.label === "SNIPER" ? t('holders.sniper') :
@@ -146,10 +146,10 @@ export function TradeHistory({ trades, className }: TradeHistoryProps) {
                   {(trade.isDev || trade.isCreator || trade.label === "DEV" || trade.label === "CREATOR") && (
                     <div className="flex gap-1 mt-0.5">
                       {(trade.isDev || trade.label === "DEV") && (
-                        <span className="text-[10px] text-[#FF9500] flex items-center gap-0.5"><svg className="w-3 h-3 inline-block" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" /></svg> {t('holders.dev')}</span>
+                        <span className="text-[10px] text-okx-warning flex items-center gap-0.5"><svg className="w-3 h-3 inline-block" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75L22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3l-4.5 16.5" /></svg> {t('holders.dev')}</span>
                       )}
                       {(trade.isCreator || trade.label === "CREATOR") && (
-                        <span className="text-[10px] text-[#007AFF] flex items-center gap-0.5"><svg className="w-3 h-3 inline-block" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" /></svg> {t('holders.creator')}</span>
+                        <span className="text-[10px] text-blue-500 flex items-center gap-0.5"><svg className="w-3 h-3 inline-block" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" /></svg> {t('holders.creator')}</span>
                       )}
                     </div>
                   )}
@@ -157,7 +157,7 @@ export function TradeHistory({ trades, className }: TradeHistoryProps) {
 
                 {/* 资金池 */}
                 <td className="py-3 px-3 text-center">
-                  <div className="bg-[#A3E635] w-4 h-4 rounded-full flex items-center justify-center mx-auto"><svg className="w-2.5 h-2.5 text-black" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" /></svg></div>
+                  <div className="bg-meme-lime w-4 h-4 rounded-full flex items-center justify-center mx-auto"><svg className="w-2.5 h-2.5 text-black" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" /></svg></div>
                 </td>
 
                 {/* 详情 */}

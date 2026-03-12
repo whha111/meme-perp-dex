@@ -76,18 +76,18 @@ export function WebSocketStatusIndicator() {
 
       {/* Details panel */}
       {isVisible && (
-        <div className="absolute bottom-12 right-0 bg-black border border-[#333] rounded-lg p-3 shadow-xl min-w-[200px]">
-          <div className="text-white text-xs font-mono space-y-2">
-            <div className="flex justify-between items-center pb-2 border-b border-[#333]">
-              <span className="text-[#8E8E93]">WebSocket Status</span>
+        <div className="absolute bottom-12 right-0 bg-okx-bg-primary border border-okx-border-secondary rounded-lg p-3 shadow-xl min-w-[200px]">
+          <div className="text-okx-text-primary text-xs font-mono space-y-2">
+            <div className="flex justify-between items-center pb-2 border-b border-okx-border-secondary">
+              <span className="text-okx-text-secondary">WebSocket Status</span>
               <span className={`px-2 py-0.5 rounded ${statusStyle.bg} text-white`}>
                 {statusStyle.text}
               </span>
             </div>
-            <div className="text-[#636366] text-[10px] space-y-1">
+            <div className="text-okx-text-tertiary text-[10px] space-y-1">
               <div>URL: {WS_URL}</div>
-              <div className="pt-2 border-t border-[#222]">
-                <span className="text-[#8E8E93]">Note:</span> Dev only
+              <div className="pt-2 border-t border-okx-border-secondary">
+                <span className="text-okx-text-secondary">Note:</span> Dev only
               </div>
             </div>
           </div>

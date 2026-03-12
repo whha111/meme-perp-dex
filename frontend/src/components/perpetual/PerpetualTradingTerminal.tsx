@@ -38,7 +38,7 @@ const PerpetualPriceChart = dynamic(
   () => import("./PerpetualPriceChart").then((mod) => mod.PerpetualPriceChart),
   {
     ssr: false,
-    loading: () => <div className="w-full h-full bg-[#131722] animate-pulse" />,
+    loading: () => <div className="w-full h-full bg-okx-bg-card animate-pulse" />,
   }
 );
 
@@ -774,7 +774,7 @@ export function PerpetualTradingTerminal({
           {/* Center: Chart + Bottom Panel */}
           <div className="flex-1 border-r border-okx-border-primary flex flex-col overflow-hidden">
             {/* Chart Area */}
-            <div className="h-[300px] lg:h-[400px] bg-[#131722]">
+            <div className="h-[300px] lg:h-[400px] bg-okx-bg-card">
             <TradingErrorBoundary module="PerpChart">
               {tokenAddress && (
                 <MemoizedPriceChart
@@ -1630,7 +1630,7 @@ export function PerpetualTradingTerminal({
                         onClick={() => setBillTypeFilter(f.value)}
                         className={`px-2.5 py-0.5 rounded-full text-[11px] transition-colors ${
                           billTypeFilter === f.value
-                            ? "bg-[#A3E635]/20 text-[#A3E635] border border-[#A3E635]/40"
+                            ? "bg-meme-lime/20 text-meme-lime border border-meme-lime/40"
                             : "text-okx-text-tertiary border border-okx-border-primary hover:text-okx-text-secondary"
                         }`}
                       >
@@ -1646,7 +1646,7 @@ export function PerpetualTradingTerminal({
                     </div>
                   ) : billsLoading && billsData.length === 0 ? (
                     <div className="flex justify-center py-8">
-                      <div className="w-5 h-5 border-2 border-[#A3E635] border-t-transparent rounded-full animate-spin" />
+                      <div className="w-5 h-5 border-2 border-meme-lime border-t-transparent rounded-full animate-spin" />
                     </div>
                   ) : billsData.length === 0 ? (
                     <div className="text-center text-okx-text-tertiary py-8 text-[12px]">
@@ -1736,7 +1736,7 @@ export function PerpetualTradingTerminal({
           {/* Chart section */}
           {mobileActiveSection === "chart" && (
             <div className="flex-1 flex flex-col overflow-hidden">
-              <div className="h-[300px] bg-[#131722] flex-shrink-0">
+              <div className="h-[300px] bg-okx-bg-card flex-shrink-0">
                 <TradingErrorBoundary module="PerpChart">
                   {tokenAddress && (
                     <MemoizedPriceChart
@@ -1805,13 +1805,99 @@ export function PerpetualTradingTerminal({
                     </div>
                   )}
                   {activeBottomTab === "orderHistory" && (
-                    <div className="p-2 text-center text-okx-text-tertiary py-8 text-[12px]">
-                      {!isConnected ? tc("connectWalletFirst") : isLoadingHistory ? "..." : t("noOrderHistory")}
+                    <div className="p-2">
+                      {!isConnected ? (
+                        <div className="text-center text-okx-text-tertiary py-8 text-[12px]">{tc("connectWalletFirst")}</div>
+                      ) : isLoadingHistory ? (
+                        <div className="text-center text-okx-text-tertiary py-8 text-[12px]">
+                          <div className="animate-spin w-5 h-5 border-2 border-okx-brand border-t-transparent rounded-full mx-auto mb-2" />
+                        </div>
+                      ) : orderHistoryData.length === 0 ? (
+                        <div className="text-center text-okx-text-tertiary py-8 text-[12px]">{t("noOrderHistory")}</div>
+                      ) : (
+                        <div className="space-y-2">
+                          {orderHistoryData.map((order) => {
+                            const sizeTokenRaw = Number(order.size) / 1e18;
+                            const sizeDisplay = sizeTokenRaw >= 1000000 ? `${(sizeTokenRaw / 1000000).toFixed(2)}M` : sizeTokenRaw >= 1000 ? `${(sizeTokenRaw / 1000).toFixed(2)}K` : sizeTokenRaw.toFixed(2);
+                            const priceRaw = Number(order.price) / 1e18;
+                            const priceDisplay = order.price === "0" ? "市价" : formatSmallPrice(priceRaw);
+                            const avgPriceRaw = Number(order.avgFillPrice) / 1e18;
+                            const avgPriceDisplay = order.avgFillPrice && order.avgFillPrice !== "0" ? formatSmallPrice(avgPriceRaw) : "--";
+                            const leverageDisplay = order.leverage ? `${Number(order.leverage) / 10000}x` : "--";
+                            const orderTypeDisplay = order.orderType === "MARKET" ? "市价" : "限价";
+                            const statusColor = order.status === "FILLED" ? "text-green-400" : order.status === "CANCELLED" ? "text-red-400" : "text-yellow-400";
+                            const timeDisplay = new Date(order.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+                            return (
+                              <div key={order.id} className="bg-okx-bg-secondary rounded-lg p-3 border border-okx-border-primary">
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${order.isLong ? "bg-green-900/50 text-green-400" : "bg-red-900/50 text-red-400"}`}>
+                                      {order.isLong ? "多" : "空"}
+                                    </span>
+                                    <span className="text-okx-text-tertiary text-[10px]">{orderTypeDisplay} {leverageDisplay}</span>
+                                  </div>
+                                  <span className={`text-[10px] ${statusColor}`}>{order.status}</span>
+                                </div>
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                                  <div className="flex justify-between"><span className="text-okx-text-tertiary">委托价</span><span className="font-mono">{priceDisplay}</span></div>
+                                  <div className="flex justify-between"><span className="text-okx-text-tertiary">成交价</span><span className="font-mono">{avgPriceDisplay}</span></div>
+                                  <div className="flex justify-between"><span className="text-okx-text-tertiary">数量</span><span>{sizeDisplay}</span></div>
+                                  <div className="flex justify-between"><span className="text-okx-text-tertiary">时间</span><span className="text-okx-text-secondary">{timeDisplay}</span></div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
                   {activeBottomTab === "tradeHistory" && (
-                    <div className="p-2 text-center text-okx-text-tertiary py-8 text-[12px]">
-                      {!isConnected ? tc("connectWalletFirst") : isLoadingHistory ? "..." : t("noTradeHistory")}
+                    <div className="p-2">
+                      {!isConnected ? (
+                        <div className="text-center text-okx-text-tertiary py-8 text-[12px]">{tc("connectWalletFirst")}</div>
+                      ) : isLoadingHistory ? (
+                        <div className="text-center text-okx-text-tertiary py-8 text-[12px]">
+                          <div className="animate-spin w-5 h-5 border-2 border-okx-brand border-t-transparent rounded-full mx-auto mb-2" />
+                        </div>
+                      ) : tradeHistoryData.length === 0 ? (
+                        <div className="text-center text-okx-text-tertiary py-8 text-[12px]">{t("noTradeHistory")}</div>
+                      ) : (
+                        <div className="space-y-2">
+                          {tradeHistoryData.map((trade) => {
+                            const sizeTokenRaw = Number(trade.size) / 1e18;
+                            const sizeDisplay = sizeTokenRaw >= 1000000 ? `${(sizeTokenRaw / 1000000).toFixed(2)}M` : sizeTokenRaw >= 1000 ? `${(sizeTokenRaw / 1000).toFixed(2)}K` : sizeTokenRaw.toFixed(2);
+                            const priceRaw = Number(trade.price) / 1e18;
+                            const priceDisplay = formatSmallPrice(priceRaw);
+                            const feeETH = Number(trade.fee) / 1e18;
+                            const feeDisplay = `BNB ${feeETH >= 0.0001 ? feeETH.toFixed(6) : feeETH.toFixed(8)}`;
+                            const pnlETH = Number(trade.realizedPnL) / 1e18;
+                            const pnlDisplay = pnlETH !== 0 ? `${pnlETH >= 0 ? "+" : ""}BNB ${Math.abs(pnlETH) >= 1 ? Math.abs(pnlETH).toFixed(4) : Math.abs(pnlETH).toFixed(6)}` : "--";
+                            const typeDisplay = trade.type === "liquidation" ? "强平" : trade.type === "adl" ? "ADL" : trade.type === "close" ? "平仓" : "开仓";
+                            const typeColor = trade.type === "liquidation" ? "text-red-400 bg-red-900/30" : trade.type === "adl" ? "text-orange-400 bg-orange-900/30" : trade.type === "close" ? "text-blue-400 bg-blue-900/30" : "text-green-400 bg-green-900/30";
+                            const timeDisplay = new Date(trade.timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+                            return (
+                              <div key={trade.id} className="bg-okx-bg-secondary rounded-lg p-3 border border-okx-border-primary">
+                                <div className="flex items-center justify-between mb-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${trade.isLong ? "bg-green-900/50 text-green-400" : "bg-red-900/50 text-red-400"}`}>
+                                      {trade.isLong ? "多" : "空"}
+                                    </span>
+                                    <span className={`px-2 py-0.5 rounded text-[10px] ${typeColor}`}>{typeDisplay}</span>
+                                    <span className={`text-[10px] ${trade.isMaker ? "text-purple-400" : "text-blue-400"}`}>{trade.isMaker ? "Maker" : "Taker"}</span>
+                                  </div>
+                                  <span className="text-okx-text-tertiary text-[10px]">{timeDisplay}</span>
+                                </div>
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                                  <div className="flex justify-between"><span className="text-okx-text-tertiary">成交价</span><span className="text-okx-text-primary font-mono">{priceDisplay}</span></div>
+                                  <div className="flex justify-between"><span className="text-okx-text-tertiary">数量</span><span className="text-okx-text-primary">{sizeDisplay}</span></div>
+                                  <div className="flex justify-between"><span className="text-okx-text-tertiary">手续费</span><span className="text-okx-text-secondary">{feeDisplay}</span></div>
+                                  <div className="flex justify-between"><span className="text-okx-text-tertiary">盈亏</span><span className={`font-medium ${pnlETH >= 0 ? "text-green-400" : "text-red-400"}`}>{pnlDisplay}</span></div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
                   {activeBottomTab === "hunting" && (

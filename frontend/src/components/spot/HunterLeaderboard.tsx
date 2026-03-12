@@ -172,18 +172,18 @@ export function HunterLeaderboard({
 
   // 获取排名图标
   const getRankIcon = (rank: number) => {
-    if (rank === 1) return <span className="text-[#FFD700] font-bold">#1</span>;
-    if (rank === 2) return <span className="text-[#C0C0C0] font-bold">#2</span>;
-    if (rank === 3) return <span className="text-[#CD7F32] font-bold">#3</span>;
+    if (rank === 1) return <span className="text-yellow-400 font-bold">#1</span>;
+    if (rank === 2) return <span className="text-okx-text-tertiary font-bold">#2</span>;
+    if (rank === 3) return <span className="text-amber-600 font-bold">#3</span>;
     return `#${rank}`;
   };
 
   return (
-    <div className="bg-gray-900 rounded-lg p-3 h-full flex flex-col">
+    <div className="bg-okx-bg-secondary rounded-lg p-3 h-full flex flex-col">
       {/* 标题和统计 */}
       <div className="flex justify-between items-center mb-2 flex-shrink-0">
-        <h3 className="text-sm font-bold text-white flex items-center gap-1.5"><svg className="w-4 h-4 text-red-400" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> {t("hunterLeaderboard")}</h3>
-        <span className="text-[10px] text-red-400 font-bold">
+        <h3 className="text-sm font-bold text-okx-text-primary flex items-center gap-1.5"><svg className="w-4 h-4 text-okx-down" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> {t("hunterLeaderboard")}</h3>
+        <span className="text-[10px] text-okx-down font-bold">
           {leaderboard?.totalLiquidations || 0} kills
         </span>
       </div>
@@ -196,8 +196,8 @@ export function HunterLeaderboard({
             onClick={() => setPeriod(p)}
             className={`px-2 py-0.5 rounded text-[10px] ${
               period === p
-                ? "bg-red-600 text-white"
-                : "bg-gray-800 text-gray-400 hover:bg-gray-700"
+                ? "bg-red-600 text-okx-text-primary"
+                : "bg-okx-bg-hover text-okx-text-tertiary hover:bg-okx-bg-active"
             }`}
           >
             {p === "all" ? t("allTime") : p.toUpperCase()}
@@ -210,11 +210,11 @@ export function HunterLeaderboard({
         {loading ? (
           <div className="animate-pulse space-y-1">
             {[...Array(5)].map((_, i) => (
-              <div key={i} className="h-8 bg-gray-800 rounded" />
+              <div key={i} className="h-8 bg-okx-bg-hover rounded" />
             ))}
           </div>
         ) : leaderboard?.hunters.length === 0 ? (
-          <div className="text-center text-gray-500 py-4 text-xs">
+          <div className="text-center text-okx-text-tertiary py-4 text-xs">
             <div className="flex justify-center mb-1"><svg className="w-5 h-5 text-yellow-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M16.5 18.75h-9m9 0a3 3 0 013 3h-15a3 3 0 013-3m9 0v-3.375c0-.621-.503-1.125-1.125-1.125h-.871M7.5 18.75v-3.375c0-.621.504-1.125 1.125-1.125h.872m5.007 0H9.497m5.007 0a7.454 7.454 0 01-.982-3.172M9.497 14.25a7.454 7.454 0 00.981-3.172M5.25 4.236c-.982.143-1.954.317-2.916.52A6.003 6.003 0 007.73 9.728M5.25 4.236V4.5c0 2.108.966 3.99 2.48 5.228M5.25 4.236V2.721C7.456 2.41 9.71 2.25 12 2.25c2.291 0 4.545.16 6.75.47v1.516M18.75 4.236c.982.143 1.954.317 2.916.52A6.003 6.003 0 0016.27 9.728M18.75 4.236V4.5c0 2.108-.966 3.99-2.48 5.228m0 0a6.003 6.003 0 01-2.52.952m0 0a23.65 23.65 0 01-3.5 0m0 0a6.003 6.003 0 01-2.52-.952" /></svg></div>
             <p>{t("noHuntersYet")}</p>
           </div>
@@ -225,7 +225,7 @@ export function HunterLeaderboard({
               className={`flex items-center gap-2 p-2 rounded ${
                 hunter.rank <= 3
                   ? "bg-gradient-to-r from-yellow-900/30 to-transparent border border-yellow-600/20"
-                  : "bg-gray-800/50"
+                  : "bg-okx-bg-hover/50"
               }`}
             >
               {/* 排名 */}
@@ -235,17 +235,17 @@ export function HunterLeaderboard({
 
               {/* 地址 */}
               <div className="flex-1 min-w-0">
-                <div className="font-mono text-white text-[11px] truncate">
+                <div className="font-mono text-okx-text-primary text-[11px] truncate">
                   {formatAddress(hunter.address)}
                 </div>
               </div>
 
               {/* 统计 */}
               <div className="text-right flex-shrink-0">
-                <div className="text-red-400 font-bold text-[11px]">
+                <div className="text-okx-down font-bold text-[11px]">
                   {hunter.kills}
                 </div>
-                <div className="text-green-400 text-[9px]">
+                <div className="text-okx-up text-[9px]">
                   {formatProfit(hunter.profit)}
                 </div>
               </div>
@@ -256,8 +256,8 @@ export function HunterLeaderboard({
 
       {/* 实时清算通知 - 紧凑版 */}
       {recentLiquidations.length > 0 && (
-        <div className="border-t border-gray-700 pt-2 mt-2 flex-shrink-0">
-          <h4 className="text-[10px] font-bold text-gray-400 mb-1">{t("recentLiquidations")}</h4>
+        <div className="border-t border-okx-border-primary pt-2 mt-2 flex-shrink-0">
+          <h4 className="text-[10px] font-bold text-okx-text-tertiary mb-1">{t("recentLiquidations")}</h4>
           <div className="space-y-1 max-h-20 overflow-y-auto">
             {recentLiquidations.slice(0, 3).map((liq, i) => (
               <div
@@ -266,9 +266,9 @@ export function HunterLeaderboard({
                   i === 0 ? "animate-pulse border border-red-500/30" : ""
                 }`}
               >
-                <span className="text-red-400">{formatAddress(liq.liquidatedTrader)}</span>
-                <span className="text-gray-500"> → </span>
-                <span className="text-gray-400">BNB {(Number(liq.collateralLost) / 1e18).toFixed(4)}</span>
+                <span className="text-okx-down">{formatAddress(liq.liquidatedTrader)}</span>
+                <span className="text-okx-text-tertiary"> → </span>
+                <span className="text-okx-text-tertiary">BNB {(Number(liq.collateralLost) / 1e18).toFixed(4)}</span>
               </div>
             ))}
           </div>
@@ -276,8 +276,8 @@ export function HunterLeaderboard({
       )}
 
       {/* 提示信息 - 极简版 */}
-      <div className="mt-2 pt-2 border-t border-gray-700 text-[9px] text-gray-500 flex-shrink-0">
-        <svg className="w-3 h-3 inline-block mr-1 text-gray-500" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 10-7.517 0c.85.493 1.509 1.333 1.509 2.316V18" /></svg>{t("huntStep1")}
+      <div className="mt-2 pt-2 border-t border-okx-border-primary text-[9px] text-okx-text-tertiary flex-shrink-0">
+        <svg className="w-3 h-3 inline-block mr-1 text-okx-text-tertiary" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M12 18v-5.25m0 0a6.01 6.01 0 001.5-.189m-1.5.189a6.01 6.01 0 01-1.5-.189m3.75 7.478a12.06 12.06 0 01-4.5 0m3.75 2.383a14.406 14.406 0 01-3 0M14.25 18v-.192c0-.983.658-1.823 1.508-2.316a7.5 7.5 0 10-7.517 0c.85.493 1.509 1.333 1.509 2.316V18" /></svg>{t("huntStep1")}
       </div>
     </div>
   );
