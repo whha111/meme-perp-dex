@@ -12,7 +12,7 @@
       "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
     },
     "SettlementV2": {
-      "address": "0x7fF9d60aE49F14bB604FeF1961910D7931067873",
+      "address": "0x97d8f964bb908083432621dbae52f38D2bDd1245",
       "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
     },
     "PriceFeed": {

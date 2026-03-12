@@ -9,6 +9,7 @@ import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import "../interfaces/IWETH.sol";
 
 /**
  * @title SettlementV2
@@ -91,6 +92,7 @@ contract SettlementV2 is Ownable2Step, ReentrancyGuard, Pausable, EIP712 {
 
     event Deposited(address indexed user, uint256 amount, uint256 totalDeposits);
     event DepositedFor(address indexed user, address indexed relayer, uint256 amount);
+    event DepositedBNB(address indexed user, uint256 amount, uint256 totalDeposits);
     event Withdrawn(address indexed user, uint256 amount, uint256 nonce);
     event StateRootUpdated(bytes32 indexed root, uint256 timestamp, uint256 snapshotId);
     event PlatformSignerUpdated(address indexed oldSigner, address indexed newSigner);
@@ -179,6 +181,60 @@ contract SettlementV2 is Ownable2Step, ReentrancyGuard, Pausable, EIP712 {
         totalDeposited += amount;
 
         emit DepositedFor(user, msg.sender, amount);
+    }
+
+    /**
+     * @notice Deposit native BNB/ETH — contract wraps to WBNB/WETH atomically
+     * @dev Eliminates the need for users to manually wrap tokens.
+     *      Follows CEI: checks → state updates → external WBNB.deposit() call.
+     */
+    function depositBNB() external payable nonReentrant whenNotPaused {
+        uint256 amount = msg.value;
+        if (amount == 0) revert InvalidAmount();
+
+        // Deposit cap checks
+        if (depositCapPerUser > 0 && userDeposits[msg.sender] + amount > depositCapPerUser) {
+            revert UserDepositCapExceeded();
+        }
+        if (depositCapTotal > 0 && totalDeposited + amount > depositCapTotal) {
+            revert TotalDepositCapExceeded();
+        }
+
+        // CEI: Effects before Interactions
+        userDeposits[msg.sender] += amount;
+        totalDeposited += amount;
+
+        // Wrap native BNB → WBNB (external call)
+        IWETH(address(collateralToken)).deposit{value: amount}();
+
+        emit DepositedBNB(msg.sender, amount, userDeposits[msg.sender]);
+    }
+
+    /**
+     * @notice Deposit native BNB/ETH on behalf of another user
+     * @param user The user to credit
+     */
+    function depositBNBFor(address user) external payable nonReentrant whenNotPaused {
+        uint256 amount = msg.value;
+        if (amount == 0) revert InvalidAmount();
+        if (user == address(0)) revert ZeroAddress();
+
+        // Deposit cap checks
+        if (depositCapPerUser > 0 && userDeposits[user] + amount > depositCapPerUser) {
+            revert UserDepositCapExceeded();
+        }
+        if (depositCapTotal > 0 && totalDeposited + amount > depositCapTotal) {
+            revert TotalDepositCapExceeded();
+        }
+
+        // CEI: Effects before Interactions
+        userDeposits[user] += amount;
+        totalDeposited += amount;
+
+        // Wrap native BNB → WBNB (external call)
+        IWETH(address(collateralToken)).deposit{value: amount}();
+
+        emit DepositedBNB(user, amount, userDeposits[user]);
     }
 
     // ============================================================

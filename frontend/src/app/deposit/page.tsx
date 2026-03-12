@@ -3,7 +3,7 @@
 /**
  * Deposit/Withdraw Page — Real on-chain operations
  *
- * Deposit: Main wallet → Trading wallet (BNB) → WBNB → SettlementV2.deposit()
+ * Deposit: Main wallet → Trading wallet (BNB) → SettlementV2.depositBNB() (atomic wrap+deposit)
  * Withdraw: Merkle proof + EIP-712 sig → SettlementV2.withdraw()
  */
 
@@ -35,6 +35,8 @@ export default function DepositPage() {
     wrapAndDeposit,
     withdrawToMainWallet,
     isWithdrawingToMain,
+    depositBNBToSettlement,
+    isDepositingBNB,
   } = useTradingWallet();
 
   const tradingWalletSignature = getSignature();
@@ -88,7 +90,7 @@ export default function DepositPage() {
     }
   }, [amount]);
 
-  const isProcessing = depositStep > 0 || withdrawStep > 0 || isWithdrawingToMain;
+  const isProcessing = depositStep > 0 || withdrawStep > 0 || isWithdrawingToMain || isDepositingBNB;
 
   // Total withdrawable = settlement (Merkle) + wallet (direct transfer)
   const totalWithdrawable = useMemo(() => {
@@ -105,7 +107,7 @@ export default function DepositPage() {
   };
 
   // ═══════════════════════════════════════════════════════════
-  // 3-step on-chain deposit
+  // 2-step on-chain deposit (native BNB → SettlementV2.depositBNB)
   // ═══════════════════════════════════════════════════════════
   const handleDeposit = useCallback(async () => {
     if (!tradingWallet || amountWei === 0n || !publicClient) return;
@@ -122,16 +124,11 @@ export default function DepositPage() {
       });
       await publicClient.waitForTransactionReceipt({ hash: txHash });
 
-      // Step 2: Wrap BNB → WBNB
+      // Step 2: SettlementV2.depositBNB() — atomic wrap + deposit in one tx
       setDepositStep(2);
       depositStepRef.current = 2;
-      const wrapHash = await wrapAndDeposit(amount);
-      await publicClient.waitForTransactionReceipt({ hash: wrapHash });
-
-      // Step 3: Approve WBNB + deposit to SettlementV2
-      setDepositStep(3);
-      depositStepRef.current = 3;
-      await settlementDeposit(CONTRACTS.WETH, amount);
+      const depositHash = await depositBNBToSettlement(amountWei);
+      await publicClient.waitForTransactionReceipt({ hash: depositHash });
 
       // Success
       setDepositStep(0);
@@ -143,15 +140,15 @@ export default function DepositPage() {
     } catch (e) {
       const failedStep = depositStepRef.current;
       console.error(`[Deposit] Failed at step ${failedStep}:`, e);
-      setStepError(
-        `Step ${failedStep} ${t("failed")}: ${e instanceof Error ? e.message : "Unknown error"}`
-      );
+      const { isUserRejection, extractErrorMessage } = await import("@/lib/errors/errorDictionary");
+      const msg = isUserRejection(e) ? t("userCancelled") : extractErrorMessage(e, `Step ${failedStep} ${t("failed")}`);
+      setStepError(msg);
       setDepositStep(0);
       depositStepRef.current = 0;
     }
   }, [
     tradingWallet, amountWei, amount, publicClient,
-    sendTransactionAsync, wrapAndDeposit, settlementDeposit,
+    sendTransactionAsync, depositBNBToSettlement,
     refreshGlobalBalance, refetchMainBalance, t,
   ]);
 
@@ -218,11 +215,10 @@ export default function DepositPage() {
     refreshGlobalBalance, refetchMainBalance, t,
   ]);
 
-  // Deposit step labels
+  // Deposit step labels (2-step flow: send BNB → atomic depositBNB)
   const depositStepLabels: Record<number, { label: string; desc: string }> = {
     1: { label: t("step1RealLabel"), desc: t("step1RealDesc") },
-    2: { label: t("step2RealLabel"), desc: t("step2RealDesc") },
-    3: { label: t("step3RealLabel"), desc: t("step3RealDesc") },
+    2: { label: t("depositBNBLabel"), desc: t("depositBNBDesc") },
   };
 
   // Computed real balances from usePerpetualV2
@@ -231,7 +227,7 @@ export default function DepositPage() {
   const unrealizedPnL = balance?.unrealizedPnL || "0";
   const equity = balance?.equity || "0";
 
-  const fmtBalance = (val: string) => {
+  const fmtBalance = (val: string | bigint) => {
     const num = Number(val) / 1e18;
     if (num >= 1) return num.toFixed(4);
     if (num >= 0.0001) return num.toFixed(6);
@@ -359,7 +355,7 @@ export default function DepositPage() {
               {/* Deposit Progress Steps */}
               {depositStep > 0 && (
                 <div className="space-y-3">
-                  {[1, 2, 3].map((stepNum) => {
+                  {[1, 2].map((stepNum) => {
                     const isActive = depositStep === stepNum;
                     const isDone = depositStep > stepNum;
                     const stepInfo = depositStepLabels[stepNum];

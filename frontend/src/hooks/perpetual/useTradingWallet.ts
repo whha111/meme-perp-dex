@@ -85,6 +85,9 @@ export interface UseTradingWalletReturn extends TradingWalletState {
   /** Transfer BNB from trading wallet back to main wallet (unwraps WBNB if needed) */
   withdrawToMainWallet: (mainWallet: Address, amount: bigint, wbnbBalance: bigint) => Promise<Hex>;
   isWithdrawingToMain: boolean;
+  /** Deposit native BNB to SettlementV2 atomically (wrap + deposit in one tx) */
+  depositBNBToSettlement: (amount: bigint) => Promise<Hex>;
+  isDepositingBNB: boolean;
 }
 
 // ============================================================
@@ -107,6 +110,7 @@ export function useTradingWallet(): UseTradingWalletReturn {
 
   const [isWrappingAndDepositing, setIsWrappingAndDepositing] = useState(false);
   const [isWithdrawingToMain, setIsWithdrawingToMain] = useState(false);
+  const [isDepositingBNB, setIsDepositingBNB] = useState(false);
 
   // 保存签名用于 getSignature 返回
   const signatureRef = useRef<Hex | null>(null);
@@ -447,6 +451,48 @@ export function useTradingWallet(): UseTradingWalletReturn {
     [chain, rpcUrl, publicClient, refreshBalance]
   );
 
+  // ─── Deposit native BNB directly to SettlementV2 (atomic wrap+deposit) ───
+  const depositBNBToSettlement = useCallback(
+    async (amount: bigint): Promise<Hex> => {
+      if (!privateKeyRef.current) {
+        throw new Error("交易钱包未激活");
+      }
+
+      setIsDepositingBNB(true);
+      try {
+        const account = privateKeyToAccount(privateKeyRef.current);
+        const walletClient = createWalletClient({
+          account,
+          chain,
+          transport: http(rpcUrl),
+        });
+
+        // Call SettlementV2.depositBNB{value: amount}() — atomic wrap + deposit
+        const hash = await walletClient.writeContract({
+          address: CONTRACTS.SETTLEMENT_V2 as Address,
+          abi: [
+            {
+              name: "depositBNB",
+              type: "function",
+              stateMutability: "payable",
+              inputs: [],
+              outputs: [],
+            },
+          ] as const,
+          functionName: "depositBNB",
+          value: amount,
+        });
+
+        console.log(`[TradingWallet] depositBNB tx: ${hash}, amount: ${amount}`);
+        setTimeout(() => refreshBalance(), 3000);
+        return hash;
+      } finally {
+        setIsDepositingBNB(false);
+      }
+    },
+    [chain, rpcUrl, refreshBalance]
+  );
+
   // ─── 格式化余额 ──────────────────────────────────────
   const formattedEthBalance = useMemo(
     () => formatEther(state.ethBalance),
@@ -468,6 +514,8 @@ export function useTradingWallet(): UseTradingWalletReturn {
     unwrapWBNB,
     withdrawToMainWallet,
     isWithdrawingToMain,
+    depositBNBToSettlement,
+    isDepositingBNB,
   };
 }
 

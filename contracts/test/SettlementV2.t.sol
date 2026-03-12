@@ -8,7 +8,7 @@ import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 /**
  * @title MockWETH
- * @notice Test WETH token (18 decimals)
+ * @notice Test WETH/WBNB token with deposit()/withdraw() (18 decimals)
  */
 contract MockWETH is ERC20 {
     constructor() ERC20("Wrapped Ether", "WETH") {}
@@ -16,6 +16,20 @@ contract MockWETH is ERC20 {
     function mint(address to, uint256 amount) external {
         _mint(to, amount);
     }
+
+    /// @notice Wrap native BNB/ETH → WBNB/WETH (like real WBNB contract)
+    function deposit() external payable {
+        _mint(msg.sender, msg.value);
+    }
+
+    /// @notice Unwrap WBNB/WETH → native BNB/ETH
+    function withdraw(uint256 amount) external {
+        _burn(msg.sender, amount);
+        (bool ok,) = msg.sender.call{value: amount}("");
+        require(ok, "transfer failed");
+    }
+
+    receive() external payable {}
 }
 
 /**
@@ -739,6 +753,130 @@ contract SettlementV2Test is Test {
         settlement.setDepositCapTotal(1 * WETH_UNIT);
 
         console.log("  [PASS] Non-owner cap setting rejected");
+    }
+
+    // ============================================================
+    // Test 20: depositBNB — native BNB deposit (atomic wrap)
+    // ============================================================
+
+    function test_depositBNB() public {
+        console.log("\n=== Test 20: depositBNB ===");
+
+        // Give user1 some native BNB
+        vm.deal(user1, 5 ether);
+
+        vm.prank(user1);
+        settlement.depositBNB{value: 3 ether}();
+
+        // User deposit recorded
+        assertEq(settlement.getUserDeposits(user1), 3 * WETH_UNIT);
+        // Contract holds WETH (wrapped internally)
+        assertEq(weth.balanceOf(address(settlement)), 3 * WETH_UNIT);
+        // totalDeposited updated
+        assertEq(settlement.totalDeposited(), 3 * WETH_UNIT);
+
+        console.log("  [PASS] depositBNB: 3 BNB deposited and wrapped atomically");
+    }
+
+    function test_depositBNB_zeroAmount_reverts() public {
+        console.log("\n=== Test 21: depositBNB zero ===");
+
+        vm.deal(user1, 1 ether);
+        vm.prank(user1);
+        vm.expectRevert(SettlementV2.InvalidAmount.selector);
+        settlement.depositBNB{value: 0}();
+
+        console.log("  [PASS] depositBNB zero rejected");
+    }
+
+    function test_depositBNB_exceedsUserCap_reverts() public {
+        console.log("\n=== Test 22: depositBNB user cap ===");
+
+        vm.prank(owner);
+        settlement.setDepositCapPerUser(2 * WETH_UNIT);
+
+        vm.deal(user1, 5 ether);
+        vm.prank(user1);
+        vm.expectRevert(SettlementV2.UserDepositCapExceeded.selector);
+        settlement.depositBNB{value: 3 ether}();
+
+        console.log("  [PASS] depositBNB exceeding user cap rejected");
+    }
+
+    function test_depositBNB_whenPaused_reverts() public {
+        console.log("\n=== Test 23: depositBNB when paused ===");
+
+        vm.prank(owner);
+        settlement.pause();
+
+        vm.deal(user1, 1 ether);
+        vm.prank(user1);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        settlement.depositBNB{value: 1 ether}();
+
+        console.log("  [PASS] depositBNB rejected when paused");
+    }
+
+    function test_depositBNBFor() public {
+        console.log("\n=== Test 24: depositBNBFor ===");
+
+        vm.deal(user1, 5 ether);
+
+        // user1 deposits BNB on behalf of user2
+        vm.prank(user1);
+        settlement.depositBNBFor{value: 2 ether}(user2);
+
+        assertEq(settlement.getUserDeposits(user2), 2 * WETH_UNIT);
+        assertEq(weth.balanceOf(address(settlement)), 2 * WETH_UNIT);
+
+        console.log("  [PASS] depositBNBFor: credited to user2");
+    }
+
+    function test_depositBNBFor_zeroAddress_reverts() public {
+        console.log("\n=== Test 25: depositBNBFor zero address ===");
+
+        vm.deal(user1, 1 ether);
+        vm.prank(user1);
+        vm.expectRevert(SettlementV2.ZeroAddress.selector);
+        settlement.depositBNBFor{value: 1 ether}(address(0));
+
+        console.log("  [PASS] depositBNBFor zero address rejected");
+    }
+
+    // ============================================================
+    // Test 26: depositBNB then withdraw via Merkle proof
+    // ============================================================
+
+    function test_depositBNB_then_withdraw() public {
+        console.log("\n=== Test 26: depositBNB + withdraw flow ===");
+
+        // 1. Deposit native BNB
+        vm.deal(user1, 5 ether);
+        vm.prank(user1);
+        settlement.depositBNB{value: 5 ether}();
+
+        assertEq(settlement.getUserDeposits(user1), 5 * WETH_UNIT);
+
+        // 2. Build Merkle tree (user1 equity = 5 ETH)
+        uint256 user1Equity = 5 * WETH_UNIT;
+        bytes32 leaf = keccak256(abi.encodePacked(user1, user1Equity));
+        bytes32 merkleRoot = _hashPair(leaf, leaf);
+
+        vm.prank(updater);
+        settlement.updateStateRoot(merkleRoot);
+
+        // 3. Withdraw 3 ETH via Merkle proof
+        bytes32[] memory proof = new bytes32[](1);
+        proof[0] = leaf;
+        uint256 deadline = block.timestamp + 1 hours;
+        bytes memory sig = _signWithdrawal(user1, 3 * WETH_UNIT, 0, deadline, merkleRoot);
+
+        uint256 balBefore = weth.balanceOf(user1);
+        vm.prank(user1);
+        settlement.withdraw(3 * WETH_UNIT, user1Equity, proof, deadline, sig);
+
+        assertEq(weth.balanceOf(user1) - balBefore, 3 * WETH_UNIT);
+        console.log("  [PASS] depositBNB -> withdraw full flow works");
     }
 
     // ============================================================

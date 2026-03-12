@@ -296,6 +296,20 @@ export const SETTLEMENT_V2_ABI = [
     type: "function",
   },
   {
+    inputs: [],
+    name: "depositBNB",
+    outputs: [],
+    stateMutability: "payable",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "user", type: "address" }],
+    name: "depositBNBFor",
+    outputs: [],
+    stateMutability: "payable",
+    type: "function",
+  },
+  {
     inputs: [
       { name: "amount", type: "uint256" },
       { name: "userEquity", type: "uint256" },

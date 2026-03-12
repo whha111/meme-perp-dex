@@ -1447,6 +1447,8 @@
     "step2RealDesc": "BNBをWBNB(ERC-20)にラッピング",
     "step3RealLabel": "コントラクトに入金",
     "step3RealDesc": "WBNBを承認しSettlementV2に入金",
+    "depositBNBLabel": "コントラクトに入金",
+    "depositBNBDesc": "BNBを自動ラッピングしSettlementV2に入金",
     "withdrawGasFunding": "出金用のガスを補充中...",
     "withdrawGasFundingDesc": "取引手数料のために少量のBNBを送金",
     "withdrawWalletTransfer": "取引ウォレットから転送中...",

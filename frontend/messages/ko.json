@@ -1447,6 +1447,8 @@
     "step2RealDesc": "BNB를 WBNB(ERC-20)로 래핑",
     "step3RealLabel": "컨트랙트에 입금",
     "step3RealDesc": "WBNB 승인 후 SettlementV2에 입금",
+    "depositBNBLabel": "컨트랙트에 입금",
+    "depositBNBDesc": "BNB 자동 래핑 후 SettlementV2에 입금",
     "withdrawGasFunding": "출금용 가스 충전 중...",
     "withdrawGasFundingDesc": "거래 수수료를 위해 소량의 BNB 전송",
     "withdrawWalletTransfer": "거래 지갑에서 이체 중...",

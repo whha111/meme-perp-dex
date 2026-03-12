@@ -11,13 +11,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import "../common/IContractRegistry.sol";
-
-// WETH 接口
-interface IWETH {
-    function deposit() external payable;
-    function withdraw(uint256) external;
-    function balanceOf(address) external view returns (uint256);
-}
+import "../interfaces/IWETH.sol";
 
 /**
  * @title Settlement
