@@ -33,6 +33,8 @@ export default function DepositPage() {
     address: tradingWallet,
     getSignature,
     wrapAndDeposit,
+    withdrawToMainWallet,
+    isWithdrawingToMain,
   } = useTradingWallet();
 
   const tradingWalletSignature = getSignature();
@@ -54,6 +56,7 @@ export default function DepositPage() {
     totalBalance,
     walletOnlyBalance,
     settlementBalance,
+    wethBalance,
     formattedWethBalance,
     refreshBalance: refreshGlobalBalance,
   } = useWalletBalance();
@@ -84,7 +87,12 @@ export default function DepositPage() {
     }
   }, [amount]);
 
-  const isProcessing = depositStep > 0 || withdrawStep > 0;
+  const isProcessing = depositStep > 0 || withdrawStep > 0 || isWithdrawingToMain;
+
+  // Total withdrawable = settlement (Merkle) + wallet (direct transfer)
+  const totalWithdrawable = useMemo(() => {
+    return settlementBalance + walletOnlyBalance;
+  }, [settlementBalance, walletOnlyBalance]);
 
   // Format BNB balance
   const fmtETH = (val: bigint | undefined) => {
@@ -147,7 +155,7 @@ export default function DepositPage() {
   ]);
 
   // ═══════════════════════════════════════════════════════════
-  // On-chain withdrawal via Merkle proof
+  // On-chain withdrawal: wallet transfer + Merkle proof
   // ═══════════════════════════════════════════════════════════
   const handleWithdraw = useCallback(async () => {
     if (!tradingWallet || !mainWallet || amountWei === 0n) return;
@@ -155,8 +163,22 @@ export default function DepositPage() {
     setSuccessMsg(null);
 
     try {
-      setWithdrawStep(1);
-      await settlementWithdraw(CONTRACTS.WETH, amount);
+      let remaining = amountWei;
+
+      // Phase 1: Transfer from trading wallet (if it has funds)
+      if (walletOnlyBalance > 0n && remaining > 0n) {
+        const walletAmount = remaining > walletOnlyBalance ? walletOnlyBalance : remaining;
+        setWithdrawStep(1); // "Transferring from trading wallet"
+        await withdrawToMainWallet(mainWallet, walletAmount, wethBalance);
+        remaining -= walletAmount;
+      }
+
+      // Phase 2: Merkle proof from SettlementV2 (if still need more)
+      if (remaining > 0n && settlementBalance > 0n) {
+        setWithdrawStep(2); // "Merkle proof withdrawal"
+        const remainingStr = formatEther(remaining);
+        await settlementWithdraw(CONTRACTS.WETH, remainingStr);
+      }
 
       // Success
       setWithdrawStep(0);
@@ -173,7 +195,9 @@ export default function DepositPage() {
     }
   }, [
     tradingWallet, mainWallet, amountWei, amount,
-    settlementWithdraw, refreshGlobalBalance, refetchMainBalance, t,
+    walletOnlyBalance, wethBalance, settlementBalance,
+    withdrawToMainWallet, settlementWithdraw,
+    refreshGlobalBalance, refetchMainBalance, t,
   ]);
 
   // Deposit step labels
@@ -264,7 +288,7 @@ export default function DepositPage() {
                   <span className="text-okx-text-tertiary">
                     {activeTab === "deposit"
                       ? `${t("balance")}: ${mainWalletBalance ? parseFloat(mainWalletBalance.formatted).toFixed(4) : "0.0000"} BNB`
-                      : `${t("balance")}: ${fmtETH(settlementBalance)} tBNB`
+                      : `${t("balance")}: ${fmtETH(totalWithdrawable)} BNB`
                     }
                   </span>
                 </div>
@@ -287,8 +311,8 @@ export default function DepositPage() {
                           setAmount(formatEther(maxDeposit));
                         }
                       } else {
-                        if (settlementBalance > 0n) {
-                          setAmount(formatEther(settlementBalance));
+                        if (totalWithdrawable > 0n) {
+                          setAmount(formatEther(totalWithdrawable));
                         }
                       }
                     }}
@@ -357,14 +381,41 @@ export default function DepositPage() {
 
               {/* Withdraw Progress */}
               {withdrawStep > 0 && (
-                <div className="flex items-center gap-3 p-3 rounded-lg border border-meme-lime/30 bg-meme-lime/5">
-                  <div className="w-7 h-7 rounded-full bg-meme-lime text-black flex items-center justify-center text-xs font-bold animate-pulse">
-                    1
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium">{t("withdrawProcessing")}</div>
-                    <div className="text-xs text-okx-text-tertiary">{t("withdrawProcessingDesc")}</div>
-                  </div>
+                <div className="space-y-3">
+                  {/* Step 1: Wallet transfer */}
+                  {walletOnlyBalance > 0n && (
+                    <div className={`flex items-center gap-3 p-3 rounded-lg border ${
+                      withdrawStep > 1
+                        ? "border-okx-up/30 bg-okx-up/5"
+                        : "border-meme-lime/30 bg-meme-lime/5"
+                    }`}>
+                      <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
+                        withdrawStep > 1
+                          ? "bg-okx-up text-black"
+                          : "bg-meme-lime text-black animate-pulse"
+                      }`}>
+                        {withdrawStep > 1 ? "✓" : "1"}
+                      </div>
+                      <div>
+                        <div className={`text-sm font-medium ${withdrawStep > 1 ? "text-okx-up" : ""}`}>
+                          {t("withdrawWalletTransfer")}
+                        </div>
+                        <div className="text-xs text-okx-text-tertiary">{t("withdrawWalletTransferDesc")}</div>
+                      </div>
+                    </div>
+                  )}
+                  {/* Step 2: Merkle proof (only if settlement funds involved) */}
+                  {withdrawStep >= 2 && (
+                    <div className="flex items-center gap-3 p-3 rounded-lg border border-meme-lime/30 bg-meme-lime/5">
+                      <div className="w-7 h-7 rounded-full bg-meme-lime text-black flex items-center justify-center text-xs font-bold animate-pulse">
+                        {walletOnlyBalance > 0n ? "2" : "1"}
+                      </div>
+                      <div>
+                        <div className="text-sm font-medium">{t("withdrawProcessing")}</div>
+                        <div className="text-xs text-okx-text-tertiary">{t("withdrawProcessingDesc")}</div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

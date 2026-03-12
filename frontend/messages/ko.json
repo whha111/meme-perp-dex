@@ -1447,6 +1447,8 @@
     "step2RealDesc": "BNB를 WBNB(ERC-20)로 래핑",
     "step3RealLabel": "컨트랙트에 입금",
     "step3RealDesc": "WBNB 승인 후 SettlementV2에 입금",
+    "withdrawWalletTransfer": "거래 지갑에서 이체 중...",
+    "withdrawWalletTransferDesc": "거래 지갑에서 메인 지갑으로 BNB 전송",
     "withdrawProcessing": "출금 처리 중...",
     "withdrawProcessingDesc": "Merkle 증명 생성 및 온체인 제출 중",
     "confirmed": "성공",

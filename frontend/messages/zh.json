@@ -1515,6 +1515,8 @@
     "step2RealDesc": "BNB 包装为 WBNB (ERC-20)",
     "step3RealLabel": "存入合约",
     "step3RealDesc": "WBNB 授权并存入 SettlementV2 合约",
+    "withdrawWalletTransfer": "转出交易钱包余额...",
+    "withdrawWalletTransferDesc": "将 BNB 从交易钱包转回主钱包",
     "withdrawProcessing": "提款处理中...",
     "withdrawProcessingDesc": "生成 Merkle 证明并提交链上交易",
     "confirmed": "成功",

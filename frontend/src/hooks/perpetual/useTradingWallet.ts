@@ -80,6 +80,11 @@ export interface UseTradingWalletReturn extends TradingWalletState {
   getSignature: () => Hex | null;
   wrapAndDeposit: (amount: string) => Promise<Hex>;
   isWrappingAndDepositing: boolean;
+  /** Unwrap WBNB → BNB on the trading wallet */
+  unwrapWBNB: (amount: bigint) => Promise<Hex>;
+  /** Transfer BNB from trading wallet back to main wallet (unwraps WBNB if needed) */
+  withdrawToMainWallet: (mainWallet: Address, amount: bigint, wbnbBalance: bigint) => Promise<Hex>;
+  isWithdrawingToMain: boolean;
 }
 
 // ============================================================
@@ -101,6 +106,7 @@ export function useTradingWallet(): UseTradingWalletReturn {
   });
 
   const [isWrappingAndDepositing, setIsWrappingAndDepositing] = useState(false);
+  const [isWithdrawingToMain, setIsWithdrawingToMain] = useState(false);
 
   // 保存签名用于 getSignature 返回
   const signatureRef = useRef<Hex | null>(null);
@@ -342,6 +348,105 @@ export function useTradingWallet(): UseTradingWalletReturn {
     [chain, rpcUrl, refreshBalance]
   );
 
+  // ─── Unwrap WBNB → BNB (调用 WBNB 合约 withdraw) ────
+  const unwrapWBNB = useCallback(
+    async (amount: bigint): Promise<Hex> => {
+      if (!privateKeyRef.current) {
+        throw new Error("交易钱包未激活");
+      }
+
+      const account = privateKeyToAccount(privateKeyRef.current);
+      const walletClient = createWalletClient({
+        account,
+        chain,
+        transport: http(rpcUrl),
+      });
+
+      const hash = await walletClient.writeContract({
+        address: CONTRACTS.WETH,
+        abi: [
+          {
+            name: "withdraw",
+            type: "function",
+            stateMutability: "nonpayable",
+            inputs: [{ name: "wad", type: "uint256" }],
+            outputs: [],
+          },
+        ] as const,
+        functionName: "withdraw",
+        args: [amount],
+      });
+
+      console.log(`[TradingWallet] Unwrap WBNB→BNB tx: ${hash}, amount: ${amount}`);
+      return hash;
+    },
+    [chain, rpcUrl]
+  );
+
+  // ─── 从交易钱包转 BNB 回主钱包 ────────────────────────
+  const withdrawToMainWallet = useCallback(
+    async (mainWalletAddr: Address, amount: bigint, wbnbBalance: bigint): Promise<Hex> => {
+      if (!privateKeyRef.current) {
+        throw new Error("交易钱包未激活");
+      }
+
+      setIsWithdrawingToMain(true);
+      try {
+        const account = privateKeyToAccount(privateKeyRef.current);
+        const walletClient = createWalletClient({
+          account,
+          chain,
+          transport: http(rpcUrl),
+        });
+
+        // Step 1: If we have WBNB, unwrap it first
+        if (wbnbBalance > 0n) {
+          const unwrapAmount = wbnbBalance < amount ? wbnbBalance : amount;
+          console.log(`[TradingWallet] Unwrapping ${unwrapAmount} WBNB → BNB...`);
+          const unwrapHash = await walletClient.writeContract({
+            address: CONTRACTS.WETH,
+            abi: [
+              {
+                name: "withdraw",
+                type: "function",
+                stateMutability: "nonpayable",
+                inputs: [{ name: "wad", type: "uint256" }],
+                outputs: [],
+              },
+            ] as const,
+            functionName: "withdraw",
+            args: [unwrapAmount],
+          });
+          // Wait for unwrap to confirm
+          await publicClient.waitForTransactionReceipt({ hash: unwrapHash });
+          console.log(`[TradingWallet] WBNB unwrap confirmed: ${unwrapHash}`);
+        }
+
+        // Step 2: Send BNB to main wallet (leave gas reserve)
+        const GAS_RESERVE = parseEther("0.0005");
+        const currentBalance = await publicClient.getBalance({ address: account.address });
+        const maxSend = currentBalance > GAS_RESERVE ? currentBalance - GAS_RESERVE : 0n;
+        const sendAmount = amount > maxSend ? maxSend : amount;
+
+        if (sendAmount <= 0n) {
+          throw new Error("余额不足以支付 gas");
+        }
+
+        const hash = await walletClient.sendTransaction({
+          to: mainWalletAddr,
+          value: sendAmount,
+        });
+
+        console.log(`[TradingWallet] Withdraw to main wallet tx: ${hash}, amount: ${sendAmount}`);
+        setTimeout(() => refreshBalance(), 3000);
+        return hash;
+      } finally {
+        setIsWithdrawingToMain(false);
+      }
+    },
+    [chain, rpcUrl, publicClient, refreshBalance]
+  );
+
   // ─── 格式化余额 ──────────────────────────────────────
   const formattedEthBalance = useMemo(
     () => formatEther(state.ethBalance),
@@ -360,6 +465,9 @@ export function useTradingWallet(): UseTradingWalletReturn {
     getSignature,
     wrapAndDeposit,
     isWrappingAndDepositing,
+    unwrapWBNB,
+    withdrawToMainWallet,
+    isWithdrawingToMain,
   };
 }
 

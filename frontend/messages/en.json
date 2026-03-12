@@ -1515,6 +1515,8 @@
     "step2RealDesc": "Wrap BNB to WBNB (ERC-20)",
     "step3RealLabel": "Deposit to Contract",
     "step3RealDesc": "Approve and deposit WBNB to SettlementV2",
+    "withdrawWalletTransfer": "Transferring from trading wallet...",
+    "withdrawWalletTransferDesc": "Sending BNB from trading wallet to main wallet",
     "withdrawProcessing": "Processing withdrawal...",
     "withdrawProcessingDesc": "Generating Merkle proof and submitting on-chain",
     "confirmed": "Success",

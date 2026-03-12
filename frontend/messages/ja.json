@@ -1447,6 +1447,8 @@
     "step2RealDesc": "BNBをWBNB(ERC-20)にラッピング",
     "step3RealLabel": "コントラクトに入金",
     "step3RealDesc": "WBNBを承認しSettlementV2に入金",
+    "withdrawWalletTransfer": "取引ウォレットから転送中...",
+    "withdrawWalletTransferDesc": "BNBを取引ウォレットからメインウォレットに送金",
     "withdrawProcessing": "出金処理中...",
     "withdrawProcessingDesc": "Merkle証明を生成しオンチェーン送信中",
     "confirmed": "成功",
