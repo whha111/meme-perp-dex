@@ -35,9 +35,14 @@ contract SettlementV2 is Ownable2Step, ReentrancyGuard, Pausable, EIP712 {
 
     uint256 public constant PRECISION = 1e18; // WETH has 18 decimals
 
-    // EIP-712 type hash for withdrawal authorization
+    // EIP-712 type hash for withdrawal authorization (Merkle path)
     bytes32 public constant WITHDRAWAL_TYPEHASH = keccak256(
         "Withdrawal(address user,uint256 amount,uint256 nonce,uint256 deadline,bytes32 merkleRoot)"
+    );
+
+    // EIP-712 type hash for fast withdrawal (signature-only, no Merkle proof)
+    bytes32 public constant FAST_WITHDRAWAL_TYPEHASH = keccak256(
+        "FastWithdrawal(address user,uint256 amount,uint256 nonce,uint256 deadline)"
     );
 
     // ============================================================
