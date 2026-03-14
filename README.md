@@ -113,8 +113,9 @@ meme-perp-dex/
 
 | Contract | Address |
 |----------|---------|
-| SettlementV2 | `0x97d8f964bb908083432621dbae52f38D2bDd1245` |
-| PerpVault | `0x7F98ed779c3352f39b041C57d5B2C73F84dcAA75` |
+| TradingVault | `0x7Cb5f078e43BE7b1FA6F509ffF3e35ac191E81e9` |
+| SettlementV2 (legacy) | `0x97d8f964bb908083432621dbae52f38D2bDd1245` |
+| PerpVault (legacy) | `0x7F98ed779c3352f39b041C57d5B2C73F84dcAA75` |
 | TokenFactory | `0x22276744bAF24eD503dB50Cc999a9c5AD62728cb` |
 | PriceFeed | `0xe2b22673fFBeB7A2a4617125E885C12EC072ee48` |
 | WBNB | `0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd` |
