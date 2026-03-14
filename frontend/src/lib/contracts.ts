@@ -59,10 +59,10 @@ export const CONTRACTS = {
  * Network Configuration
  */
 export const NETWORK_CONFIG = {
-  CHAIN_ID: parseInt(process.env.NEXT_PUBLIC_CHAIN_ID || "56"),
-  CHAIN_NAME: parseInt(process.env.NEXT_PUBLIC_CHAIN_ID || "56") === 56 ? "BSC Mainnet" : "BSC Testnet",
-  BLOCK_EXPLORER: process.env.NEXT_PUBLIC_BLOCK_EXPLORER_URL || "https://bscscan.com",
-  RPC_URL: process.env.NEXT_PUBLIC_BSC_RPC_URL || process.env.NEXT_PUBLIC_RPC_URL || "https://bsc-dataseed.binance.org/",
+  CHAIN_ID: parseInt(process.env.NEXT_PUBLIC_CHAIN_ID || "97"),
+  CHAIN_NAME: parseInt(process.env.NEXT_PUBLIC_CHAIN_ID || "97") === 56 ? "BSC Mainnet" : "BSC Testnet",
+  BLOCK_EXPLORER: process.env.NEXT_PUBLIC_BLOCK_EXPLORER_URL || "https://testnet.bscscan.com",
+  RPC_URL: process.env.NEXT_PUBLIC_BSC_RPC_URL || process.env.NEXT_PUBLIC_RPC_URL || "https://data-seed-prebsc-1-s1.binance.org:8545/",
 };
 
 /**
@@ -323,6 +323,18 @@ export const SETTLEMENT_V2_ABI = [
     type: "function",
   },
   {
+    inputs: [
+      { name: "amount", type: "uint256" },
+      { name: "nonce", type: "uint256" },
+      { name: "deadline", type: "uint256" },
+      { name: "signature", type: "bytes" },
+    ],
+    name: "fastWithdraw",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
     inputs: [{ name: "account", type: "address" }],
     name: "userDeposits",
     outputs: [{ type: "uint256" }],
@@ -384,6 +396,14 @@ export const SETTLEMENT_V2_ABI = [
  */
 export function getExplorerUrl(addressOrTx: string, type: "address" | "tx" = "address"): string {
   return `${NETWORK_CONFIG.BLOCK_EXPLORER}/${type}/${addressOrTx}`;
+}
+
+/**
+ * PancakeSwap V2 integration for graduated tokens
+ */
+export function getPancakeSwapUrl(tokenAddress: string): string {
+  const chainParam = NETWORK_CONFIG.CHAIN_ID === 56 ? "bsc" : "bscTestnet";
+  return `https://pancakeswap.finance/swap?chain=${chainParam}&outputCurrency=${tokenAddress}`;
 }
 
 /**

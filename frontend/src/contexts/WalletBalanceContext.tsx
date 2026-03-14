@@ -28,8 +28,8 @@ import { MATCHING_ENGINE_URL } from "@/config/api";
 // Constants (BNB 本位)
 // ============================================================
 
-// BSC Mainnet WBNB address
-const WETH_ADDRESS = (process.env.NEXT_PUBLIC_WETH_ADDRESS || "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c") as Address;
+// WBNB address — read from env
+const WETH_ADDRESS = (process.env.NEXT_PUBLIC_WETH_ADDRESS || "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd") as Address;
 
 const ERC20_BALANCE_ABI = [
   {
@@ -121,9 +121,9 @@ export function WalletBalanceProvider({
       );
       if (res.ok) {
         const data = await res.json();
-        // availableBalance = effectiveAvailable - pendingOrdersLocked - positionMargin
-        // For the "交易账户余额" display, we want the full available (including settlement)
-        setSettlementBalance(BigInt(data.availableBalance || "0"));
+        // Use settlementAvailable (pure on-chain: deposits - withdrawals) for display,
+        // NOT availableBalance which includes mode2Adj (stale fake deposit balances)
+        setSettlementBalance(BigInt(data.settlementAvailable || data.availableBalance || "0"));
       }
     } catch {
       // Ignore fetch errors
