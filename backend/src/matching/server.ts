@@ -33,7 +33,7 @@ import { connectRedis as connectNewRedis, disconnectRedis, TradeRepo, OrderMargi
 // P1-5: PostgreSQL 订单镜像 (Write-Through Cache)
 import { connectPostgres, disconnectPostgres, isPostgresConnected, OrderMirrorRepo, type PgOrderMirror } from "./database/postgres";
 // P2-4: 仓位大小限制常量
-import { TRADING, ALLOW_FAKE_DEPOSIT, PRECISION_MULTIPLIER } from "./config";
+import { TRADING, ALLOW_FAKE_DEPOSIT, RESET_MODE2_ON_START, PRECISION_MULTIPLIER } from "./config";
 import { verifyOrderSignature } from "./utils/crypto";
 import { createWalletClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -43,7 +43,7 @@ import { getTokenHolders } from "./modules/tokenHolders";
 // Mode 2 Modules (Off-chain Execution + On-chain Attestation)
 // ============================================================
 import { initializeSnapshotModule, startSnapshotJob, stopSnapshotJob, getUserProof, getSnapshotJobStatus } from "./modules/snapshot";
-import { initializeWithdrawModule, syncNoncesFromChain, requestWithdrawal, getWithdrawModuleStatus, cleanupExpiredWithdrawals } from "./modules/withdraw";
+import { initializeWithdrawModule, syncNoncesFromChain, requestWithdrawal, generateFastWithdrawalSignature, getWithdrawModuleStatus, cleanupExpiredWithdrawals } from "./modules/withdraw";
 import {
   initLendingLiquidation,
   detectLendingLiquidations,
@@ -76,8 +76,8 @@ import {
 // ============================================================
 
 const PORT = parseInt(process.env.PORT || "8081");
-const RPC_URL = process.env.RPC_URL || "https://bsc-dataseed.binance.org/";
-const WSS_URL = process.env.WSS_URL || "wss://bsc-rpc.publicnode.com";
+const RPC_URL = process.env.RPC_URL || "https://data-seed-prebsc-1-s1.binance.org:8545/";
+const WSS_URL = process.env.WSS_URL || "wss://bsc-testnet-rpc.publicnode.com";
 const MATCHER_PRIVATE_KEY = process.env.MATCHER_PRIVATE_KEY as Hex;
 const SETTLEMENT_ADDRESS = process.env.SETTLEMENT_ADDRESS as Address;
 const SETTLEMENT_V2_ADDRESS = process.env.SETTLEMENT_V2_ADDRESS as Address; // dYdX v3 style Merkle withdrawal contract
@@ -156,8 +156,8 @@ const TOKEN_POOL_CACHE = new Map<string, CachedPoolState>();
 // 当代币从 bonding curve 毕业到 Uniswap V2 后，价格源需要切换
 // token address (lowercase) => { pairAddress, isWethToken0 }
 
-const WETH_ADDRESS = "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c" as Address; // WBNB on BSC Mainnet
-const UNISWAP_V2_FACTORY_ADDRESS = "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73" as Address; // PancakeSwap V2 Factory on BSC Mainnet
+const WETH_ADDRESS = (process.env.WETH_ADDRESS || process.env.COLLATERAL_TOKEN_ADDRESS || "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd") as Address; // WBNB — read from env
+const UNISWAP_V2_FACTORY_ADDRESS = (process.env.PANCAKESWAP_FACTORY_ADDRESS || "0x6725F303b657a9451d8BA641348b6733DCBd9f4c") as Address; // PancakeSwap V2 Factory — read from env
 
 interface GraduatedTokenInfo {
   pairAddress: Address;    // Uniswap V2 Pair 地址
@@ -409,11 +409,43 @@ const SETTLEMENT_V2_ABI = [
   },
   {
     type: "event",
+    name: "DepositedBNB",
+    inputs: [
+      { name: "user", type: "address", indexed: true },
+      { name: "amount", type: "uint256", indexed: false },
+      { name: "totalDeposits", type: "uint256", indexed: false },
+    ],
+  },
+  {
+    type: "event",
     name: "StateRootUpdated",
     inputs: [
       { name: "root", type: "bytes32", indexed: true },
       { name: "timestamp", type: "uint256", indexed: false },
       { name: "snapshotId", type: "uint256", indexed: false },
+    ],
+  },
+  // fastWithdraw function (TradingVault)
+  {
+    inputs: [
+      { name: "amount", type: "uint256" },
+      { name: "nonce", type: "uint256" },
+      { name: "deadline", type: "uint256" },
+      { name: "signature", type: "bytes" },
+    ],
+    name: "fastWithdraw",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  // FastWithdrawn event (TradingVault)
+  {
+    type: "event",
+    name: "FastWithdrawn",
+    inputs: [
+      { name: "user", type: "address", indexed: true },
+      { name: "amount", type: "uint256", indexed: false },
+      { name: "nonce", type: "uint256", indexed: false },
     ],
   },
 ] as const;
@@ -1641,6 +1673,7 @@ function runRiskCheck(): void {
 
   // 遍历所有仓位，更新风险指标
   for (const [trader, positions] of userPositions.entries()) {
+    let traderTotalPnL = 0n; // 累加该交易者所有仓位的 unrealized PnL
     for (const pos of positions) {
       const token = pos.token.toLowerCase() as Address;
       const orderBook = engine.getOrderBook(token);
@@ -1683,6 +1716,7 @@ function runRiskCheck(): void {
         pos.isLong
       );
       pos.unrealizedPnL = upnl.toString();
+      traderTotalPnL += upnl; // 累加到交易者总 PnL
 
       // 计算当前保证金
       const currentMargin = BigInt(pos.collateral) + upnl;
@@ -1788,6 +1822,10 @@ function runRiskCheck(): void {
 
       pos.updatedAt = Date.now();
     }
+
+    // 更新该交易者的 balance.unrealizedPnL (用于 WS balance 广播)
+    const traderBalance = getUserBalance(trader);
+    traderBalance.unrealizedPnL = traderTotalPnL;
   }
 
   // 更新所有仓位的 ADL 排名
@@ -2302,7 +2340,7 @@ interface DynamicFundingConfig {
 // 默认 Meme Token 资金费配置
 const DEFAULT_MEME_FUNDING_CONFIG: Omit<DynamicFundingConfig, "token"> = {
   baseInterval: 15 * 60 * 1000,      // 15 分钟固定结算周期
-  maxRate: 300,                      // 最大 3% (BTC 是 0.75%)
+  maxRate: 50,                       // 最大 0.5% — 对齐链上 FundingRate.sol maxFundingRateBps=50
   volatilityMultiplier: 1.5,         // 波动率每增加 1%，费率增加 1.5 倍
   baseFundingRateBps: 1,             // 基础费率 0.01%
   skewFactor: 5000,                  // 倾斜系数 50%
@@ -2629,6 +2667,21 @@ async function settleFunding(token: Address): Promise<void> {
   if (totalCollected > 0n) {
     contributeToInsuranceFund(totalCollected, normalizedToken);
     console.log(`[DynamicFunding] Insurance fund received: Ξ${Number(totalCollected) / 1e18} from funding fees`);
+
+    // 链上记账: 将资金费排入 PerpVault batch settlement 队列
+    // 复用 collectTradingFee() — 与交易手续费走同一条链上路径
+    // PerpVault.collectFee() 是 nonpayable (纯记账)，30s 批量执行
+    try {
+      const { collectTradingFee } = await import("./modules/perpVault");
+      const result = await collectTradingFee(totalCollected);
+      if (result.success) {
+        console.log(`[DynamicFunding] Funding fee queued for on-chain settlement: Ξ${Number(totalCollected) / 1e18}`);
+      } else {
+        console.warn(`[DynamicFunding] Failed to queue funding fee for on-chain: PerpVault not enabled`);
+      }
+    } catch (err) {
+      console.error(`[DynamicFunding] On-chain funding fee queue error:`, err instanceof Error ? err.message : err);
+    }
   }
 
   // 保存支付记录
@@ -2642,7 +2695,20 @@ async function settleFunding(token: Address): Promise<void> {
 
   // 设置下次结算时间 (固定 15 分钟)
   const nextInterval = getFundingInterval(normalizedToken);
-  nextFundingSettlement.set(normalizedToken, Date.now() + nextInterval);
+  const nextSettlementTime = Date.now() + nextInterval;
+  nextFundingSettlement.set(normalizedToken, nextSettlementTime);
+
+  // 持久化资金费状态到 Redis (重启恢复)
+  try {
+    const { FundingStateRepo } = await import("./database/redis");
+    FundingStateRepo.save(normalizedToken, {
+      nextSettlement: nextSettlementTime,
+      longRate: longRate.toString(),
+      shortRate: shortRate.toString(),
+      displayRate: displayRate.toString(),
+      lastSettlementTime: Date.now(),
+    }).catch(() => {});
+  } catch { /* Redis module import fail — non-blocking */ }
 
   console.log(`[DynamicFunding] Settled: longPaid=${totalLongPayment} shortPaid=${totalShortPayment} payments=${payments.length}`);
 
@@ -2683,15 +2749,44 @@ function broadcastFundingSettlement(
 let dynamicFundingInterval: NodeJS.Timeout | null = null;
 const DYNAMIC_FUNDING_CHECK_INTERVAL = 10000; // 每 10 秒检查一次
 
-function startDynamicFundingEngine(): void {
+async function startDynamicFundingEngine(): Promise<void> {
   if (dynamicFundingInterval) {
     clearInterval(dynamicFundingInterval);
   }
 
   console.log(`[DynamicFunding] Starting dynamic funding engine...`);
 
-  // 初始化所有代币的下次结算时间 (固定 15 分钟)
+  // 从 Redis 恢复资金费状态 (防重启丢失)
   const now = Date.now();
+  try {
+    const { FundingStateRepo } = await import("./database/redis");
+    const savedStates = await FundingStateRepo.getAll();
+    let restoredCount = 0;
+    for (const [token, state] of savedStates.entries()) {
+      const addr = token.toLowerCase() as Address;
+      if (state.nextSettlement > now) {
+        // 恢复有效的下次结算时间
+        nextFundingSettlement.set(addr, state.nextSettlement);
+        // 恢复费率
+        currentFundingRates.set(addr, BigInt(state.displayRate));
+        currentFundingRatesSkewed.set(addr, {
+          longRate: BigInt(state.longRate),
+          shortRate: BigInt(state.shortRate),
+        });
+        restoredCount++;
+        console.log(`[DynamicFunding] Restored state for ${addr.slice(0, 10)}: next=${new Date(state.nextSettlement).toISOString()} longRate=${state.longRate}bp shortRate=${state.shortRate}bp`);
+      } else {
+        console.log(`[DynamicFunding] Skipped expired state for ${addr.slice(0, 10)} (last settlement: ${new Date(state.lastSettlementTime).toISOString()})`);
+      }
+    }
+    if (restoredCount > 0) {
+      console.log(`[DynamicFunding] Restored ${restoredCount} funding states from Redis`);
+    }
+  } catch (err) {
+    console.warn(`[DynamicFunding] Failed to restore funding states from Redis:`, err instanceof Error ? err.message : err);
+  }
+
+  // 初始化所有代币的下次结算时间 (固定 15 分钟，仅对未恢复的代币)
   for (const token of SUPPORTED_TOKENS) {
     const normalizedToken = token.toLowerCase() as Address;
     const interval = getFundingInterval(normalizedToken);
@@ -4512,7 +4607,7 @@ async function autoDepositIfNeeded(trader: Address, requiredAmount: bigint): Pro
   // - 如果 native ETH 不多，value + gas 容易超出余额
   // - WETH 是 ERC20，approve+deposit 只需要 gas (native ETH)，value 从 WETH 余额出
   //
-  const WETH_ADDRESS = (process.env.WETH_ADDRESS || "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c") as Address;
+  const WETH_ADDRESS = (process.env.WETH_ADDRESS || process.env.COLLATERAL_TOKEN_ADDRESS || "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd") as Address;
 
   console.log(`[Deposit] ${trader.slice(0, 10)} 需要存入 Ξ${Number(shortfall) / 1e18} 到 Settlement (native=Ξ${Number(balance.nativeEthBalance) / 1e18}, weth=Ξ${Number(balance.wethBalance) / 1e18})`);
 
@@ -5420,6 +5515,29 @@ async function startEventWatching(): Promise<void> {
       },
     });
 
+    // 监听 TradingVault DepositedBNB 事件 (用户存入 native BNB, 自动包装为 WBNB)
+    v2PublicClient.watchContractEvent({
+      address: SETTLEMENT_V2_ADDRESS,
+      abi: SETTLEMENT_V2_ABI,
+      eventName: "DepositedBNB",
+      onLogs: async (logs) => {
+        for (const log of logs) {
+          const { user, amount, totalDeposits } = log.args as {
+            user: Address;
+            amount: bigint;
+            totalDeposits: bigint;
+          };
+          console.log(`[Events:V2] DepositedBNB: ${user.slice(0, 10)} +Ξ${Number(amount) / 1e18} (total: Ξ${Number(totalDeposits) / 1e18})`);
+          try {
+            await syncUserBalanceFromChain(user);
+            broadcastBalanceUpdate(user);
+          } catch (e: any) {
+            console.error(`[Events:V2] Failed to sync after DepositedBNB: ${e.message}`);
+          }
+        }
+      },
+    });
+
     // M-11 FIX: 事件去重 Set (防止链重组/重连时重复处理)
     const processedDepositEvents = new Set<string>();
     // 定期清理 (每 10 分钟清空，避免内存无限增长)
@@ -5479,7 +5597,7 @@ async function startEventWatching(): Promise<void> {
       },
     });
 
-    console.log("[Events] SettlementV2 event listeners active: Deposited, DepositedFor, Withdrawn");
+    console.log("[Events] TradingVault event listeners active: Deposited, DepositedBNB, DepositedFor, Withdrawn");
   }
 
   // 监听 TokenFactory LiquidityMigrated 事件 (代币毕业到 Uniswap V2)
@@ -7818,18 +7936,46 @@ async function handleGetTickers(): Promise<Response> {
 
 async function handleGetTrades(token: string, url: URL): Promise<Response> {
   const limit = parseInt(url.searchParams.get("limit") || "100");
-  const trades = engine.getRecentTrades(token as Address, limit);
 
-  return jsonResponse({
-    trades: trades.map((t) => ({
-      id: t.id,
-      token: t.token,
-      price: t.price.toString(),
-      size: t.size.toString(),
-      side: t.side,
-      timestamp: t.timestamp,
-    })),
-  });
+  // 1. Try perpetual engine in-memory trades
+  const trades = engine.getRecentTrades(token as Address, limit);
+  if (trades.length > 0) {
+    return jsonResponse({
+      trades: trades.map((t) => ({
+        id: t.id,
+        token: t.token,
+        price: t.price.toString(),
+        size: t.size.toString(),
+        side: t.side,
+        timestamp: t.timestamp,
+      })),
+    });
+  }
+
+  // 2. Fallback: spot trades from Redis (SpotTradeRepo)
+  try {
+    const { SpotTradeRepo } = await import("../spot/spotHistory");
+    const spotTrades = await SpotTradeRepo.getByToken(token.toLowerCase() as Address, limit);
+    if (spotTrades.length > 0) {
+      return jsonResponse({
+        trades: spotTrades.map((t) => ({
+          id: t.id,
+          token: t.token,
+          price: t.price,
+          size: (Number(t.tokenAmount) / 1e18).toString(),
+          side: t.isBuy ? "buy" : "sell",
+          timestamp: t.timestamp,
+          ethAmount: t.ethAmount,
+          trader: t.trader,
+          txHash: t.txHash,
+        })),
+      });
+    }
+  } catch (e) {
+    console.warn("[Trades] Failed to read spot trades from Redis:", (e as Error).message);
+  }
+
+  return jsonResponse({ trades: [] });
 }
 
 async function handleGetUserOrders(trader: string): Promise<Response> {
@@ -11103,8 +11249,8 @@ async function handleRequest(req: Request): Promise<Response> {
       const withdrawAmount = BigInt(amount);
 
       // ═══════════════════════════════════════════════════════════
-      // V2 Path: SettlementV2 Merkle proof withdrawal
-      // Returns authorization data for frontend to submit on-chain
+      // TradingVault Fast Withdrawal (daily path — signature only)
+      // Returns fastWithdraw params for frontend to call TradingVault.fastWithdraw()
       // H-6: withLock prevents concurrent withdrawal requests from double-spending
       // ═══════════════════════════════════════════════════════════
       if (SETTLEMENT_V2_ADDRESS) {
@@ -11129,51 +11275,43 @@ async function handleRequest(req: Request): Promise<Response> {
             (sum, p) => sum + BigInt(p.collateral || "0"), 0n
           );
 
-          // 3. Get user equity from Merkle snapshot
-          const proof = getUserProof(normalizedTrader);
-          if (!proof) {
-            return errorResponse("No Merkle snapshot available. Please wait for the next snapshot cycle (~1 hour).");
-          }
-
-          // 4. Validate withdrawable amount
-          const availableEquity = proof.equity - pendingOrdersLocked - posMargin;
-          if (withdrawAmount > availableEquity) {
+          // 3. Sync fresh balance from chain before checking (fixes stale cache issue)
+          await syncUserBalanceFromChain(normalizedTrader);
+          const userBal = getUserBalance(normalizedTrader);
+          const availableForWithdraw = userBal.availableBalance - pendingOrdersLocked;
+          if (withdrawAmount > availableForWithdraw) {
             return errorResponse(
-              `提取金额超出可用余额。可提取: Ξ${Number(availableEquity > 0n ? availableEquity : 0n) / 1e18}, ` +
+              `提取金额超出可用余额。可提取: Ξ${Number(availableForWithdraw > 0n ? availableForWithdraw : 0n) / 1e18}, ` +
               `挂单锁定: Ξ${Number(pendingOrdersLocked) / 1e18}, ` +
               `仓位保证金: Ξ${Number(posMargin) / 1e18}`
             );
           }
 
-          // 5. Generate Merkle proof + EIP-712 signature
-          const result = await requestWithdrawal(normalizedTrader, withdrawAmount);
-          if (!result.success) {
-            return errorResponse(result.error || "Withdrawal authorization failed");
+          // 4. Generate fast withdrawal signature (no Merkle proof needed)
+          const result = await generateFastWithdrawalSignature(normalizedTrader, withdrawAmount);
+          if (!result.success || !result.data) {
+            return errorResponse(result.error || "Fast withdrawal signing failed");
           }
 
-          // AUDIT-FIX ME-C15: 预扣提款金额，防止双重提款
-          // 用户余额在链上提款确认前先减少，防止用同一余额多次请求提款
-          const withdrawBalance = getUserBalance(normalizedTrader);
-          if (withdrawBalance.availableBalance >= withdrawAmount) {
-            withdrawBalance.availableBalance -= withdrawAmount;
+          // 5. Pre-deduct balance to prevent double-spending
+          if (userBal.availableBalance >= withdrawAmount) {
+            userBal.availableBalance -= withdrawAmount;
           } else {
-            // 如果 availableBalance 不足但 equity 校验通过，说明 mode2Adj 有余额
-            // 仍然预扣以防双重提款
-            withdrawBalance.availableBalance = 0n;
+            userBal.availableBalance = 0n;
           }
-          withdrawBalance.totalBalance = withdrawBalance.availableBalance + (withdrawBalance.usedMargin || 0n);
+          userBal.totalBalance = userBal.availableBalance + (userBal.usedMargin || 0n);
 
-          console.log(`[Withdraw:V2] ${normalizedTrader.slice(0, 10)} authorized Ξ${Number(withdrawAmount) / 1e18} withdrawal (balance pre-deducted)`);
+          console.log(`[Withdraw:Fast] ${normalizedTrader.slice(0, 10)} authorized Ξ${Number(withdrawAmount) / 1e18} (balance pre-deducted)`);
 
-          // 6. Return authorization for frontend to submit on-chain
-          // Frontend calls SettlementV2.withdraw(amount, userEquity, proof, deadline, sig)
+          // 6. Return fast withdrawal params for frontend
+          // Frontend calls TradingVault.fastWithdraw(amount, nonce, deadline, signature)
           return jsonResponse({
             success: true,
-            authorization: {
-              userEquity: proof.equity.toString(),
-              merkleProof: result.authorization!.merkleProof,
-              deadline: result.authorization!.deadline.toString(),
-              signature: result.authorization!.signature,
+            fastWithdraw: {
+              amount: withdrawAmount.toString(),
+              nonce: result.data.nonce.toString(),
+              deadline: result.data.deadline.toString(),
+              signature: result.data.signature,
             },
           });
         });
@@ -11562,7 +11700,7 @@ async function handleRequest(req: Request): Promise<Response> {
           entryPrice: pos.entryPrice,
           leverage: pos.leverage || "1",
           liquidationPrice: pos.liquidationPrice || "0",
-          unrealizedPnl: pos.unrealizedPnl || "0",
+          unrealizedPnl: pos.unrealizedPnL || "0",
           timestamp: pos.timestamp || Date.now(),
         });
       }
@@ -11706,29 +11844,38 @@ async function handleRequest(req: Request): Promise<Response> {
         const { handleGetKlines: handleGetSpotKlines } = await import("./api/handlers");
         const result = await handleGetSpotKlines(token, resolution, from, to);
         return jsonResponse(result);
-      } catch {
-        // Fallback: read directly from Redis kline storage
+      } catch (handlerErr) {
+        // Fallback: read from Redis HASH (spot:kline:TOKEN:RESOLUTION)
+        console.warn("[Kline API] Handler import failed, using Redis fallback:", (handlerErr as Error).message);
         const { getRedisClient } = await import("./database/redis");
         const redis = getRedisClient();
         const normalizedToken = token.toLowerCase();
-        // Convert seconds to minute-aligned ms timestamps
-        const fromMs = from * 1000;
-        const toMs = to * 1000;
         const bars: Array<{ time: number; open: string; high: string; low: string; close: string; volume: string }> = [];
 
-        // Scan minute-by-minute from 'from' to 'to'
-        for (let minuteTs = Math.floor(fromMs / 60000) * 60000; minuteTs <= toMs; minuteTs += 60000) {
-          const data = await redis.get(`kline:1m:${normalizedToken}:${minuteTs}`);
-          if (data) {
+        // Read from spot:kline HASH (same format as spotHistory.ts)
+        const hashKey = `spot:kline:${normalizedToken}:${resolution}`;
+        const allBars = await redis.hgetall(hashKey);
+
+        if (allBars && Object.keys(allBars).length > 0) {
+          for (const [, barJson] of Object.entries(allBars)) {
             try {
-              const d = JSON.parse(data);
-              bars.push({ time: Math.floor(minuteTs / 1000), open: d.o, high: d.h, low: d.l, close: d.c, volume: d.v });
+              const bar = JSON.parse(barJson);
+              if (bar.time >= from && bar.time <= to) {
+                bars.push({
+                  time: bar.time,
+                  open: bar.open,
+                  high: bar.high,
+                  low: bar.low,
+                  close: bar.close,
+                  volume: bar.volume,
+                });
+              }
             } catch { /* skip malformed */ }
           }
         }
 
         bars.sort((a, b) => a.time - b.time);
-        return jsonResponse({ success: true, data: bars, source: "redis" });
+        return jsonResponse({ success: true, data: bars, source: "redis-fallback" });
       }
     } catch (e) {
       console.error("[Kline API] Error:", (e as Error).message);
@@ -11746,32 +11893,39 @@ async function handleRequest(req: Request): Promise<Response> {
         const { handleGetLatestKlines } = await import("./api/handlers");
         const result = await handleGetLatestKlines(token, resolution, limit);
         return jsonResponse(result);
-      } catch {
-        // Fallback: read latest K-lines directly from Redis
+      } catch (handlerErr) {
+        // Fallback: read latest K-lines directly from Redis HASH (spot:kline:TOKEN:RESOLUTION)
+        console.warn("[Kline API] Handler import failed, using Redis fallback:", (handlerErr as Error).message);
         const { getRedisClient } = await import("./database/redis");
         const redis = getRedisClient();
         const normalizedToken = token.toLowerCase();
-        const now = Date.now();
-        const bars: Array<{ time: number; open: string; high: string; low: string; close: string; volume: string }> = [];
+        const bars: Array<{ time: number; open: string; high: string; low: string; close: string; volume: string; trades: number }> = [];
 
-        // Walk backwards from current minute, collecting up to 'limit' bars
-        const currentMinute = Math.floor(now / 60000) * 60000;
-        const maxLookback = Math.min(limit * 3, 1440); // Look back at most 24h (1440 minutes)
+        // Read from spot:kline HASH (same format as spotHistory.ts KlineRepo)
+        const hashKey = `spot:kline:${normalizedToken}:${resolution}`;
+        const allBars = await redis.hgetall(hashKey);
 
-        for (let i = 0; i < maxLookback && bars.length < limit; i++) {
-          const minuteTs = currentMinute - i * 60000;
-          const data = await redis.get(`kline:1m:${normalizedToken}:${minuteTs}`);
-          if (data) {
+        if (allBars && Object.keys(allBars).length > 0) {
+          for (const [, barJson] of Object.entries(allBars)) {
             try {
-              const d = JSON.parse(data);
-              bars.push({ time: Math.floor(minuteTs / 1000), open: d.o, high: d.h, low: d.l, close: d.c, volume: d.v });
+              const bar = JSON.parse(barJson);
+              bars.push({
+                time: bar.time,
+                open: bar.open,
+                high: bar.high,
+                low: bar.low,
+                close: bar.close,
+                volume: bar.volume,
+                trades: bar.trades || 0,
+              });
             } catch { /* skip malformed */ }
           }
         }
 
-        // Return in chronological order
+        // Sort and return latest 'limit' bars
         bars.sort((a, b) => a.time - b.time);
-        return jsonResponse({ success: true, data: bars, count: bars.length, source: "redis" });
+        const latest = bars.slice(-limit);
+        return jsonResponse({ success: true, data: latest, count: latest.length, source: "redis-fallback" });
       }
     } catch (e) {
       console.error("[Kline API] Error:", (e as Error).message);
@@ -13113,11 +13267,20 @@ async function startServer(): Promise<void> {
 
     // 从 Redis 恢复 Mode 2 链下盈亏调整 (平仓盈亏、资金费等)
     try {
-      const savedAdjustments = await Mode2AdjustmentRepo.getAll();
-      for (const [user, adj] of savedAdjustments) {
-        mode2PnLAdjustments.set(user.toLowerCase() as Address, adj);
+      if (RESET_MODE2_ON_START) {
+        // Clear stale mode2 adjustments (e.g. from old fake deposits before real on-chain deposits)
+        const staleAdjustments = await Mode2AdjustmentRepo.getAll();
+        for (const [user] of staleAdjustments) {
+          await Mode2AdjustmentRepo.save(user.toLowerCase() as Address, 0n);
+        }
+        console.log(`[Server] RESET_MODE2_ON_START: cleared ${staleAdjustments.size} stale Mode 2 adjustments`);
+      } else {
+        const savedAdjustments = await Mode2AdjustmentRepo.getAll();
+        for (const [user, adj] of savedAdjustments) {
+          mode2PnLAdjustments.set(user.toLowerCase() as Address, adj);
+        }
+        console.log(`[Server] Restored ${savedAdjustments.size} Mode 2 PnL adjustments from Redis`);
       }
-      console.log(`[Server] Restored ${savedAdjustments.size} Mode 2 PnL adjustments from Redis`);
     } catch (e) {
       console.error("[Server] Failed to restore Mode 2 adjustments:", e);
     }
@@ -13229,6 +13392,35 @@ async function startServer(): Promise<void> {
       chain: activeChain,
       transport: http(RPC_URL),
     });
+    const v2PublicClient = createPublicClient({
+      chain: activeChain,
+      transport: http(RPC_URL),
+    });
+
+    // ★ 启动时同步所有已知用户的链上余额 (从 nonce 列表获取用户地址)
+    // 确保 userBalances Map 被填充，否则 Merkle 快照会是空的
+    if (process.env.SKIP_BALANCE_SYNC === "true") {
+      console.log(`[Server] SKIP_BALANCE_SYNC=true — skipping on-chain balance sync`);
+    } else {
+      const knownTraders = Array.from(userNonces.keys());
+      console.log(`[Server] Syncing on-chain balances for ${knownTraders.length} known users...`);
+      let syncedCount = 0;
+      const BATCH_SIZE = 10;
+      for (let i = 0; i < knownTraders.length; i += BATCH_SIZE) {
+        const batch = knownTraders.slice(i, i + BATCH_SIZE);
+        await Promise.allSettled(
+          batch.map(async (user) => {
+            try {
+              await syncUserBalanceFromChain(user);
+              syncedCount++;
+            } catch (e: any) {
+              console.debug(`[Server] Balance sync skipped for ${user.slice(0, 10)}: ${e.message}`);
+            }
+          })
+        );
+      }
+      console.log(`[Server] Synced ${syncedCount}/${knownTraders.length} user balances from chain`);
+    }
 
     // 初始化 Snapshot 模块 — 带链上 root 提交
     initializeSnapshotModule({
@@ -13243,7 +13435,12 @@ async function startServer(): Promise<void> {
             functionName: "updateStateRoot",
             args: [root as `0x${string}`],
           });
-          console.log(`[SettlementV2] State root submitted: ${txHash}`);
+          // ★ 必须等待 TX 确认，否则 Merkle proof 会对旧 root 验证失败 (InvalidProof)
+          await v2PublicClient.waitForTransactionReceipt({
+            hash: txHash,
+            confirmations: 1,
+          });
+          console.log(`[SettlementV2] State root confirmed: ${txHash}`);
           return txHash;
         } catch (e: any) {
           console.error(`[SettlementV2] Failed to submit state root: ${e.message}`);
@@ -13253,13 +13450,13 @@ async function startServer(): Promise<void> {
     });
     console.log(`[Server] Mode 2: Snapshot module initialized (SettlementV2: ${SETTLEMENT_V2_ADDRESS})`);
 
-    // 初始化提现模块 — 指向 SettlementV2
+    // 初始化提现模块 — 指向 TradingVault (兼容旧变量名 SETTLEMENT_V2_ADDRESS)
     initializeWithdrawModule({
       signerPrivateKey: MATCHER_PRIVATE_KEY,
       contractAddress: SETTLEMENT_V2_ADDRESS,
       chainId: CONFIG_CHAIN_ID,
     });
-    console.log("[Server] Mode 2: Withdraw module initialized (Merkle + EIP-712)");
+    console.log("[Server] Mode 2: Withdraw module initialized (fastWithdraw + Merkle fallback)");
 
     // 从链上同步提款 nonce（防止引擎重启后 nonce 重放攻击）
     const v2ReadClient = createPublicClient({
@@ -13819,7 +14016,7 @@ async function startServer(): Promise<void> {
   // ========================================
   // 启动 Dynamic Funding Engine (P1)
   // ========================================
-  startDynamicFundingEngine();
+  await startDynamicFundingEngine();
   console.log(`[Server] Dynamic Funding Engine started: ${DYNAMIC_FUNDING_CHECK_INTERVAL}ms check interval`);
 
   // 定期计算资金费率（基于现货价格锚定）

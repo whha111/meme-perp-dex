@@ -389,8 +389,8 @@ func (k *FundingKeeper) calculateFundingRate(ctx context.Context, instID string)
 	// Calculate imbalance
 	imbalance := longSize.Sub(shortSize).Div(totalSize)
 
-	// Scale to max ±0.25%
-	maxRate, _ := model.NewDecimalFromString("0.0025")
+	// Scale to max ±0.5% — aligned with FundingRate.sol maxFundingRateBps=50
+	maxRate, _ := model.NewDecimalFromString("0.005")
 	fundingRate := imbalance.Mul(maxRate)
 
 	// Clamp

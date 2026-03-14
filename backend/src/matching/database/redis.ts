@@ -283,6 +283,10 @@ export const Keys = {
   insuranceFundToken: (token: Address) => `insurance_fund:token:${token.toLowerCase()}`,
   allInsuranceFundTokens: () => "insurance_fund:tokens:all",
 
+  // Funding state keys (资金费状态，必须持久化 — 重启恢复)
+  fundingState: (token: Address) => `funding:state:${token.toLowerCase()}`,
+  allFundingTokens: () => "funding:tokens:all",
+
   // Referral keys (推荐系统，必须持久化 — 推荐关系 + 佣金累计)
   referrer: (address: Address) => `referral:referrer:${address.toLowerCase()}`,
   allReferrers: () => "referral:referrers:all",
@@ -1496,6 +1500,113 @@ export const InsuranceFundRepo = {
       }
     } catch (e) {
       logger.error("Redis", `Failed to load token insurance funds: ${e}`);
+    }
+    return result;
+  },
+};
+
+// ============================================================
+// Funding State Repository (资金费状态持久化 — 重启恢复)
+// ============================================================
+
+interface FundingStateData {
+  nextSettlement: string;
+  longRate: string;
+  shortRate: string;
+  displayRate: string;
+  lastSettlementTime: string;
+}
+
+export const FundingStateRepo = {
+  /**
+   * 保存代币资金费状态到 Redis
+   */
+  async save(token: Address, state: {
+    nextSettlement: number;
+    longRate: string;
+    shortRate: string;
+    displayRate: string;
+    lastSettlementTime: number;
+  }): Promise<void> {
+    if (!isRedisConnected()) return;
+    try {
+      const client = getRedisClient();
+      await client.hset(Keys.fundingState(token), {
+        nextSettlement: state.nextSettlement.toString(),
+        longRate: state.longRate,
+        shortRate: state.shortRate,
+        displayRate: state.displayRate,
+        lastSettlementTime: state.lastSettlementTime.toString(),
+      });
+      await client.sadd(Keys.allFundingTokens(), token.toLowerCase());
+    } catch (e) {
+      logger.error("Redis", `Failed to save funding state for ${token}: ${e}`);
+    }
+  },
+
+  /**
+   * 读取单个代币资金费状态
+   */
+  async get(token: Address): Promise<{
+    nextSettlement: number;
+    longRate: string;
+    shortRate: string;
+    displayRate: string;
+    lastSettlementTime: number;
+  } | null> {
+    if (!isRedisConnected()) return null;
+    try {
+      const client = getRedisClient();
+      const data = await client.hgetall(Keys.fundingState(token)) as FundingStateData;
+      if (!data || !data.nextSettlement) return null;
+      return {
+        nextSettlement: parseInt(data.nextSettlement) || 0,
+        longRate: data.longRate || "0",
+        shortRate: data.shortRate || "0",
+        displayRate: data.displayRate || "0",
+        lastSettlementTime: parseInt(data.lastSettlementTime) || 0,
+      };
+    } catch (e) {
+      logger.error("Redis", `Failed to load funding state for ${token}: ${e}`);
+      return null;
+    }
+  },
+
+  /**
+   * 读取所有代币资金费状态 (启动时恢复)
+   */
+  async getAll(): Promise<Map<string, {
+    nextSettlement: number;
+    longRate: string;
+    shortRate: string;
+    displayRate: string;
+    lastSettlementTime: number;
+  }>> {
+    const result = new Map<string, {
+      nextSettlement: number;
+      longRate: string;
+      shortRate: string;
+      displayRate: string;
+      lastSettlementTime: number;
+    }>();
+    if (!isRedisConnected()) return result;
+    try {
+      const client = getRedisClient();
+      const tokens = await client.smembers(Keys.allFundingTokens());
+      for (const token of tokens) {
+        const data = await client.hgetall(Keys.fundingState(token as Address)) as FundingStateData;
+        if (data && data.nextSettlement) {
+          result.set(token.toLowerCase(), {
+            nextSettlement: parseInt(data.nextSettlement) || 0,
+            longRate: data.longRate || "0",
+            shortRate: data.shortRate || "0",
+            displayRate: data.displayRate || "0",
+            lastSettlementTime: parseInt(data.lastSettlementTime) || 0,
+          });
+        }
+      }
+    } catch (e) {
+      logger.error("Redis", `Failed to load funding states: ${e}`);
     }
     return result;
   },

@@ -440,9 +440,11 @@ export function useTradingWallet(): UseTradingWalletReturn {
           to: mainWalletAddr,
           value: sendAmount,
         });
+        // Wait for BNB transfer to confirm before returning
+        await publicClient.waitForTransactionReceipt({ hash });
 
-        console.log(`[TradingWallet] Withdraw to main wallet tx: ${hash}, amount: ${sendAmount}`);
-        setTimeout(() => refreshBalance(), 3000);
+        console.log(`[TradingWallet] Withdraw to main wallet confirmed: ${hash}, amount: ${sendAmount}`);
+        refreshBalance();
         return hash;
       } finally {
         setIsWithdrawingToMain(false);
@@ -467,30 +469,52 @@ export function useTradingWallet(): UseTradingWalletReturn {
           transport: http(rpcUrl),
         });
 
-        // Call SettlementV2.depositBNB{value: amount}() — atomic wrap + deposit
-        const hash = await walletClient.writeContract({
-          address: CONTRACTS.SETTLEMENT_V2 as Address,
-          abi: [
-            {
-              name: "depositBNB",
-              type: "function",
-              stateMutability: "payable",
-              inputs: [],
-              outputs: [],
-            },
-          ] as const,
-          functionName: "depositBNB",
+        const settlementV2 = CONTRACTS.SETTLEMENT_V2 as Address;
+        const wbnbAddress = CONTRACTS.WETH as Address;
+        console.log(`[TradingWallet] depositBNBToSettlement: sv2=${settlementV2}, wbnb=${wbnbAddress}, amount=${amount}, chain=${chain.id}, from=${account.address}`);
+
+        // SettlementV2 only has deposit(uint256) for WBNB ERC20 — no depositBNB()
+        // So we do 3 steps: wrap BNB→WBNB, approve WBNB, deposit to SV2
+
+        // Step 1: Wrap BNB → WBNB
+        const wrapHash = await walletClient.writeContract({
+          address: wbnbAddress,
+          abi: [{ name: "deposit", type: "function", stateMutability: "payable", inputs: [], outputs: [] }] as const,
+          functionName: "deposit",
           value: amount,
+          gas: 100_000n,
+        });
+        console.log(`[TradingWallet] Step 1 wrap tx: ${wrapHash}`);
+        if (publicClient) await publicClient.waitForTransactionReceipt({ hash: wrapHash });
+
+        // Step 2: Approve WBNB for SettlementV2
+        const approveHash = await walletClient.writeContract({
+          address: wbnbAddress,
+          abi: [{ name: "approve", type: "function", stateMutability: "nonpayable", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] }] as const,
+          functionName: "approve",
+          args: [settlementV2, amount],
+          gas: 100_000n,
+        });
+        console.log(`[TradingWallet] Step 2 approve tx: ${approveHash}`);
+        if (publicClient) await publicClient.waitForTransactionReceipt({ hash: approveHash });
+
+        // Step 3: Deposit WBNB to SettlementV2
+        const hash = await walletClient.writeContract({
+          address: settlementV2,
+          abi: [{ name: "deposit", type: "function", stateMutability: "nonpayable", inputs: [{ name: "amount", type: "uint256" }], outputs: [] }] as const,
+          functionName: "deposit",
+          args: [amount],
+          gas: 200_000n,
         });
 
-        console.log(`[TradingWallet] depositBNB tx: ${hash}, amount: ${amount}`);
+        console.log(`[TradingWallet] Step 3 deposit tx: ${hash}, amount: ${amount}`);
         setTimeout(() => refreshBalance(), 3000);
         return hash;
       } finally {
         setIsDepositingBNB(false);
       }
     },
-    [chain, rpcUrl, refreshBalance]
+    [chain, rpcUrl, publicClient, refreshBalance]
   );
 
   // ─── 格式化余额 ──────────────────────────────────────
