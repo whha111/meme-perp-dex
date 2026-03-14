@@ -192,7 +192,7 @@ function evictOldest<K, V>(map: Map<K, V>, maxSize: number): void {
 const EIP712_DOMAIN = {
   name: "MemePerp",
   version: "1",
-  chainId: CONFIG_CHAIN_ID, // BSC — reads from env CHAIN_ID (default 56)
+  chainId: CONFIG_CHAIN_ID, // BSC — reads from env CHAIN_ID (default 97)
   verifyingContract: SETTLEMENT_ADDRESS,
 };
 

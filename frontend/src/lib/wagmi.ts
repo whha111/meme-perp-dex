@@ -11,7 +11,7 @@ import { injected } from "wagmi/connectors";
 const isDev = process.env.NODE_ENV === 'development';
 
 // Determine default chain based on environment variable
-const chainId = parseInt(process.env.NEXT_PUBLIC_CHAIN_ID || "56", 10);
+const chainId = parseInt(process.env.NEXT_PUBLIC_CHAIN_ID || "97", 10);
 const isMainnet = chainId === 56;
 
 // Get RPC URLs for both chains

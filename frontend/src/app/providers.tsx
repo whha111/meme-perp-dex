@@ -424,7 +424,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
           <WagmiProvider config={config}>
             <QueryClientProvider client={queryClient}>
               <RainbowKitProvider
-                initialChain={parseInt(process.env.NEXT_PUBLIC_TARGET_CHAIN_ID || "56")}
+                initialChain={parseInt(process.env.NEXT_PUBLIC_TARGET_CHAIN_ID || "97")}
                 modalSize="compact"
               >
                 <ToastProvider>

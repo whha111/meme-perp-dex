@@ -579,10 +579,10 @@ export async function backfillHistoricalTrades(
   const { createPublicClient, http, parseAbiItem } = await import("viem");
   const { bsc: bscChain } = await import("viem/chains");
 
-  // BSC Mainnet RPC for backfill
-  const RPC_URL = process.env.RPC_URL || "https://bsc-dataseed.binance.org/";
-  // 使用部署的 TokenFactory 地址
-  const TOKEN_FACTORY_ADDRESS = (process.env.TOKEN_FACTORY_ADDRESS || "0xd05A38E6C2a39762De453D90a670ED0Af65ff2f8") as Address;
+  // BSC RPC — read from env
+  const RPC_URL = process.env.RPC_URL || "https://data-seed-prebsc-1-s1.binance.org:8545/";
+  // TokenFactory — read from env
+  const TOKEN_FACTORY_ADDRESS = (process.env.TOKEN_FACTORY_ADDRESS || "0x86b2dC09b24C244DcdFE58dceF37b89d63B353bf") as Address;
 
   logger.info("SpotHistory", `Using TokenFactory: ${TOKEN_FACTORY_ADDRESS}`);
 
