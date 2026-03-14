@@ -315,7 +315,7 @@ export default function CreateTokenPage() {
                 />
                 <div className="flex items-center gap-2">
                   <div className="w-5 h-5 rounded-full bg-meme-lime flex items-center justify-center">
-                    <span className="text-[10px] text-black font-bold">B</span>
+                    <span className="text-xs text-black font-bold">B</span>
                   </div>
                   <span className="text-sm font-bold text-okx-text-primary">BNB</span>
                 </div>

@@ -71,7 +71,7 @@ function Leaderboard({
                       {formatAddress(entry.address)}
                       {isCurrentUser && <span className="ml-1 text-okx-accent">(You)</span>}
                     </div>
-                    <div className="text-[10px] text-okx-text-tertiary">
+                    <div className="text-xs text-okx-text-tertiary">
                       {type === "creator" && entry.tokenCount !== undefined && (
                         <span>{entry.tokenCount} {t("tokens")}</span>
                       )}
@@ -86,7 +86,7 @@ function Leaderboard({
                     <div className="text-xs font-bold text-okx-up">
                       {parseFloat(entry.earnings).toFixed(4)}
                     </div>
-                    <div className="text-[10px] text-okx-text-tertiary">BNB</div>
+                    <div className="text-xs text-okx-text-tertiary">BNB</div>
                   </div>
                 </div>
               );
@@ -240,25 +240,25 @@ export default function EarningsPage() {
               {/* Stats Overview - 3 cards */}
               <div className="grid grid-cols-3 gap-3">
                 <div className="bg-okx-bg-card border border-okx-border-primary rounded-lg p-3">
-                  <div className="text-okx-text-secondary text-[10px] mb-1">{t("creatorEarningsLabel")}</div>
+                  <div className="text-okx-text-secondary text-xs mb-1">{t("creatorEarningsLabel")}</div>
                   <div className="text-lg font-bold text-okx-up">{parseFloat(earnings.creatorEarnings).toFixed(4)} BNB</div>
-                  <div className="text-[10px] text-okx-text-tertiary mt-1">
+                  <div className="text-xs text-okx-text-tertiary mt-1">
                     {t("createdTokensCount", { count: earnings.createdTokens.length })}
                   </div>
                 </div>
                 <div className="bg-okx-bg-card border border-okx-border-primary rounded-lg p-3">
-                  <div className="text-okx-text-secondary text-[10px] mb-1">{t("referralEarningsLabel")}</div>
+                  <div className="text-okx-text-secondary text-xs mb-1">{t("referralEarningsLabel")}</div>
                   <div className="text-lg font-bold text-okx-up">{parseFloat(earnings.referrerEarnings).toFixed(4)} BNB</div>
                   {earnings.referrer && (
-                    <div className="text-[10px] text-okx-text-tertiary mt-1">
+                    <div className="text-xs text-okx-text-tertiary mt-1">
                       {t("yourReferrer")}: {formatAddress(earnings.referrer)}
                     </div>
                   )}
                 </div>
                 <div className="bg-okx-bg-card border border-okx-border-primary rounded-lg p-3">
-                  <div className="text-okx-text-secondary text-[10px] mb-1">{t("perpEarningsLabel")}</div>
+                  <div className="text-okx-text-secondary text-xs mb-1">{t("perpEarningsLabel")}</div>
                   <div className="text-lg font-bold text-okx-up">{parseFloat(perpEarnings.pendingEarnings).toFixed(4)} BNB</div>
-                  <div className="text-[10px] text-okx-text-tertiary mt-1">
+                  <div className="text-xs text-okx-text-tertiary mt-1">
                     {t("perpTotalEarnings")}: {parseFloat(perpEarnings.totalEarnings).toFixed(4)} BNB
                   </div>
                 </div>
@@ -396,7 +396,7 @@ export default function EarningsPage() {
                             {copied ? tCommon("copied") : t("copy")}
                           </button>
                         </div>
-                        <p className="text-[10px] text-okx-text-tertiary mt-2">
+                        <p className="text-xs text-okx-text-tertiary mt-2">
                           {t("inviteLinkDesc")}
                         </p>
                       </div>
@@ -446,17 +446,17 @@ export default function EarningsPage() {
                           <div className="bg-okx-bg-hover rounded-lg p-2 text-center">
                             <div className="text-lg mb-1">1</div>
                             <h5 className="font-medium text-xs mb-1">{t("step1Title")}</h5>
-                            <p className="text-[10px] text-okx-text-secondary">{t("step1Desc")}</p>
+                            <p className="text-xs text-okx-text-secondary">{t("step1Desc")}</p>
                           </div>
                           <div className="bg-okx-bg-hover rounded-lg p-2 text-center">
                             <div className="text-lg mb-1">2</div>
                             <h5 className="font-medium text-xs mb-1">{t("step2Title")}</h5>
-                            <p className="text-[10px] text-okx-text-secondary">{t("step2Desc")}</p>
+                            <p className="text-xs text-okx-text-secondary">{t("step2Desc")}</p>
                           </div>
                           <div className="bg-okx-bg-hover rounded-lg p-2 text-center">
                             <div className="text-lg mb-1">3</div>
                             <h5 className="font-medium text-xs mb-1">{t("step3Title")}</h5>
-                            <p className="text-[10px] text-okx-text-secondary">{t("step3Desc")}</p>
+                            <p className="text-xs text-okx-text-secondary">{t("step3Desc")}</p>
                           </div>
                         </div>
                       </div>
@@ -465,14 +465,14 @@ export default function EarningsPage() {
                       {earnings.referrer && (
                         <div className="bg-okx-bg-hover rounded-lg p-3">
                           <h4 className="font-medium text-sm mb-1">{t("yourReferrerTitle")}</h4>
-                          <p className="text-[10px] text-okx-text-secondary mb-2">{t("yourReferrerDesc")}</p>
+                          <p className="text-xs text-okx-text-secondary mb-2">{t("yourReferrerDesc")}</p>
                           <div className="flex items-center gap-2">
                             <span className="font-mono text-xs">{formatAddress(earnings.referrer)}</span>
                             <a
                               href={`${process.env.NEXT_PUBLIC_BLOCK_EXPLORER_URL}/address/${earnings.referrer}`}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-okx-accent text-[10px] hover:underline"
+                              className="text-okx-accent text-xs hover:underline"
                             >
                               {t("viewOnExplorer")}
                             </a>
@@ -510,19 +510,19 @@ export default function EarningsPage() {
                       {isPerpReferrer && (
                         <div className="grid grid-cols-2 gap-3">
                           <div className="bg-okx-bg-hover rounded-lg p-3">
-                            <div className="text-[10px] text-okx-text-tertiary mb-1">{t("perpPendingEarnings")}</div>
+                            <div className="text-xs text-okx-text-tertiary mb-1">{t("perpPendingEarnings")}</div>
                             <div className="text-sm font-bold text-okx-up">{parseFloat(perpEarnings.pendingEarnings).toFixed(6)} BNB</div>
                           </div>
                           <div className="bg-okx-bg-hover rounded-lg p-3">
-                            <div className="text-[10px] text-okx-text-tertiary mb-1">{t("perpWithdrawnEarnings")}</div>
+                            <div className="text-xs text-okx-text-tertiary mb-1">{t("perpWithdrawnEarnings")}</div>
                             <div className="text-sm font-bold">{parseFloat(perpEarnings.withdrawnEarnings).toFixed(6)} BNB</div>
                           </div>
                           <div className="bg-okx-bg-hover rounded-lg p-3">
-                            <div className="text-[10px] text-okx-text-tertiary mb-1">{t("perpLevel1Earnings")}</div>
+                            <div className="text-xs text-okx-text-tertiary mb-1">{t("perpLevel1Earnings")}</div>
                             <div className="text-sm font-bold text-okx-up">{parseFloat(perpEarnings.level1Earnings).toFixed(6)} BNB</div>
                           </div>
                           <div className="bg-okx-bg-hover rounded-lg p-3">
-                            <div className="text-[10px] text-okx-text-tertiary mb-1">{t("perpLevel2Earnings")}</div>
+                            <div className="text-xs text-okx-text-tertiary mb-1">{t("perpLevel2Earnings")}</div>
                             <div className="text-sm font-bold text-okx-up">{parseFloat(perpEarnings.level2Earnings).toFixed(6)} BNB</div>
                           </div>
                         </div>
@@ -546,7 +546,7 @@ export default function EarningsPage() {
                               {copied ? tCommon("copied") : t("copy")}
                             </button>
                           </div>
-                          <div className="flex items-center gap-4 mt-2 text-[10px] text-okx-text-tertiary">
+                          <div className="flex items-center gap-4 mt-2 text-xs text-okx-text-tertiary">
                             <span>{t("perpReferralCount")}: {perpEarnings.referralCount}</span>
                             <span>{t("perpTradesReferred")}: {perpEarnings.totalTradesReferred}</span>
                           </div>
@@ -644,18 +644,18 @@ export default function EarningsPage() {
                                 >
                                   <div className="flex-1 min-w-0">
                                     <div className="flex items-center gap-2">
-                                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
                                         c.level === 1
                                           ? "bg-okx-up/20 text-okx-up"
                                           : "bg-okx-accent/20 text-okx-accent"
                                       }`}>
                                         L{c.level}
                                       </span>
-                                      <span className="font-mono text-[10px] text-okx-text-secondary">
+                                      <span className="font-mono text-xs text-okx-text-secondary">
                                         {formatAddress(c.referee)}
                                       </span>
                                     </div>
-                                    <div className="text-[10px] text-okx-text-tertiary mt-0.5">
+                                    <div className="text-xs text-okx-text-tertiary mt-0.5">
                                       {new Date(c.timestamp).toLocaleString()}
                                     </div>
                                   </div>
@@ -663,7 +663,7 @@ export default function EarningsPage() {
                                     <div className="text-xs font-bold text-okx-up">
                                       {c.display.commissionAmount}
                                     </div>
-                                    <div className="text-[10px] text-okx-text-tertiary">
+                                    <div className="text-xs text-okx-text-tertiary">
                                       {c.display.commissionRate}
                                     </div>
                                   </div>
@@ -681,7 +681,7 @@ export default function EarningsPage() {
                           <div className="flex items-center gap-2">
                             <span className="font-mono text-xs">{formatAddress(perpReferrer)}</span>
                             {perpReferralCode && (
-                              <span className="text-[10px] text-okx-text-tertiary">
+                              <span className="text-xs text-okx-text-tertiary">
                                 ({t("perpYourCode")}: {perpReferralCode})
                               </span>
                             )}

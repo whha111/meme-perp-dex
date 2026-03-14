@@ -3,8 +3,8 @@
 /**
  * Deposit/Withdraw Page — Real on-chain operations
  *
- * Deposit: Main wallet → Trading wallet (BNB) → SettlementV2.depositBNB() (atomic wrap+deposit)
- * Withdraw: Merkle proof + EIP-712 sig → SettlementV2.withdraw()
+ * Deposit: Main wallet → Trading wallet (BNB) → TradingVault.depositBNB() (atomic wrap+deposit)
+ * Withdraw: Fast withdrawal — backend EIP-712 sig → TradingVault.fastWithdraw()
  */
 
 import React, { useState, useRef, useCallback, useMemo } from "react";
@@ -20,7 +20,7 @@ import { usePerpetualV2 } from "@/hooks/perpetual/usePerpetualV2";
 import { useTradingWallet } from "@/hooks/perpetual/useTradingWallet";
 import { useWalletBalance } from "@/contexts/WalletBalanceContext";
 import { useTradingDataStore } from "@/lib/stores/tradingDataStore";
-import { CONTRACTS } from "@/lib/contracts";
+import { CONTRACTS, getExplorerUrl } from "@/lib/contracts";
 import { parseEther, formatEther } from "viem";
 
 export default function DepositPage() {
@@ -80,6 +80,7 @@ export default function DepositPage() {
   const [withdrawStep, setWithdrawStep] = useState(0);
   const [stepError, setStepError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [successTxHash, setSuccessTxHash] = useState<string | null>(null);
   const depositStepRef = useRef(0);
 
   const amountWei = useMemo(() => {
@@ -92,7 +93,7 @@ export default function DepositPage() {
 
   const isProcessing = depositStep > 0 || withdrawStep > 0 || isWithdrawingToMain || isDepositingBNB;
 
-  // Total withdrawable = settlement (Merkle) + wallet (direct transfer)
+  // Total withdrawable = settlement (fastWithdraw) + wallet (direct transfer)
   const totalWithdrawable = useMemo(() => {
     return settlementBalance + walletOnlyBalance;
   }, [settlementBalance, walletOnlyBalance]);
@@ -113,18 +114,32 @@ export default function DepositPage() {
     if (!tradingWallet || amountWei === 0n || !publicClient) return;
     setStepError(null);
     setSuccessMsg(null);
+    setSuccessTxHash(null);
 
     try {
-      // Step 1: Transfer BNB from main wallet to trading wallet
+      // Step 1: Transfer BNB from main wallet to trading wallet (skip if already enough)
       setDepositStep(1);
       depositStepRef.current = 1;
-      const txHash = await sendTransactionAsync({
-        to: tradingWallet,
-        value: amountWei,
-      });
-      await publicClient.waitForTransactionReceipt({ hash: txHash });
 
-      // Step 2: SettlementV2.depositBNB() — atomic wrap + deposit in one tx
+      // Check if trading wallet already has enough BNB (e.g. from a previous failed deposit)
+      const GAS_RESERVE_FOR_DEPOSIT = 3000000000000000n; // 0.003 BNB for wrap+approve+deposit gas
+      const tradingWalletBNB = await publicClient.getBalance({ address: tradingWallet });
+      const totalNeeded = amountWei + GAS_RESERVE_FOR_DEPOSIT;
+
+      if (tradingWalletBNB < totalNeeded) {
+        // Only transfer the shortfall from main wallet
+        const shortfall = totalNeeded - tradingWalletBNB;
+        console.log(`[Deposit] Trading wallet has ${tradingWalletBNB}, needs ${totalNeeded}, transferring shortfall ${shortfall}`);
+        const txHash = await sendTransactionAsync({
+          to: tradingWallet,
+          value: shortfall,
+        });
+        await publicClient.waitForTransactionReceipt({ hash: txHash });
+      } else {
+        console.log(`[Deposit] Trading wallet already has ${tradingWalletBNB} >= ${totalNeeded}, skipping Step 1`);
+      }
+
+      // Step 2: Wrap BNB → WBNB → Approve → Deposit to SettlementV2
       setDepositStep(2);
       depositStepRef.current = 2;
       const depositHash = await depositBNBToSettlement(amountWei);
@@ -135,6 +150,7 @@ export default function DepositPage() {
       depositStepRef.current = 0;
       setAmount("");
       setSuccessMsg(`${t("deposit")} ${amount} BNB ${t("confirmed")}!`);
+      setSuccessTxHash(depositHash);
       refreshGlobalBalance();
       refetchMainBalance();
     } catch (e) {
@@ -153,15 +169,17 @@ export default function DepositPage() {
   ]);
 
   // ═══════════════════════════════════════════════════════════
-  // On-chain withdrawal: wallet transfer + Merkle proof
+  // On-chain withdrawal: wallet transfer + fastWithdraw
   // ═══════════════════════════════════════════════════════════
   const handleWithdraw = useCallback(async () => {
     if (!tradingWallet || !mainWallet || amountWei === 0n) return;
     setStepError(null);
     setSuccessMsg(null);
+    setSuccessTxHash(null);
 
     try {
       let remaining = amountWei;
+      let lastTxHash: string | null = null;
 
       // Phase 1: Transfer from trading wallet (if it has funds)
       if (walletOnlyBalance > 0n && remaining > 0n) {
@@ -177,28 +195,54 @@ export default function DepositPage() {
             to: tradingWallet,
             value: MIN_GAS_FOR_WITHDRAWAL,
           });
-          // Wait for gas funding to confirm
           if (publicClient) {
             await publicClient.waitForTransactionReceipt({ hash: gasFundTx });
           }
         }
 
         setWithdrawStep(2); // "Transferring from trading wallet"
-        await withdrawToMainWallet(mainWallet, walletAmount, wethBalance);
+        const walletTxHash = await withdrawToMainWallet(mainWallet, walletAmount, wethBalance);
+        if (walletTxHash) lastTxHash = walletTxHash;
         remaining -= walletAmount;
       }
 
-      // Phase 2: Merkle proof from SettlementV2 (if still need more)
+      // Phase 2: Fast withdrawal from TradingVault (if still need more)
       if (remaining > 0n && settlementBalance > 0n) {
-        setWithdrawStep(3); // "Merkle proof withdrawal"
-        const remainingStr = formatEther(remaining);
-        await settlementWithdraw(CONTRACTS.WETH, remainingStr);
+        setWithdrawStep(3); // "Fast withdrawal from TradingVault"
+        const vaultAmount = remaining > settlementBalance ? settlementBalance : remaining;
+        const vaultStr = formatEther(vaultAmount);
+        const vaultTxHash = await settlementWithdraw(CONTRACTS.WETH, vaultStr);
+        if (vaultTxHash) lastTxHash = vaultTxHash;
+        remaining -= vaultAmount;
+
+        // Phase 2b: TradingVault.fastWithdraw sends WBNB to trading wallet,
+        // so we need to unwrap WBNB and transfer BNB to main wallet
+        setWithdrawStep(4); // "Transferring to main wallet"
+
+        const MIN_GAS_FOR_TRANSFER = parseEther("0.001");
+        if (publicClient && tradingWallet) {
+          const currentNative = await publicClient.getBalance({ address: tradingWallet });
+          if (currentNative < MIN_GAS_FOR_TRANSFER) {
+            console.log(`[Withdraw] Phase 2b: Trading wallet gas low (${currentNative}), funding from main wallet`);
+            const gasTx = await sendTransactionAsync({
+              to: tradingWallet,
+              value: MIN_GAS_FOR_TRANSFER,
+            });
+            await publicClient.waitForTransactionReceipt({ hash: gasTx });
+          }
+        }
+
+        // After fast withdrawal, trading wallet now has WBNB
+        // withdrawToMainWallet handles: unwrap WBNB → send BNB to main wallet
+        const transferTxHash = await withdrawToMainWallet(mainWallet, vaultAmount, vaultAmount);
+        if (transferTxHash) lastTxHash = transferTxHash;
       }
 
       // Success
       setWithdrawStep(0);
       setAmount("");
       setSuccessMsg(`${t("withdraw")} ${amount} BNB ${t("confirmed")}!`);
+      setSuccessTxHash(lastTxHash);
       refreshGlobalBalance();
       refetchMainBalance();
     } catch (e) {
@@ -440,15 +484,37 @@ export default function DepositPage() {
                       </div>
                     </div>
                   )}
-                  {/* Step 3: Merkle proof (only if settlement funds involved) */}
+                  {/* Step 3: Fast withdrawal from TradingVault */}
                   {withdrawStep >= 3 && (
-                    <div className="flex items-center gap-3 p-3 rounded-lg border border-meme-lime/30 bg-meme-lime/5">
-                      <div className="w-7 h-7 rounded-full bg-meme-lime text-black flex items-center justify-center text-xs font-bold animate-pulse">
-                        3
+                    <div className={`flex items-center gap-3 p-3 rounded-lg border ${
+                      withdrawStep > 3
+                        ? "border-okx-up/30 bg-okx-up/5"
+                        : "border-meme-lime/30 bg-meme-lime/5"
+                    }`}>
+                      <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
+                        withdrawStep > 3
+                          ? "bg-okx-up text-black"
+                          : "bg-meme-lime text-black animate-pulse"
+                      }`}>
+                        {withdrawStep > 3 ? "✓" : "3"}
                       </div>
                       <div>
-                        <div className="text-sm font-medium">{t("withdrawProcessing")}</div>
+                        <div className={`text-sm font-medium ${withdrawStep > 3 ? "text-okx-up" : ""}`}>
+                          {t("withdrawProcessing")}
+                        </div>
                         <div className="text-xs text-okx-text-tertiary">{t("withdrawProcessingDesc")}</div>
+                      </div>
+                    </div>
+                  )}
+                  {/* Step 4: Transfer to main wallet after fast withdrawal */}
+                  {withdrawStep >= 4 && (
+                    <div className="flex items-center gap-3 p-3 rounded-lg border border-meme-lime/30 bg-meme-lime/5">
+                      <div className="w-7 h-7 rounded-full bg-meme-lime text-black flex items-center justify-center text-xs font-bold animate-pulse">
+                        4
+                      </div>
+                      <div>
+                        <div className="text-sm font-medium">{t("withdrawWalletTransfer")}</div>
+                        <div className="text-xs text-okx-text-tertiary">WBNB → BNB → {t("mainWallet")}</div>
                       </div>
                     </div>
                   )}
@@ -465,7 +531,22 @@ export default function DepositPage() {
               {/* Success Message */}
               {successMsg && (
                 <div className="text-sm text-okx-up bg-okx-up/10 rounded-lg px-4 py-3 border border-okx-up/30">
-                  {successMsg}
+                  <div>{successMsg}</div>
+                  {successTxHash && (
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <span className="text-okx-text-tertiary font-mono text-xs">
+                        Tx: {successTxHash.slice(0, 10)}...{successTxHash.slice(-8)}
+                      </span>
+                      <a
+                        href={getExplorerUrl(successTxHash, "tx")}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline hover:text-okx-up/80 transition-colors text-xs"
+                      >
+                        {t("viewOnExplorer")} ↗
+                      </a>
+                    </div>
+                  )}
                 </div>
               )}
 

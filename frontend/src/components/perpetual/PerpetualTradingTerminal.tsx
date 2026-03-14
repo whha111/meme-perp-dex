@@ -285,10 +285,13 @@ export function PerpetualTradingTerminal({
     }
   }, [tradingWalletAddress, address, withErrorHandling]);
 
-  // 当切换到历史 Tab 时加载数据
+  // 当切换到历史 Tab 时加载数据 + 自动刷新
   useEffect(() => {
     if (activeBottomTab === "orderHistory" || activeBottomTab === "tradeHistory") {
       loadHistoryData();
+      // Auto-refresh every 15s while tab is active
+      const interval = setInterval(loadHistoryData, 15_000);
+      return () => clearInterval(interval);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeBottomTab]); // 只依赖 activeBottomTab，避免 loadHistoryData 引用变化导致无限循环
@@ -460,7 +463,7 @@ export function PerpetualTradingTerminal({
   // 撤单处理函数
   const handleCancelOrder = async (orderId: string) => {
     if (!tradingWalletAddress || !tradingWalletSignature) {
-      showToast("请先创建交易钱包", "error");
+      showToast(t("connectWallet"), "error");
       return;
     }
 
@@ -473,15 +476,15 @@ export function PerpetualTradingTerminal({
       );
 
       if (result.success) {
-        showToast("撤单成功", "success");
+        showToast(t("cancelOrder") + " ✓", "success");
         // 刷新订单列表
         refreshOrders();
       } else {
-        showToast(result.error || "撤单失败", "error");
+        showToast(result.error || t("orderFailed"), "error");
       }
     } catch (error) {
       console.error("Cancel order error:", error);
-      showToast("撤单失败", "error");
+      showToast(t("orderFailed"), "error");
     } finally {
       setCancellingOrderId(null);
     }
@@ -556,13 +559,13 @@ export function PerpetualTradingTerminal({
         <div className="h-12 md:h-14 flex items-center px-3 md:px-4 gap-2 md:gap-6">
           {/* Symbol */}
           <div className="flex items-center gap-1.5 md:gap-2 flex-shrink-0">
-            <span className="text-[14px] md:text-[16px] font-bold font-mono text-okx-text-primary">
+            <span className="text-sm md:text-[16px] font-bold font-mono text-okx-text-primary">
               {displaySymbol.toUpperCase()}USDT
             </span>
-            <span className="text-[9px] font-medium px-1.5 py-0.5 rounded-sm bg-okx-bg-hover text-okx-text-secondary">
+            <span className="text-xs font-medium px-1.5 py-0.5 rounded-sm bg-okx-bg-hover text-okx-text-secondary">
               {t("perpetualLabel")}
             </span>
-            <span className="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded-sm bg-okx-accent/[0.13] text-okx-accent">
+            <span className="text-xs font-bold font-mono px-1.5 py-0.5 rounded-sm bg-okx-accent/[0.13] text-okx-accent">
               10x
             </span>
           </div>
@@ -574,22 +577,22 @@ export function PerpetualTradingTerminal({
                 <AnimatedNumber
                   value={chartPrice}
                   format={formatMemePriceNum}
-                  className={`text-[13px] md:text-[16px] font-bold font-mono ${marketInfo.isPriceUp ? "text-okx-up" : "text-okx-down"}`}
+                  className={`text-sm md:text-[16px] font-bold font-mono ${marketInfo.isPriceUp ? "text-okx-up" : "text-okx-down"}`}
                   showArrow={true}
                   highlightChange={true}
                 />
               ) : (
-                <span className={`text-[13px] md:text-[16px] font-bold font-mono ${marketInfo.isPriceUp ? "text-okx-up" : "text-okx-down"}`}>
+                <span className={`text-sm md:text-[16px] font-bold font-mono ${marketInfo.isPriceUp ? "text-okx-up" : "text-okx-down"}`}>
                   {marketInfo.currentPrice}
                 </span>
               )}
-              <span className="text-[8px] md:text-[9px] text-okx-text-secondary">{t("markPrice")}</span>
+              <span className="text-xs text-okx-text-secondary">{t("markPrice")}</span>
             </div>
             <div className="flex flex-col gap-0.5">
-              <span className={`text-[11px] md:text-[12px] font-semibold font-mono ${marketInfo.isPriceUp ? "text-okx-up" : "text-okx-down"}`}>
+              <span className={`text-xs md:text-xs font-semibold font-mono ${marketInfo.isPriceUp ? "text-okx-up" : "text-okx-down"}`}>
                 {marketInfo.isPriceUp ? "+" : ""}{marketInfo.priceChange}
               </span>
-              <span className="text-[8px] md:text-[9px] text-okx-text-secondary">{t("change24h")}</span>
+              <span className="text-xs text-okx-text-secondary">{t("change24h")}</span>
             </div>
           </div>
 
@@ -597,38 +600,38 @@ export function PerpetualTradingTerminal({
           <div className="hidden md:flex items-center gap-6">
             <div className="h-6 w-px bg-okx-border-primary" />
             <div className="flex flex-col gap-0.5">
-              <span className="text-[12px] font-mono text-okx-text-primary">{marketInfo.high24h}</span>
-              <span className="text-[9px] text-okx-text-secondary">{t("high24h")}</span>
+              <span className="text-xs font-mono text-okx-text-primary">{marketInfo.high24h}</span>
+              <span className="text-xs text-okx-text-secondary">{t("high24h")}</span>
             </div>
             <div className="flex flex-col gap-0.5">
-              <span className="text-[12px] font-mono text-okx-text-primary">{marketInfo.low24h}</span>
-              <span className="text-[9px] text-okx-text-secondary">{t("low24h")}</span>
+              <span className="text-xs font-mono text-okx-text-primary">{marketInfo.low24h}</span>
+              <span className="text-xs text-okx-text-secondary">{t("low24h")}</span>
             </div>
             <div className="flex flex-col gap-0.5">
-              <span className="text-[12px] font-mono text-okx-text-primary">{marketInfo.volume24h}</span>
-              <span className="text-[9px] text-okx-text-secondary">{t("volume24h")}</span>
+              <span className="text-xs font-mono text-okx-text-primary">{marketInfo.volume24h}</span>
+              <span className="text-xs text-okx-text-secondary">{t("volume24h")}</span>
             </div>
             <div className="flex flex-col gap-0.5">
-              <span className="text-[12px] font-mono text-okx-text-primary">{marketInfo.openInterest}</span>
-              <span className="text-[9px] text-okx-text-secondary">{t("openInterest")}</span>
+              <span className="text-xs font-mono text-okx-text-primary">{marketInfo.openInterest}</span>
+              <span className="text-xs text-okx-text-secondary">{t("openInterest")}</span>
             </div>
             <div className="flex flex-col gap-0.5">
-              <span className={`text-[12px] font-mono ${isFundingPositive ? "text-okx-up" : "text-okx-down"}`}>
+              <span className={`text-xs font-mono ${isFundingPositive ? "text-okx-up" : "text-okx-down"}`}>
                 {marketInfo.fundingRate}
               </span>
-              <span className="text-[9px] text-okx-text-secondary">
+              <span className="text-xs text-okx-text-secondary">
                 {t("fundingRate")} / {fundingCountdown}
               </span>
             </div>
             <div className="flex flex-col gap-0.5">
-              <span className="text-[12px] font-mono text-okx-text-primary">
+              <span className="text-xs font-mono text-okx-text-primary">
                 {marketInfo.marketCap >= 1000000
                   ? `$${(marketInfo.marketCap / 1000000).toFixed(2)}M`
                   : marketInfo.marketCap >= 1000
                   ? `$${(marketInfo.marketCap / 1000).toFixed(2)}K`
                   : `$${marketInfo.marketCap.toFixed(2)}`}
               </span>
-              <span className="text-[9px] text-okx-text-secondary">市值</span>
+              <span className="text-xs text-okx-text-secondary">{t("marketCap")}</span>
             </div>
           </div>
 
@@ -646,7 +649,7 @@ export function PerpetualTradingTerminal({
                     <path d="M10 2a6 6 0 00-6 6v3.586l-.707.707A1 1 0 004 14h12a1 1 0 00.707-1.707L16 11.586V8a6 6 0 00-6-6zM10 18a3 3 0 01-3-3h6a3 3 0 01-3 3z" />
                   </svg>
                 </button>
-                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] rounded-full w-4 h-4 flex items-center justify-center animate-pulse">
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center animate-pulse">
                   {riskAlerts.length > 9 ? "9+" : riskAlerts.length}
                 </span>
               </div>
@@ -654,7 +657,7 @@ export function PerpetualTradingTerminal({
 
             {/* Risk Level Indicator — hide on smallest screens */}
             {positionRisks.length > 0 && (
-              <div className={`hidden sm:block px-2 py-1 rounded text-[10px] font-medium ${
+              <div className={`hidden sm:block px-2 py-1 rounded text-xs font-medium ${
                 overallRisk === "critical" ? "bg-red-900/50 text-red-400 animate-pulse" :
                 overallRisk === "high" ? "bg-orange-900/50 text-orange-400" :
                 overallRisk === "medium" ? "bg-yellow-900/50 text-yellow-400" :
@@ -677,16 +680,6 @@ export function PerpetualTradingTerminal({
               </div>
             )}
 
-            {/* Account Balance Button — icon only on mobile */}
-            <button
-              onClick={() => setShowAccountPanel(true)}
-              className="flex items-center gap-2 px-2 md:px-4 py-1.5 md:py-2 bg-okx-brand/10 hover:bg-okx-brand/20 border border-okx-brand/30 rounded-lg transition-colors"
-            >
-              <svg className="w-4 h-4 text-okx-brand" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-              </svg>
-              <span className="hidden sm:inline text-okx-brand font-medium">{formattedAccountBalance}</span>
-            </button>
           </div>
         </div>
 
@@ -694,36 +687,36 @@ export function PerpetualTradingTerminal({
         <div className="md:hidden overflow-x-auto border-t border-okx-border-primary/50">
           <div className="flex items-center gap-4 px-3 py-1.5 min-w-max">
             <div className="flex flex-col gap-0.5">
-              <span className="text-[11px] font-mono text-okx-text-primary">{marketInfo.high24h}</span>
-              <span className="text-[8px] text-okx-text-secondary">{t("high24h")}</span>
+              <span className="text-xs font-mono text-okx-text-primary">{marketInfo.high24h}</span>
+              <span className="text-xs text-okx-text-secondary">{t("high24h")}</span>
             </div>
             <div className="flex flex-col gap-0.5">
-              <span className="text-[11px] font-mono text-okx-text-primary">{marketInfo.low24h}</span>
-              <span className="text-[8px] text-okx-text-secondary">{t("low24h")}</span>
+              <span className="text-xs font-mono text-okx-text-primary">{marketInfo.low24h}</span>
+              <span className="text-xs text-okx-text-secondary">{t("low24h")}</span>
             </div>
             <div className="flex flex-col gap-0.5">
-              <span className="text-[11px] font-mono text-okx-text-primary">{marketInfo.volume24h}</span>
-              <span className="text-[8px] text-okx-text-secondary">{t("volume24h")}</span>
+              <span className="text-xs font-mono text-okx-text-primary">{marketInfo.volume24h}</span>
+              <span className="text-xs text-okx-text-secondary">{t("volume24h")}</span>
             </div>
             <div className="flex flex-col gap-0.5">
-              <span className="text-[11px] font-mono text-okx-text-primary">{marketInfo.openInterest}</span>
-              <span className="text-[8px] text-okx-text-secondary">{t("openInterest")}</span>
+              <span className="text-xs font-mono text-okx-text-primary">{marketInfo.openInterest}</span>
+              <span className="text-xs text-okx-text-secondary">{t("openInterest")}</span>
             </div>
             <div className="flex flex-col gap-0.5">
-              <span className={`text-[11px] font-mono ${isFundingPositive ? "text-okx-up" : "text-okx-down"}`}>
+              <span className={`text-xs font-mono ${isFundingPositive ? "text-okx-up" : "text-okx-down"}`}>
                 {marketInfo.fundingRate}
               </span>
-              <span className="text-[8px] text-okx-text-secondary">{t("fundingRate")}</span>
+              <span className="text-xs text-okx-text-secondary">{t("fundingRate")}</span>
             </div>
             <div className="flex flex-col gap-0.5">
-              <span className="text-[11px] font-mono text-okx-text-primary">
+              <span className="text-xs font-mono text-okx-text-primary">
                 {marketInfo.marketCap >= 1000000
                   ? `$${(marketInfo.marketCap / 1000000).toFixed(2)}M`
                   : marketInfo.marketCap >= 1000
                   ? `$${(marketInfo.marketCap / 1000).toFixed(2)}K`
                   : `$${marketInfo.marketCap.toFixed(2)}`}
               </span>
-              <span className="text-[8px] text-okx-text-secondary">市值</span>
+              <span className="text-xs text-okx-text-secondary">{t("marketCap")}</span>
             </div>
           </div>
         </div>
@@ -742,7 +735,7 @@ export function PerpetualTradingTerminal({
             <button
               key={tab.key}
               onClick={() => setMobileActiveSection(tab.key)}
-              className={`flex-1 py-2.5 text-[12px] font-medium transition-colors relative ${
+              className={`flex-1 py-2.5 text-xs font-medium transition-colors relative ${
                 mobileActiveSection === tab.key
                   ? "text-okx-accent"
                   : "text-okx-text-secondary"
@@ -803,7 +796,7 @@ export function PerpetualTradingTerminal({
                 <button
                   key={tab.key}
                   onClick={() => setActiveBottomTab(tab.key as typeof activeBottomTab)}
-                  className={`py-2 px-3 md:px-4 text-[11px] md:text-[12px] transition-colors relative flex items-center gap-1 whitespace-nowrap flex-shrink-0 ${
+                  className={`py-2 px-3 md:px-4 text-xs md:text-xs transition-colors relative flex items-center gap-1 whitespace-nowrap flex-shrink-0 ${
                     activeBottomTab === tab.key
                       ? "text-okx-text-primary font-bold"
                       : "text-okx-text-secondary"
@@ -811,7 +804,7 @@ export function PerpetualTradingTerminal({
                 >
                   {tab.label}
                   {"badge" in tab && tab.badge && (
-                    <span className="bg-red-500 text-white text-[10px] rounded-full px-1.5 min-w-[16px] h-4 flex items-center justify-center">
+                    <span className="bg-red-500 text-white text-xs rounded-full px-1.5 min-w-[16px] h-4 flex items-center justify-center">
                       {tab.badge > 9 ? "9+" : tab.badge}
                     </span>
                   )}
@@ -840,19 +833,19 @@ export function PerpetualTradingTerminal({
                     <>
                     {/* Desktop Table */}
                     <div className="hidden md:block overflow-x-auto">
-                    <table className="w-full text-[11px] min-w-[1000px]">
+                    <table className="w-full text-xs min-w-[1000px]">
                       <thead>
                         <tr className="text-okx-text-tertiary border-b border-okx-border-primary">
-                          <th className="text-left py-2 px-2">交易对</th>
-                          <th className="text-center py-2 px-1">方向</th>
-                          <th className="text-right py-2 px-1">杠杆</th>
-                          <th className="text-right py-2 px-1">仓位大小</th>
-                          <th className="text-right py-2 px-1">开仓均价</th>
-                          <th className="text-right py-2 px-1">标记价格</th>
-                          <th className="text-right py-2 px-1">强平价格</th>
-                          <th className="text-right py-2 px-1">保证金</th>
-                          <th className="text-right py-2 px-1">保证金率</th>
-                          <th className="text-right py-2 px-1">未实现盈亏</th>
+                          <th className="text-left py-2 px-2">{t("pair")}</th>
+                          <th className="text-center py-2 px-1">{t("direction")}</th>
+                          <th className="text-right py-2 px-1">{t("leverage")}</th>
+                          <th className="text-right py-2 px-1">{t("size")}</th>
+                          <th className="text-right py-2 px-1">{t("entryAvg")}</th>
+                          <th className="text-right py-2 px-1">{t("markPrice")}</th>
+                          <th className="text-right py-2 px-1">{t("liqPrice")}</th>
+                          <th className="text-right py-2 px-1">{t("margin")}</th>
+                          <th className="text-right py-2 px-1">{t("marginRatio")}</th>
+                          <th className="text-right py-2 px-1">{t("unrealizedPnl")}</th>
                           <th className="text-right py-2 px-1">ROE%</th>
                           <th className="text-center py-2 px-1">止盈/止损</th>
                           <th className="text-right py-2 px-2">操作</th>
@@ -861,27 +854,34 @@ export function PerpetualTradingTerminal({
                       <tbody>
                         {currentPositionsForDisplay.map((pos) => {
                           // ============================================================
-                          // 直接使用后端推送的数据，不再前端计算！
-                          // ETH 本位: size=ETH名义价值(1e18), price=Token/ETH(1e18), ETH=1e18, ratio/roe=基点
+                          // 使用 chartPrice (WS 实时价格) 前端实时计算 PnL/保证金率/ROE
+                          // 后端仅在事件时推送更新，价格持续变动时 PnL 必须前端跟随
                           // ============================================================
-                          const sizeETH = parseFloat(String(pos.size)) / 1e18;  // ETH 名义价值 (1e18 精度)
-                          const entryPrice = parseFloat(String(pos.entryPrice)) / 1e18;  // Token/ETH 比率 (1e18 精度)
-                          const markPrice = parseFloat(String(pos.markPrice || pos.entryPrice)) / 1e18;  // 后端推送的标记价 (Token/ETH)
-                          const liqPrice = parseFloat(String(pos.liquidationPrice || "0")) / 1e18;  // 后端推送的强平价 (Token/ETH)
-                          const marginETH = parseFloat(String(pos.collateral)) / 1e18;  // 保证金 (ETH)
-                          const leverage = parseFloat(String(pos.leverage));  // 人类可读
-                          const unrealizedPnlETH = parseFloat(String(pos.unrealizedPnL)) / 1e18;  // 后端推送的盈亏 (ETH)
-                          const marginRatio = parseFloat(String(pos.marginRatio || "0")) / 100;  // 基点转百分比
-                          const roe = parseFloat(String("roe" in pos ? pos.roe : "0") || "0") / 100;  // 基点转百分比
-                          const mmr = parseFloat(String(pos.mmr || "200")) / 100;  // 基点转百分比
-                          // size 就是 ETH 名义价值，反算代币数量用于辅助显示
+                          const sizeETH = parseFloat(String(pos.size)) / 1e18;
+                          const entryPrice = parseFloat(String(pos.entryPrice)) / 1e18;
+                          const serverMarkPrice = parseFloat(String(pos.markPrice || pos.entryPrice)) / 1e18;
+                          // 优先使用 WS 实时价格，fallback 到后端推送的标记价
+                          const markPrice = chartPrice && chartPrice > 0 ? chartPrice : serverMarkPrice;
+                          const liqPrice = parseFloat(String(pos.liquidationPrice || "0")) / 1e18;
+                          const marginETH = parseFloat(String(pos.collateral)) / 1e18;
+                          const leverage = parseFloat(String(pos.leverage));
+                          const mmr = parseFloat(String(pos.mmr || "200")) / 100;
+                          // GMX 标准 PnL: delta = size * |currentPrice - avgPrice| / avgPrice
+                          const pnlDelta = entryPrice > 0 ? sizeETH * Math.abs(markPrice - entryPrice) / entryPrice : 0;
+                          const hasProfit = pos.isLong ? (markPrice > entryPrice) : (entryPrice > markPrice);
+                          const unrealizedPnlETH = hasProfit ? pnlDelta : -pnlDelta;
+                          // 保证金率: maintenanceMargin / equity * 100
+                          const equity = marginETH + unrealizedPnlETH;
+                          const maintenanceMargin = sizeETH * (mmr / 100);
+                          const marginRatio = equity > 0 ? (maintenanceMargin / equity) * 100 : 999;
+                          // ROE%: unrealizedPnL / collateral * 100
+                          const roe = marginETH > 0 ? (unrealizedPnlETH / marginETH) * 100 : 0;
                           const tokenAmount = markPrice > 0 ? sizeETH / markPrice : 0;
 
-                          // 风险等级颜色 (使用后端计算的 riskLevel)
-                          const riskLevel = pos.riskLevel || "low";
-                          const riskColor = riskLevel === "critical" ? "text-red-500 animate-pulse" :
-                                           riskLevel === "high" ? "text-red-400" :
-                                           riskLevel === "medium" ? "text-yellow-400" : "text-green-400";
+                          // 风险颜色基于实时保证金率
+                          const riskColor = marginRatio > 50 ? "text-red-500 animate-pulse" :
+                                           marginRatio > 30 ? "text-red-400" :
+                                           marginRatio > 15 ? "text-yellow-400" : "text-green-400";
 
                           return (
                             <tr key={pos.pairId} className="border-b border-okx-border-primary hover:bg-okx-bg-hover">
@@ -889,7 +889,7 @@ export function PerpetualTradingTerminal({
                               <td className="py-3 px-2">
                                 <div className="flex items-center gap-2">
                                   <span className="font-medium text-okx-text-primary">{instId}</span>
-                                  <span className="text-[9px] text-purple-400 bg-purple-900/30 px-1.5 py-0.5 rounded">
+                                  <span className="text-xs text-purple-400 bg-purple-900/30 px-1.5 py-0.5 rounded">
                                     #{pos.pairId?.slice(0, 8) || "?"}
                                   </span>
                                 </div>
@@ -897,12 +897,12 @@ export function PerpetualTradingTerminal({
 
                               {/* 方向 */}
                               <td className="py-3 px-1 text-center">
-                                <span className={`px-2 py-1 rounded text-[10px] font-bold ${
+                                <span className={`px-2 py-1 rounded text-xs font-bold ${
                                   pos.isLong
                                     ? "bg-green-900/50 text-green-400"
                                     : "bg-red-900/50 text-red-400"
                                 }`}>
-                                  {pos.isLong ? "多" : "空"}
+                                  {pos.isLong ? t("long") : t("short")}
                                 </span>
                               </td>
 
@@ -916,7 +916,7 @@ export function PerpetualTradingTerminal({
                                 <div className="text-okx-text-primary font-medium">
                                   BNB {sizeETH >= 1 ? sizeETH.toFixed(4) : sizeETH.toFixed(6)}
                                 </div>
-                                <div className="text-[9px] text-okx-text-tertiary">
+                                <div className="text-xs text-okx-text-tertiary">
                                   {tokenAmount >= 1000000000 ? `${(tokenAmount/1000000000).toFixed(1)}B` :
                                    tokenAmount >= 1000000 ? `${(tokenAmount/1000000).toFixed(1)}M` :
                                    tokenAmount >= 1000 ? `${(tokenAmount/1000).toFixed(1)}K` :
@@ -942,7 +942,7 @@ export function PerpetualTradingTerminal({
                               {/* 保证金 (ETH) */}
                               <td className="py-3 px-1 text-right">
                                 <span className="text-okx-text-primary">BNB {marginETH >= 1 ? marginETH.toFixed(4) : marginETH.toFixed(6)}</span>
-                                <div className="text-[9px] text-okx-text-tertiary">MMR: {mmr.toFixed(2)}%</div>
+                                <div className="text-xs text-okx-text-tertiary">{t("mmr")}: {mmr.toFixed(2)}%</div>
                               </td>
 
                               {/* 保证金率 - 后端实时推送 */}
@@ -962,7 +962,7 @@ export function PerpetualTradingTerminal({
 
                               {/* 止盈/止损 */}
                               <td className="py-3 px-1 text-center">
-                                <button className="text-[10px] text-okx-text-tertiary hover:text-okx-brand-primary">
+                                <button className="text-xs text-okx-text-tertiary hover:text-okx-brand-primary">
                                   设置
                                 </button>
                               </td>
@@ -984,11 +984,11 @@ export function PerpetualTradingTerminal({
                                         showToast(result.error || "Failed to close", "error");
                                       }
                                     }}
-                                    className="px-2 py-1 bg-red-900/50 text-red-400 text-[10px] font-medium rounded hover:bg-red-800"
+                                    className="px-2 py-1 bg-red-900/50 text-red-400 text-xs font-medium rounded hover:bg-red-800"
                                   >
-                                    平仓
+                                    {t("closePosition")}
                                   </button>
-                                  <button className="px-2 py-1 bg-okx-bg-tertiary text-okx-text-secondary text-[10px] rounded hover:bg-okx-bg-hover">
+                                  <button className="px-2 py-1 bg-okx-bg-tertiary text-okx-text-secondary text-xs rounded hover:bg-okx-bg-hover">
                                     调整
                                   </button>
                                 </div>
@@ -1004,23 +1004,30 @@ export function PerpetualTradingTerminal({
                       {currentPositionsForDisplay.map((pos) => {
                         const sizeETH = parseFloat(String(pos.size)) / 1e18;
                         const entryPrice = parseFloat(String(pos.entryPrice)) / 1e18;
-                        const markPrice = parseFloat(String(pos.markPrice || pos.entryPrice)) / 1e18;
+                        const serverMarkPrice = parseFloat(String(pos.markPrice || pos.entryPrice)) / 1e18;
+                        const markPrice = chartPrice && chartPrice > 0 ? chartPrice : serverMarkPrice;
                         const liqPrice = parseFloat(String(pos.liquidationPrice || "0")) / 1e18;
                         const marginETH = parseFloat(String(pos.collateral)) / 1e18;
                         const leverage = parseFloat(String(pos.leverage));
-                        const unrealizedPnlETH = parseFloat(String(pos.unrealizedPnL)) / 1e18;
-                        const marginRatio = parseFloat(String(pos.marginRatio || "0")) / 100;
-                        const roe = parseFloat(String("roe" in pos ? pos.roe : "0") || "0") / 100;
+                        const mmr = parseFloat(String(pos.mmr || "200")) / 100;
+                        // GMX PnL
+                        const pnlDelta = entryPrice > 0 ? sizeETH * Math.abs(markPrice - entryPrice) / entryPrice : 0;
+                        const hasProfit = pos.isLong ? (markPrice > entryPrice) : (entryPrice > markPrice);
+                        const unrealizedPnlETH = hasProfit ? pnlDelta : -pnlDelta;
+                        const equity = marginETH + unrealizedPnlETH;
+                        const maintenanceMargin = sizeETH * (mmr / 100);
+                        const marginRatio = equity > 0 ? (maintenanceMargin / equity) * 100 : 999;
+                        const roe = marginETH > 0 ? (unrealizedPnlETH / marginETH) * 100 : 0;
                         return (
                           <div key={pos.pairId} className="bg-okx-bg-secondary rounded-lg p-3 border border-okx-border-primary">
                             {/* Header: Direction + Symbol + Leverage + Close */}
                             <div className="flex items-center justify-between mb-2">
                               <div className="flex items-center gap-2">
-                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${pos.isLong ? "bg-green-900/50 text-green-400" : "bg-red-900/50 text-red-400"}`}>
-                                  {pos.isLong ? "多" : "空"}
+                                <span className={`px-2 py-0.5 rounded text-xs font-bold ${pos.isLong ? "bg-green-900/50 text-green-400" : "bg-red-900/50 text-red-400"}`}>
+                                  {pos.isLong ? t("long") : t("short")}
                                 </span>
-                                <span className="text-okx-text-primary text-[12px] font-medium">{instId}</span>
-                                <span className="text-yellow-400 text-[11px]">{leverage}x</span>
+                                <span className="text-okx-text-primary text-xs font-medium">{instId}</span>
+                                <span className="text-yellow-400 text-xs">{leverage}x</span>
                               </div>
                               <button
                                 onClick={async () => {
@@ -1029,25 +1036,29 @@ export function PerpetualTradingTerminal({
                                   if (result.success) { showToast("Position closed!", "success"); refreshPositions(); loadHistoryData(); fetchBills(); }
                                   else { showToast(result.error || "Failed to close", "error"); }
                                 }}
-                                className="px-2.5 py-1 bg-red-900/50 text-red-400 text-[10px] font-medium rounded"
-                              >平仓</button>
+                                className="px-2.5 py-1 bg-red-900/50 text-red-400 text-xs font-medium rounded"
+                              >{t("closePosition")}</button>
                             </div>
                             {/* Data Grid */}
-                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px] mb-2">
-                              <div className="flex justify-between"><span className="text-okx-text-tertiary">仓位</span><span className="text-okx-text-primary">BNB {sizeETH >= 1 ? sizeETH.toFixed(4) : sizeETH.toFixed(6)}</span></div>
-                              <div className="flex justify-between"><span className="text-okx-text-tertiary">保证金</span><span className="text-okx-text-primary">BNB {marginETH >= 1 ? marginETH.toFixed(4) : marginETH.toFixed(6)}</span></div>
-                              <div className="flex justify-between"><span className="text-okx-text-tertiary">开仓价</span><span className="text-okx-text-primary font-mono">{formatSmallPrice(entryPrice)}</span></div>
-                              <div className="flex justify-between"><span className="text-okx-text-tertiary">标记价</span><span className="text-okx-text-secondary font-mono">{formatSmallPrice(markPrice)}</span></div>
-                              <div className="flex justify-between"><span className="text-okx-text-tertiary">强平价</span><span className={`font-mono ${pos.isLong ? "text-red-400" : "text-green-400"}`}>{formatSmallPrice(liqPrice)}</span></div>
-                              <div className="flex justify-between"><span className="text-okx-text-tertiary">保证金率</span><span className={`font-medium ${marginRatio > 80 ? "text-green-400" : marginRatio > 50 ? "text-yellow-400" : "text-red-400"}`}>{marginRatio.toFixed(2)}%</span></div>
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-2">
+                              <div className="flex justify-between"><span className="text-okx-text-tertiary">{t("size")}</span><span className="text-okx-text-primary">BNB {sizeETH >= 1 ? sizeETH.toFixed(4) : sizeETH.toFixed(6)}</span></div>
+                              <div className="flex justify-between"><span className="text-okx-text-tertiary">{t("margin")}</span><span className="text-okx-text-primary">BNB {marginETH >= 1 ? marginETH.toFixed(4) : marginETH.toFixed(6)}</span></div>
+                              <div className="flex justify-between"><span className="text-okx-text-tertiary">{t("entryAvg")}</span><span className="text-okx-text-primary font-mono">{formatSmallPrice(entryPrice)}</span></div>
+                              <div className="flex justify-between"><span className="text-okx-text-tertiary">{t("markPrice")}</span><span className="text-okx-text-secondary font-mono">{formatSmallPrice(markPrice)}</span></div>
+                              <div className="flex justify-between"><span className="text-okx-text-tertiary">{t("liqPrice")}</span><span className={`font-mono ${pos.isLong ? "text-red-400" : "text-green-400"}`}>{formatSmallPrice(liqPrice)}</span></div>
+                              <div className="flex justify-between"><span className="text-okx-text-tertiary">{t("marginRatio")}</span><span className={`font-medium ${marginRatio > 80 ? "text-green-400" : marginRatio > 50 ? "text-yellow-400" : "text-red-400"}`}>{marginRatio.toFixed(2)}%</span></div>
                             </div>
-                            {/* PnL Footer */}
+                            {/* PnL Footer — prominent display */}
                             <div className="flex items-center justify-between pt-2 border-t border-okx-border-primary">
-                              <span className="text-okx-text-tertiary text-[11px]">未实现盈亏</span>
-                              <span className={`text-[12px] font-bold ${unrealizedPnlETH >= 0 ? "text-green-400" : "text-red-400"}`}>
-                                {unrealizedPnlETH >= 0 ? "+" : ""}BNB {Math.abs(unrealizedPnlETH) >= 1 ? Math.abs(unrealizedPnlETH).toFixed(4) : Math.abs(unrealizedPnlETH).toFixed(6)}
-                                <span className="text-[10px] ml-1">({roe >= 0 ? "+" : ""}{roe.toFixed(2)}%)</span>
-                              </span>
+                              <span className="text-okx-text-tertiary text-xs">{t("unrealizedPnl")}</span>
+                              <div className="text-right">
+                                <div className={`text-sm font-bold ${unrealizedPnlETH >= 0 ? "text-green-400" : "text-red-400"}`}>
+                                  {unrealizedPnlETH >= 0 ? "+" : ""}BNB {Math.abs(unrealizedPnlETH) >= 1 ? Math.abs(unrealizedPnlETH).toFixed(4) : Math.abs(unrealizedPnlETH).toFixed(6)}
+                                </div>
+                                <div className={`text-xs font-medium ${roe >= 0 ? "text-green-400/80" : "text-red-400/80"}`}>
+                                  {roe >= 0 ? "+" : ""}{roe.toFixed(2)}%
+                                </div>
+                              </div>
                             </div>
                           </div>
                         );
@@ -1073,20 +1084,20 @@ export function PerpetualTradingTerminal({
                     <>
                     {/* Desktop Table */}
                     <div className="hidden md:block overflow-x-auto">
-                    <table className="w-full text-[11px] min-w-[900px]">
+                    <table className="w-full text-xs min-w-[900px]">
                       <thead>
                         <tr className="text-okx-text-tertiary border-b border-okx-border-primary">
                           <th className="text-left py-2 px-1">订单号</th>
                           <th className="text-left py-2 px-1">时间</th>
-                          <th className="text-left py-2 px-1">交易对</th>
+                          <th className="text-left py-2 px-1">{t("pair")}</th>
                           <th className="text-left py-2 px-1">类型</th>
-                          <th className="text-left py-2 px-1">方向</th>
-                          <th className="text-right py-2 px-1">杠杆</th>
+                          <th className="text-left py-2 px-1">{t("direction")}</th>
+                          <th className="text-right py-2 px-1">{t("leverage")}</th>
                           <th className="text-right py-2 px-1">委托价</th>
                           <th className="text-right py-2 px-1">委托量</th>
                           <th className="text-right py-2 px-1">成交均价</th>
                           <th className="text-right py-2 px-1">已成交/总量</th>
-                          <th className="text-right py-2 px-1">保证金</th>
+                          <th className="text-right py-2 px-1">{t("margin")}</th>
                           <th className="text-right py-2 px-1">手续费</th>
                           <th className="text-center py-2 px-1">状态</th>
                           <th className="text-right py-2 px-1">操作</th>
@@ -1138,7 +1149,7 @@ export function PerpetualTradingTerminal({
                           return (
                             <tr key={order.id} className="border-b border-okx-border-primary hover:bg-okx-bg-hover">
                               {/* 订单号 */}
-                              <td className="py-2 px-1 text-okx-text-tertiary font-mono text-[10px]">
+                              <td className="py-2 px-1 text-okx-text-tertiary font-mono text-xs">
                                 <span
                                   className="cursor-pointer hover:text-okx-text-primary transition-colors"
                                   title="点击复制订单号"
@@ -1160,14 +1171,14 @@ export function PerpetualTradingTerminal({
 
                               {/* 订单类型 */}
                               <td className="py-2 px-1">
-                                <span className="bg-okx-bg-secondary px-1.5 py-0.5 rounded text-[10px]">
+                                <span className="bg-okx-bg-secondary px-1.5 py-0.5 rounded text-xs">
                                   {orderTypeDisplay}
                                 </span>
                               </td>
 
                               {/* 方向 */}
                               <td className={`py-2 px-1 font-medium ${order.isLong ? "text-okx-up" : "text-okx-down"}`}>
-                                {order.isLong ? "多" : "空"}
+                                {order.isLong ? t("long") : t("short")}
                               </td>
 
                               {/* 杠杆 */}
@@ -1186,7 +1197,7 @@ export function PerpetualTradingTerminal({
                               <td className="py-2 px-1 text-right">
                                 <div className="flex flex-col items-end">
                                   <span>{filledDisplay}/{sizeDisplay}</span>
-                                  <span className="text-[9px] text-okx-text-tertiary">{fillPercent}%</span>
+                                  <span className="text-xs text-okx-text-tertiary">{fillPercent}%</span>
                                 </div>
                               </td>
 
@@ -1198,7 +1209,7 @@ export function PerpetualTradingTerminal({
 
                               {/* 状态 */}
                               <td className="py-2 px-1 text-center">
-                                <span className={`px-2 py-0.5 rounded text-[10px] ${
+                                <span className={`px-2 py-0.5 rounded text-xs ${
                                   order.status === "PARTIALLY_FILLED"
                                     ? "text-blue-400 bg-blue-900/30"
                                     : "text-yellow-400 bg-yellow-900/30"
@@ -1210,7 +1221,7 @@ export function PerpetualTradingTerminal({
                               {/* 操作 */}
                               <td className="py-2 px-1 text-right">
                                 <button
-                                  className={`text-[11px] ${
+                                  className={`text-xs ${
                                     cancellingOrderId === order.id
                                       ? "text-okx-text-tertiary cursor-not-allowed"
                                       : "text-okx-down hover:underline"
@@ -1246,23 +1257,23 @@ export function PerpetualTradingTerminal({
                           <div key={order.id} className="bg-okx-bg-secondary rounded-lg p-3 border border-okx-border-primary">
                             <div className="flex items-center justify-between mb-2">
                               <div className="flex items-center gap-2">
-                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${order.isLong ? "bg-green-900/50 text-green-400" : "bg-red-900/50 text-red-400"}`}>
-                                  {order.isLong ? "多" : "空"}
+                                <span className={`px-2 py-0.5 rounded text-xs font-bold ${order.isLong ? "bg-green-900/50 text-green-400" : "bg-red-900/50 text-red-400"}`}>
+                                  {order.isLong ? t("long") : t("short")}
                                 </span>
-                                <span className="bg-okx-bg-tertiary px-1.5 py-0.5 rounded text-[10px] text-okx-text-secondary">{orderTypeDisplay}</span>
-                                <span className="text-yellow-400 text-[11px]">{leverageDisplay}</span>
+                                <span className="bg-okx-bg-tertiary px-1.5 py-0.5 rounded text-xs text-okx-text-secondary">{orderTypeDisplay}</span>
+                                <span className="text-yellow-400 text-xs">{leverageDisplay}</span>
                               </div>
                               <button
-                                className={`text-[11px] px-2.5 py-1 rounded ${cancellingOrderId === order.id ? "text-okx-text-tertiary bg-okx-bg-tertiary cursor-not-allowed" : "text-red-400 bg-red-900/50"}`}
+                                className={`text-xs px-2.5 py-1 rounded ${cancellingOrderId === order.id ? "text-okx-text-tertiary bg-okx-bg-tertiary cursor-not-allowed" : "text-red-400 bg-red-900/50"}`}
                                 disabled={cancellingOrderId === order.id}
                                 onClick={() => handleCancelOrder(order.id)}
                               >{cancellingOrderId === order.id ? "撤销中..." : "撤单"}</button>
                             </div>
-                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                               <div className="flex justify-between"><span className="text-okx-text-tertiary">委托价</span><span className="text-okx-text-primary font-mono">{priceDisplay}</span></div>
                               <div className="flex justify-between"><span className="text-okx-text-tertiary">均价</span><span className="text-okx-text-secondary font-mono">{avgPriceDisplay}</span></div>
                               <div className="flex justify-between"><span className="text-okx-text-tertiary">数量</span><span className="text-okx-text-primary">{sizeDisplay}</span></div>
-                              <div className="flex justify-between"><span className="text-okx-text-tertiary">保证金</span><span className="text-okx-text-primary">{marginDisplay}</span></div>
+                              <div className="flex justify-between"><span className="text-okx-text-tertiary">{t("margin")}</span><span className="text-okx-text-primary">{marginDisplay}</span></div>
                               <div className="flex justify-between"><span className="text-okx-text-tertiary">成交</span><span className="text-okx-text-secondary">{fillPercent}%</span></div>
                               <div className="flex justify-between"><span className="text-okx-text-tertiary">时间</span><span className="text-okx-text-secondary">{timeDisplay}</span></div>
                             </div>
@@ -1295,15 +1306,15 @@ export function PerpetualTradingTerminal({
                     <>
                     {/* Desktop Table */}
                     <div className="hidden md:block overflow-x-auto">
-                    <table className="w-full text-[11px] min-w-[800px]">
+                    <table className="w-full text-xs min-w-[800px]">
                       <thead>
                         <tr className="text-okx-text-tertiary border-b border-okx-border-primary">
                           <th className="text-left py-2 px-1">订单号</th>
                           <th className="text-left py-2 px-1">时间</th>
-                          <th className="text-left py-2 px-1">交易对</th>
+                          <th className="text-left py-2 px-1">{t("pair")}</th>
                           <th className="text-left py-2 px-1">类型</th>
-                          <th className="text-left py-2 px-1">方向</th>
-                          <th className="text-right py-2 px-1">杠杆</th>
+                          <th className="text-left py-2 px-1">{t("direction")}</th>
+                          <th className="text-right py-2 px-1">{t("leverage")}</th>
                           <th className="text-right py-2 px-1">委托价</th>
                           <th className="text-right py-2 px-1">成交均价</th>
                           <th className="text-right py-2 px-1">委托量</th>
@@ -1334,12 +1345,12 @@ export function PerpetualTradingTerminal({
                             : "--";
                           const leverageDisplay = order.leverage ? `${Number(order.leverage) / 10000}x` : "--";
                           const orderTypeDisplay = order.orderType === "MARKET" ? "市价" : "限价";
-                          const statusDisplay = order.status === "FILLED" ? "已成交"
-                            : order.status === "CANCELLED" ? "已取消"
-                            : order.status === "EXPIRED" ? "已过期"
-                            : order.status === "LIQUIDATED" ? "已强平"
-                            : order.status === "ADL" ? "ADL减仓"
-                            : order.status === "CLOSED" ? "已平仓"
+                          const statusDisplay = order.status === "FILLED" ? t("statusFilled")
+                            : order.status === "CANCELLED" ? t("statusCancelled")
+                            : order.status === "EXPIRED" ? t("statusExpired")
+                            : order.status === "LIQUIDATED" ? t("statusLiquidated")
+                            : order.status === "ADL" ? t("statusAdl")
+                            : order.status === "CLOSED" ? t("statusClosed")
                             : order.status;
                           const statusColor = order.status === "FILLED" ? "text-green-400 bg-green-900/30"
                             : order.status === "CANCELLED" ? "text-gray-400 bg-gray-900/30"
@@ -1356,7 +1367,7 @@ export function PerpetualTradingTerminal({
 
                           return (
                             <tr key={order.id} className="border-b border-okx-border-primary hover:bg-okx-bg-hover">
-                              <td className="py-2 px-1 text-okx-text-tertiary font-mono text-[10px]">
+                              <td className="py-2 px-1 text-okx-text-tertiary font-mono text-xs">
                                 <span
                                   className="cursor-pointer hover:text-okx-text-primary transition-colors"
                                   title="点击复制订单号"
@@ -1370,12 +1381,12 @@ export function PerpetualTradingTerminal({
                               <td className="py-2 px-1 text-okx-text-secondary">{timeDisplay}</td>
                               <td className="py-2 px-1 font-medium">{instId}</td>
                               <td className="py-2 px-1">
-                                <span className="bg-okx-bg-secondary px-1.5 py-0.5 rounded text-[10px]">
+                                <span className="bg-okx-bg-secondary px-1.5 py-0.5 rounded text-xs">
                                   {orderTypeDisplay}
                                 </span>
                               </td>
                               <td className={`py-2 px-1 font-medium ${order.isLong ? "text-okx-up" : "text-okx-down"}`}>
-                                {order.isLong ? "多" : "空"}
+                                {order.isLong ? t("long") : t("short")}
                               </td>
                               <td className="py-2 px-1 text-right text-yellow-400">{leverageDisplay}</td>
                               <td className="py-2 px-1 text-right font-mono">{priceDisplay}</td>
@@ -1383,7 +1394,7 @@ export function PerpetualTradingTerminal({
                               <td className="py-2 px-1 text-right">{sizeDisplay}</td>
                               <td className="py-2 px-1 text-right">{filledDisplay}</td>
                               <td className="py-2 px-1 text-center">
-                                <span className={`px-2 py-0.5 rounded text-[10px] ${statusColor}`}>
+                                <span className={`px-2 py-0.5 rounded text-xs ${statusColor}`}>
                                   {statusDisplay}
                                 </span>
                               </td>
@@ -1406,22 +1417,22 @@ export function PerpetualTradingTerminal({
                         const avgPriceDisplay = order.avgFillPrice && order.avgFillPrice !== "0" ? formatSmallPrice(avgPriceRaw) : "--";
                         const leverageDisplay = order.leverage ? `${Number(order.leverage) / 10000}x` : "--";
                         const orderTypeDisplay = order.orderType === "MARKET" ? "市价" : "限价";
-                        const statusDisplay = order.status === "FILLED" ? "已成交" : order.status === "CANCELLED" ? "已取消" : order.status === "EXPIRED" ? "已过期" : order.status === "LIQUIDATED" ? "已强平" : order.status === "ADL" ? "ADL减仓" : order.status === "CLOSED" ? "已平仓" : order.status;
+                        const statusDisplay = order.status === "FILLED" ? t("statusFilled") : order.status === "CANCELLED" ? t("statusCancelled") : order.status === "EXPIRED" ? t("statusExpired") : order.status === "LIQUIDATED" ? t("statusLiquidated") : order.status === "ADL" ? t("statusAdl") : order.status === "CLOSED" ? t("statusClosed") : order.status;
                         const statusColor = order.status === "FILLED" ? "text-green-400 bg-green-900/30" : order.status === "CANCELLED" ? "text-gray-400 bg-gray-900/30" : order.status === "LIQUIDATED" ? "text-red-400 bg-red-900/30" : order.status === "ADL" ? "text-orange-400 bg-orange-900/30" : order.status === "CLOSED" ? "text-blue-400 bg-blue-900/30" : "text-orange-400 bg-orange-900/30";
                         const timeDisplay = new Date(order.updatedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
                         return (
                           <div key={order.id} className="bg-okx-bg-secondary rounded-lg p-3 border border-okx-border-primary">
                             <div className="flex items-center justify-between mb-2">
                               <div className="flex items-center gap-2">
-                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${order.isLong ? "bg-green-900/50 text-green-400" : "bg-red-900/50 text-red-400"}`}>
-                                  {order.isLong ? "多" : "空"}
+                                <span className={`px-2 py-0.5 rounded text-xs font-bold ${order.isLong ? "bg-green-900/50 text-green-400" : "bg-red-900/50 text-red-400"}`}>
+                                  {order.isLong ? t("long") : t("short")}
                                 </span>
-                                <span className="bg-okx-bg-tertiary px-1.5 py-0.5 rounded text-[10px] text-okx-text-secondary">{orderTypeDisplay}</span>
-                                <span className="text-yellow-400 text-[11px]">{leverageDisplay}</span>
+                                <span className="bg-okx-bg-tertiary px-1.5 py-0.5 rounded text-xs text-okx-text-secondary">{orderTypeDisplay}</span>
+                                <span className="text-yellow-400 text-xs">{leverageDisplay}</span>
                               </div>
-                              <span className={`px-2 py-0.5 rounded text-[10px] ${statusColor}`}>{statusDisplay}</span>
+                              <span className={`px-2 py-0.5 rounded text-xs ${statusColor}`}>{statusDisplay}</span>
                             </div>
-                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                               <div className="flex justify-between"><span className="text-okx-text-tertiary">委托价</span><span className="text-okx-text-primary font-mono">{priceDisplay}</span></div>
                               <div className="flex justify-between"><span className="text-okx-text-tertiary">均价</span><span className="text-okx-text-secondary font-mono">{avgPriceDisplay}</span></div>
                               <div className="flex justify-between"><span className="text-okx-text-tertiary">数量</span><span className="text-okx-text-primary">{filledDisplay}/{sizeDisplay}</span></div>
@@ -1456,18 +1467,18 @@ export function PerpetualTradingTerminal({
                     <>
                     {/* Desktop Table */}
                     <div className="hidden md:block overflow-x-auto">
-                    <table className="w-full text-[11px] min-w-[800px]">
+                    <table className="w-full text-xs min-w-[800px]">
                       <thead>
                         <tr className="text-okx-text-tertiary border-b border-okx-border-primary">
                           <th className="text-left py-2 px-1">订单号</th>
                           <th className="text-left py-2 px-1">时间</th>
-                          <th className="text-left py-2 px-1">交易对</th>
-                          <th className="text-left py-2 px-1">方向</th>
+                          <th className="text-left py-2 px-1">{t("pair")}</th>
+                          <th className="text-left py-2 px-1">{t("direction")}</th>
                           <th className="text-left py-2 px-1">角色</th>
                           <th className="text-right py-2 px-1">成交价</th>
                           <th className="text-right py-2 px-1">成交量</th>
                           <th className="text-right py-2 px-1">手续费</th>
-                          <th className="text-right py-2 px-1">已实现盈亏</th>
+                          <th className="text-right py-2 px-1">{t("realizedPnl")}</th>
                           <th className="text-center py-2 px-1">类型</th>
                         </tr>
                       </thead>
@@ -1489,9 +1500,9 @@ export function PerpetualTradingTerminal({
                             ? `${pnlETH >= 0 ? "+" : ""}BNB ${Math.abs(pnlETH) >= 1 ? Math.abs(pnlETH).toFixed(4) : Math.abs(pnlETH).toFixed(6)}`
                             : "--";
                           const roleDisplay = trade.isMaker ? "Maker" : "Taker";
-                          const typeDisplay = trade.type === "liquidation" ? "强平"
+                          const typeDisplay = trade.type === "liquidation" ? t("liquidationLabel")
                             : trade.type === "adl" ? "ADL"
-                            : trade.type === "close" ? "平仓" : "开仓";
+                            : trade.type === "close" ? t("closeTrade") : t("openTrade");
                           const typeColor = trade.type === "liquidation" ? "text-red-400 bg-red-900/30"
                             : trade.type === "adl" ? "text-orange-400 bg-orange-900/30"
                             : trade.type === "close" ? "text-blue-400 bg-blue-900/30"
@@ -1506,7 +1517,7 @@ export function PerpetualTradingTerminal({
 
                           return (
                             <tr key={trade.id} className="border-b border-okx-border-primary hover:bg-okx-bg-hover">
-                              <td className="py-2 px-1 text-okx-text-tertiary font-mono text-[10px]">
+                              <td className="py-2 px-1 text-okx-text-tertiary font-mono text-xs">
                                 <span
                                   className="cursor-pointer hover:text-okx-text-primary transition-colors"
                                   title="点击复制订单号"
@@ -1520,10 +1531,10 @@ export function PerpetualTradingTerminal({
                               <td className="py-2 px-1 text-okx-text-secondary">{timeDisplay}</td>
                               <td className="py-2 px-1 font-medium">{instId}</td>
                               <td className={`py-2 px-1 font-medium ${trade.isLong ? "text-okx-up" : "text-okx-down"}`}>
-                                {trade.isLong ? "多" : "空"}
+                                {trade.isLong ? t("long") : t("short")}
                               </td>
                               <td className="py-2 px-1">
-                                <span className={`text-[10px] ${trade.isMaker ? "text-purple-400" : "text-blue-400"}`}>
+                                <span className={`text-xs ${trade.isMaker ? "text-purple-400" : "text-blue-400"}`}>
                                   {roleDisplay}
                                 </span>
                               </td>
@@ -1534,7 +1545,7 @@ export function PerpetualTradingTerminal({
                                 {pnlDisplay}
                               </td>
                               <td className="py-2 px-1 text-center">
-                                <span className={`px-2 py-0.5 rounded text-[10px] ${typeColor}`}>
+                                <span className={`px-2 py-0.5 rounded text-xs ${typeColor}`}>
                                   {typeDisplay}
                                 </span>
                               </td>
@@ -1555,26 +1566,26 @@ export function PerpetualTradingTerminal({
                         const feeDisplay = `BNB ${feeETH >= 0.0001 ? feeETH.toFixed(6) : feeETH.toFixed(8)}`;
                         const pnlETH = Number(trade.realizedPnL) / 1e18;
                         const pnlDisplay = pnlETH !== 0 ? `${pnlETH >= 0 ? "+" : ""}BNB ${Math.abs(pnlETH) >= 1 ? Math.abs(pnlETH).toFixed(4) : Math.abs(pnlETH).toFixed(6)}` : "--";
-                        const typeDisplay = trade.type === "liquidation" ? "强平" : trade.type === "adl" ? "ADL" : trade.type === "close" ? "平仓" : "开仓";
+                        const typeDisplay = trade.type === "liquidation" ? t("liquidationLabel") : trade.type === "adl" ? "ADL" : trade.type === "close" ? t("closeTrade") : t("openTrade");
                         const typeColor = trade.type === "liquidation" ? "text-red-400 bg-red-900/30" : trade.type === "adl" ? "text-orange-400 bg-orange-900/30" : trade.type === "close" ? "text-blue-400 bg-blue-900/30" : "text-green-400 bg-green-900/30";
                         const timeDisplay = new Date(trade.timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
                         return (
                           <div key={trade.id} className="bg-okx-bg-secondary rounded-lg p-3 border border-okx-border-primary">
                             <div className="flex items-center justify-between mb-2">
                               <div className="flex items-center gap-2">
-                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${trade.isLong ? "bg-green-900/50 text-green-400" : "bg-red-900/50 text-red-400"}`}>
-                                  {trade.isLong ? "多" : "空"}
+                                <span className={`px-2 py-0.5 rounded text-xs font-bold ${trade.isLong ? "bg-green-900/50 text-green-400" : "bg-red-900/50 text-red-400"}`}>
+                                  {trade.isLong ? t("long") : t("short")}
                                 </span>
-                                <span className={`px-2 py-0.5 rounded text-[10px] ${typeColor}`}>{typeDisplay}</span>
-                                <span className={`text-[10px] ${trade.isMaker ? "text-purple-400" : "text-blue-400"}`}>{trade.isMaker ? "Maker" : "Taker"}</span>
+                                <span className={`px-2 py-0.5 rounded text-xs ${typeColor}`}>{typeDisplay}</span>
+                                <span className={`text-xs ${trade.isMaker ? "text-purple-400" : "text-blue-400"}`}>{trade.isMaker ? "Maker" : "Taker"}</span>
                               </div>
-                              <span className="text-okx-text-tertiary text-[10px]">{timeDisplay}</span>
+                              <span className="text-okx-text-tertiary text-xs">{timeDisplay}</span>
                             </div>
-                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                               <div className="flex justify-between"><span className="text-okx-text-tertiary">成交价</span><span className="text-okx-text-primary font-mono">{priceDisplay}</span></div>
                               <div className="flex justify-between"><span className="text-okx-text-tertiary">数量</span><span className="text-okx-text-primary">{sizeDisplay}</span></div>
                               <div className="flex justify-between"><span className="text-okx-text-tertiary">手续费</span><span className="text-okx-text-secondary">{feeDisplay}</span></div>
-                              <div className="flex justify-between"><span className="text-okx-text-tertiary">盈亏</span><span className={`font-medium ${pnlETH >= 0 ? "text-green-400" : "text-red-400"}`}>{pnlDisplay}</span></div>
+                              <div className="flex justify-between"><span className="text-okx-text-tertiary">{t("pnl")}</span><span className={`font-medium ${pnlETH >= 0 ? "text-green-400" : "text-red-400"}`}>{pnlDisplay}</span></div>
                             </div>
                           </div>
                         );
@@ -1628,7 +1639,7 @@ export function PerpetualTradingTerminal({
                       <button
                         key={f.value}
                         onClick={() => setBillTypeFilter(f.value)}
-                        className={`px-2.5 py-0.5 rounded-full text-[11px] transition-colors ${
+                        className={`px-2.5 py-0.5 rounded-full text-xs transition-colors ${
                           billTypeFilter === f.value
                             ? "bg-meme-lime/20 text-meme-lime border border-meme-lime/40"
                             : "text-okx-text-tertiary border border-okx-border-primary hover:text-okx-text-secondary"
@@ -1641,7 +1652,7 @@ export function PerpetualTradingTerminal({
 
                   {/* 列表 */}
                   {!isConnected ? (
-                    <div className="text-center text-okx-text-tertiary py-8 text-[12px]">
+                    <div className="text-center text-okx-text-tertiary py-8 text-xs">
                       {tc("connectWalletFirst")}
                     </div>
                   ) : billsLoading && billsData.length === 0 ? (
@@ -1649,7 +1660,7 @@ export function PerpetualTradingTerminal({
                       <div className="w-5 h-5 border-2 border-meme-lime border-t-transparent rounded-full animate-spin" />
                     </div>
                   ) : billsData.length === 0 ? (
-                    <div className="text-center text-okx-text-tertiary py-8 text-[12px]">
+                    <div className="text-center text-okx-text-tertiary py-8 text-xs">
                       {t("billEmpty")}
                     </div>
                   ) : (
@@ -1673,24 +1684,24 @@ export function PerpetualTradingTerminal({
                         return (
                           <div key={bill.id} className="bg-okx-bg-card border border-okx-border-primary rounded-lg px-3 py-2">
                             <div className="flex items-center justify-between mb-1">
-                              <span className="text-okx-text-tertiary text-[10px]">{timeStr}</span>
-                              <span className="text-okx-text-tertiary text-[10px]">
+                              <span className="text-okx-text-tertiary text-xs">{timeStr}</span>
+                              <span className="text-okx-text-tertiary text-xs">
                                 {t("billBalanceAfter")} BNB {balanceAfterETH >= 1 ? balanceAfterETH.toFixed(4) : balanceAfterETH.toFixed(6)}
                               </span>
                             </div>
                             <div className="flex items-center justify-between">
-                              <span className="text-[11px] font-medium text-okx-text-primary">BNB</span>
-                              <span className={`text-[12px] font-bold ${amountColor}`}>{amountStr}</span>
+                              <span className="text-xs font-medium text-okx-text-primary">BNB</span>
+                              <span className={`text-xs font-bold ${amountColor}`}>{amountStr}</span>
                             </div>
                             <div className="flex items-center gap-2 mt-0.5">
-                              <span className={`text-[10px] ${typeMeta.color || "text-okx-text-secondary"}`}>
+                              <span className={`text-xs ${typeMeta.color || "text-okx-text-secondary"}`}>
                                 {typeMeta.label}
                               </span>
                               {bill.positionId && (
-                                <span className="text-[10px] text-okx-text-tertiary">{t("billPerp")}</span>
+                                <span className="text-xs text-okx-text-tertiary">{t("billPerp")}</span>
                               )}
                               {bill.txHash && (
-                                <span className="text-[10px] text-okx-text-tertiary font-mono">
+                                <span className="text-xs text-okx-text-tertiary font-mono">
                                   {bill.txHash.slice(0, 10)}...
                                 </span>
                               )}
@@ -1704,7 +1715,7 @@ export function PerpetualTradingTerminal({
                           <button
                             onClick={loadMoreBills}
                             disabled={billsLoading}
-                            className="text-okx-text-secondary text-[11px] hover:text-okx-text-primary transition-colors disabled:opacity-50"
+                            className="text-okx-text-secondary text-xs hover:text-okx-text-primary transition-colors disabled:opacity-50"
                           >
                             {billsLoading ? t("billLoading") : t("billLoadMore")}
                           </button>
@@ -1764,7 +1775,7 @@ export function PerpetualTradingTerminal({
                       <button
                         key={tab.key}
                         onClick={() => setActiveBottomTab(tab.key as typeof activeBottomTab)}
-                        className={`py-2 px-3 text-[11px] transition-colors relative flex items-center gap-1 whitespace-nowrap flex-shrink-0 ${
+                        className={`py-2 px-3 text-xs transition-colors relative flex items-center gap-1 whitespace-nowrap flex-shrink-0 ${
                           activeBottomTab === tab.key
                             ? "text-okx-text-primary font-bold"
                             : "text-okx-text-secondary"
@@ -1772,7 +1783,7 @@ export function PerpetualTradingTerminal({
                       >
                         {tab.label}
                         {"badge" in tab && tab.badge && (
-                          <span className="bg-red-500 text-white text-[10px] rounded-full px-1.5 min-w-[16px] h-4 flex items-center justify-center">
+                          <span className="bg-red-500 text-white text-xs rounded-full px-1.5 min-w-[16px] h-4 flex items-center justify-center">
                             {tab.badge > 9 ? "9+" : tab.badge}
                           </span>
                         )}
@@ -1789,31 +1800,31 @@ export function PerpetualTradingTerminal({
                   {activeBottomTab === "positions" && (
                     <div className="p-2">
                       {!isConnected ? (
-                        <div className="text-center text-okx-text-tertiary py-8 text-[12px]">{tc("connectWalletFirst")}</div>
+                        <div className="text-center text-okx-text-tertiary py-8 text-xs">{tc("connectWalletFirst")}</div>
                       ) : currentPositionsForDisplay.length === 0 ? (
-                        <div className="text-center text-okx-text-tertiary py-8 text-[12px]">{t("noPosition")}</div>
+                        <div className="text-center text-okx-text-tertiary py-8 text-xs">{t("noPosition")}</div>
                       ) : (
-                        <div className="text-center text-okx-text-tertiary py-4 text-[11px]">
+                        <div className="text-center text-okx-text-tertiary py-4 text-xs">
                           {currentPositionsForDisplay.length} {t("positions")} — {t("openOrders")}
                         </div>
                       )}
                     </div>
                   )}
                   {activeBottomTab === "openOrders" && (
-                    <div className="p-2 text-center text-okx-text-tertiary py-8 text-[12px]">
+                    <div className="p-2 text-center text-okx-text-tertiary py-8 text-xs">
                       {!isConnected ? tc("connectWalletFirst") : t("noOpenOrder")}
                     </div>
                   )}
                   {activeBottomTab === "orderHistory" && (
                     <div className="p-2">
                       {!isConnected ? (
-                        <div className="text-center text-okx-text-tertiary py-8 text-[12px]">{tc("connectWalletFirst")}</div>
+                        <div className="text-center text-okx-text-tertiary py-8 text-xs">{tc("connectWalletFirst")}</div>
                       ) : isLoadingHistory ? (
-                        <div className="text-center text-okx-text-tertiary py-8 text-[12px]">
+                        <div className="text-center text-okx-text-tertiary py-8 text-xs">
                           <div className="animate-spin w-5 h-5 border-2 border-okx-brand border-t-transparent rounded-full mx-auto mb-2" />
                         </div>
                       ) : orderHistoryData.length === 0 ? (
-                        <div className="text-center text-okx-text-tertiary py-8 text-[12px]">{t("noOrderHistory")}</div>
+                        <div className="text-center text-okx-text-tertiary py-8 text-xs">{t("noOrderHistory")}</div>
                       ) : (
                         <div className="space-y-2">
                           {orderHistoryData.map((order) => {
@@ -1831,14 +1842,14 @@ export function PerpetualTradingTerminal({
                               <div key={order.id} className="bg-okx-bg-secondary rounded-lg p-3 border border-okx-border-primary">
                                 <div className="flex items-center justify-between mb-2">
                                   <div className="flex items-center gap-2">
-                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${order.isLong ? "bg-green-900/50 text-green-400" : "bg-red-900/50 text-red-400"}`}>
-                                      {order.isLong ? "多" : "空"}
+                                    <span className={`px-2 py-0.5 rounded text-xs font-bold ${order.isLong ? "bg-green-900/50 text-green-400" : "bg-red-900/50 text-red-400"}`}>
+                                      {order.isLong ? t("long") : t("short")}
                                     </span>
-                                    <span className="text-okx-text-tertiary text-[10px]">{orderTypeDisplay} {leverageDisplay}</span>
+                                    <span className="text-okx-text-tertiary text-xs">{orderTypeDisplay} {leverageDisplay}</span>
                                   </div>
-                                  <span className={`text-[10px] ${statusColor}`}>{order.status}</span>
+                                  <span className={`text-xs ${statusColor}`}>{order.status}</span>
                                 </div>
-                                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                                   <div className="flex justify-between"><span className="text-okx-text-tertiary">委托价</span><span className="font-mono">{priceDisplay}</span></div>
                                   <div className="flex justify-between"><span className="text-okx-text-tertiary">成交价</span><span className="font-mono">{avgPriceDisplay}</span></div>
                                   <div className="flex justify-between"><span className="text-okx-text-tertiary">数量</span><span>{sizeDisplay}</span></div>
@@ -1854,13 +1865,13 @@ export function PerpetualTradingTerminal({
                   {activeBottomTab === "tradeHistory" && (
                     <div className="p-2">
                       {!isConnected ? (
-                        <div className="text-center text-okx-text-tertiary py-8 text-[12px]">{tc("connectWalletFirst")}</div>
+                        <div className="text-center text-okx-text-tertiary py-8 text-xs">{tc("connectWalletFirst")}</div>
                       ) : isLoadingHistory ? (
-                        <div className="text-center text-okx-text-tertiary py-8 text-[12px]">
+                        <div className="text-center text-okx-text-tertiary py-8 text-xs">
                           <div className="animate-spin w-5 h-5 border-2 border-okx-brand border-t-transparent rounded-full mx-auto mb-2" />
                         </div>
                       ) : tradeHistoryData.length === 0 ? (
-                        <div className="text-center text-okx-text-tertiary py-8 text-[12px]">{t("noTradeHistory")}</div>
+                        <div className="text-center text-okx-text-tertiary py-8 text-xs">{t("noTradeHistory")}</div>
                       ) : (
                         <div className="space-y-2">
                           {tradeHistoryData.map((trade) => {
@@ -1872,26 +1883,26 @@ export function PerpetualTradingTerminal({
                             const feeDisplay = `BNB ${feeETH >= 0.0001 ? feeETH.toFixed(6) : feeETH.toFixed(8)}`;
                             const pnlETH = Number(trade.realizedPnL) / 1e18;
                             const pnlDisplay = pnlETH !== 0 ? `${pnlETH >= 0 ? "+" : ""}BNB ${Math.abs(pnlETH) >= 1 ? Math.abs(pnlETH).toFixed(4) : Math.abs(pnlETH).toFixed(6)}` : "--";
-                            const typeDisplay = trade.type === "liquidation" ? "强平" : trade.type === "adl" ? "ADL" : trade.type === "close" ? "平仓" : "开仓";
+                            const typeDisplay = trade.type === "liquidation" ? t("liquidationLabel") : trade.type === "adl" ? "ADL" : trade.type === "close" ? t("closeTrade") : t("openTrade");
                             const typeColor = trade.type === "liquidation" ? "text-red-400 bg-red-900/30" : trade.type === "adl" ? "text-orange-400 bg-orange-900/30" : trade.type === "close" ? "text-blue-400 bg-blue-900/30" : "text-green-400 bg-green-900/30";
                             const timeDisplay = new Date(trade.timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
                             return (
                               <div key={trade.id} className="bg-okx-bg-secondary rounded-lg p-3 border border-okx-border-primary">
                                 <div className="flex items-center justify-between mb-2">
                                   <div className="flex items-center gap-2">
-                                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${trade.isLong ? "bg-green-900/50 text-green-400" : "bg-red-900/50 text-red-400"}`}>
-                                      {trade.isLong ? "多" : "空"}
+                                    <span className={`px-2 py-0.5 rounded text-xs font-bold ${trade.isLong ? "bg-green-900/50 text-green-400" : "bg-red-900/50 text-red-400"}`}>
+                                      {trade.isLong ? t("long") : t("short")}
                                     </span>
-                                    <span className={`px-2 py-0.5 rounded text-[10px] ${typeColor}`}>{typeDisplay}</span>
-                                    <span className={`text-[10px] ${trade.isMaker ? "text-purple-400" : "text-blue-400"}`}>{trade.isMaker ? "Maker" : "Taker"}</span>
+                                    <span className={`px-2 py-0.5 rounded text-xs ${typeColor}`}>{typeDisplay}</span>
+                                    <span className={`text-xs ${trade.isMaker ? "text-purple-400" : "text-blue-400"}`}>{trade.isMaker ? "Maker" : "Taker"}</span>
                                   </div>
-                                  <span className="text-okx-text-tertiary text-[10px]">{timeDisplay}</span>
+                                  <span className="text-okx-text-tertiary text-xs">{timeDisplay}</span>
                                 </div>
-                                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
                                   <div className="flex justify-between"><span className="text-okx-text-tertiary">成交价</span><span className="text-okx-text-primary font-mono">{priceDisplay}</span></div>
                                   <div className="flex justify-between"><span className="text-okx-text-tertiary">数量</span><span className="text-okx-text-primary">{sizeDisplay}</span></div>
                                   <div className="flex justify-between"><span className="text-okx-text-tertiary">手续费</span><span className="text-okx-text-secondary">{feeDisplay}</span></div>
-                                  <div className="flex justify-between"><span className="text-okx-text-tertiary">盈亏</span><span className={`font-medium ${pnlETH >= 0 ? "text-green-400" : "text-red-400"}`}>{pnlDisplay}</span></div>
+                                  <div className="flex justify-between"><span className="text-okx-text-tertiary">{t("pnl")}</span><span className={`font-medium ${pnlETH >= 0 ? "text-green-400" : "text-red-400"}`}>{pnlDisplay}</span></div>
                                 </div>
                               </div>
                             );
@@ -1915,7 +1926,7 @@ export function PerpetualTradingTerminal({
                     </div>
                   )}
                   {activeBottomTab === "bills" && (
-                    <div className="p-2 text-center text-okx-text-tertiary py-8 text-[12px]">
+                    <div className="p-2 text-center text-okx-text-tertiary py-8 text-xs">
                       {!isConnected ? tc("connectWalletFirst") : t("billEmpty")}
                     </div>
                   )}

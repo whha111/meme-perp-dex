@@ -211,7 +211,7 @@ export default function InvitePage() {
           <div className="flex gap-5 px-16 py-6">
             {/* Card 1: Total Invited */}
             <div className="flex-1 bg-okx-bg-card border border-okx-border-primary rounded-xl p-6">
-              <div className="text-[13px] text-okx-text-secondary mb-2">{t("totalInvited")}</div>
+              <div className="text-sm text-okx-text-secondary mb-2">{t("totalInvited")}</div>
               <div className="flex items-baseline gap-1">
                 <span className="text-[32px] font-extrabold font-mono text-meme-lime">
                   {info?.totalInvites ?? 0}
@@ -222,7 +222,7 @@ export default function InvitePage() {
 
             {/* Card 2: Total Rebate */}
             <div className="flex-1 bg-okx-bg-card border border-okx-border-primary rounded-xl p-6">
-              <div className="text-[13px] text-okx-text-secondary mb-2">{t("totalRebate")}</div>
+              <div className="text-sm text-okx-text-secondary mb-2">{t("totalRebate")}</div>
               <div className="flex items-baseline gap-1">
                 <span className="text-[32px] font-extrabold font-mono text-okx-text-primary">
                   {info?.totalEarned ?? "0"}
@@ -233,7 +233,7 @@ export default function InvitePage() {
 
             {/* Card 3: Pending Rebate + Withdraw */}
             <div className="flex-1 bg-okx-bg-card border border-okx-border-primary rounded-xl p-6">
-              <div className="text-[13px] text-okx-text-secondary mb-2">{t("monthlyRebate")}</div>
+              <div className="text-sm text-okx-text-secondary mb-2">{t("monthlyRebate")}</div>
               <div className="flex items-baseline gap-1">
                 <span className="text-[32px] font-extrabold font-mono text-okx-text-primary">
                   {info?.monthlyEarned ?? "0"}
@@ -252,7 +252,7 @@ export default function InvitePage() {
 
             {/* Card 4: Commission Rate */}
             <div className="flex-1 bg-okx-bg-card border border-okx-border-primary rounded-xl p-6">
-              <div className="text-[13px] text-okx-text-secondary mb-2">{t("currentLevel")}</div>
+              <div className="text-sm text-okx-text-secondary mb-2">{t("currentLevel")}</div>
               <div className="flex items-baseline gap-1">
                 <span className="text-[32px] font-extrabold font-mono text-meme-lime">
                   {COMMISSION_RATES.level1}%
@@ -277,7 +277,7 @@ export default function InvitePage() {
                   <div className="flex flex-col gap-1">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-okx-text-primary">{t("level1Label")}</span>
-                      <span className="text-[9px] font-bold text-black bg-meme-lime px-1.5 py-0.5 rounded">
+                      <span className="text-xs font-bold text-black bg-meme-lime px-1.5 py-0.5 rounded">
                         L1
                       </span>
                     </div>
@@ -293,7 +293,7 @@ export default function InvitePage() {
                   <div className="flex flex-col gap-1">
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-okx-text-primary">{t("level2Label")}</span>
-                      <span className="text-[9px] font-bold text-meme-lime border border-meme-lime px-1.5 py-0.5 rounded">
+                      <span className="text-xs font-bold text-meme-lime border border-meme-lime px-1.5 py-0.5 rounded">
                         L2
                       </span>
                     </div>

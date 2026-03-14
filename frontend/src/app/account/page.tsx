@@ -76,24 +76,24 @@ export default function AccountPage() {
             {/* Top Row: Balance + Buttons */}
             <div className="flex items-start justify-between mb-6">
               <div className="flex flex-col gap-2">
-                <span className="text-[14px] text-okx-text-secondary">{t("totalAssetValue")}</span>
+                <span className="text-sm text-okx-text-secondary">{t("totalAssetValue")}</span>
                 <span className="font-mono text-[36px] font-bold text-okx-text-primary">
                   {formatBal(totalAssets)} ETH
                 </span>
-                <span className="font-mono text-[14px] text-okx-text-tertiary">
+                <span className="font-mono text-sm text-okx-text-tertiary">
                   ≈ ${(parseFloat(formatUnits(totalAssets, 18)) * 1800).toFixed(2)} USD
                 </span>
               </div>
               <div className="flex items-center gap-2.5">
                 <button
                   onClick={() => router.push("/deposit")}
-                  className="flex items-center gap-1.5 bg-meme-lime text-black text-[13px] font-bold px-6 py-2.5 rounded-md hover:opacity-90 transition-opacity"
+                  className="flex items-center gap-1.5 bg-meme-lime text-black text-sm font-bold px-6 py-2.5 rounded-md hover:opacity-90 transition-opacity"
                 >
                   {t("deposit")}
                 </button>
                 <button
                   onClick={() => router.push("/deposit?tab=withdraw")}
-                  className="flex items-center gap-1.5 border border-meme-lime text-meme-lime text-[13px] font-semibold px-6 py-2.5 rounded-md hover:bg-meme-lime/10 transition-colors"
+                  className="flex items-center gap-1.5 border border-meme-lime text-meme-lime text-sm font-semibold px-6 py-2.5 rounded-md hover:bg-meme-lime/10 transition-colors"
                 >
                   {t("withdraw")}
                 </button>
@@ -103,25 +103,25 @@ export default function AccountPage() {
             {/* Stats Row: 4 cards */}
             <div className="flex gap-4">
               <div className="flex-1 bg-okx-bg-secondary border border-okx-border-primary rounded-lg px-5 py-4 flex flex-col gap-1.5">
-                <span className="text-[12px] text-okx-text-tertiary">{t("availableBalance")}</span>
+                <span className="text-xs text-okx-text-tertiary">{t("availableBalance")}</span>
                 <span className="font-mono text-[18px] font-semibold text-okx-text-primary">
                   {formatBal(availableBalance)} ETH
                 </span>
               </div>
               <div className="flex-1 bg-okx-bg-secondary border border-okx-border-primary rounded-lg px-5 py-4 flex flex-col gap-1.5">
-                <span className="text-[12px] text-okx-text-tertiary">{t("lockedMargin")}</span>
+                <span className="text-xs text-okx-text-tertiary">{t("lockedMargin")}</span>
                 <span className="font-mono text-[18px] font-semibold text-okx-text-primary">
                   {formatBal(lockedMargin)} ETH
                 </span>
               </div>
               <div className="flex-1 bg-okx-bg-secondary border border-okx-border-primary rounded-lg px-5 py-4 flex flex-col gap-1.5">
-                <span className="text-[12px] text-okx-text-tertiary">{t("unrealizedPnl")}</span>
+                <span className="text-xs text-okx-text-tertiary">{t("unrealizedPnl")}</span>
                 <span className={`font-mono text-[18px] font-semibold ${unrealizedPnL >= 0n ? "text-meme-lime" : "text-okx-down"}`}>
                   {unrealizedPnL >= 0n ? "+" : ""}{formatBal(unrealizedPnL)} ETH
                 </span>
               </div>
               <div className="flex-1 bg-okx-bg-secondary border border-okx-border-primary rounded-lg px-5 py-4 flex flex-col gap-1.5">
-                <span className="text-[12px] text-okx-text-tertiary">{t("spotTokenValue")}</span>
+                <span className="text-xs text-okx-text-tertiary">{t("spotTokenValue")}</span>
                 <span className="font-mono text-[18px] font-semibold text-okx-text-primary">
                   ≈ 0.0000 ETH
                 </span>
@@ -135,7 +135,7 @@ export default function AccountPage() {
             <div className="flex-1 flex flex-col gap-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-base font-semibold text-okx-text-primary">{t("currentPositions")}</h2>
-                <span className="text-[11px] font-mono text-meme-lime bg-meme-lime/10 px-2 py-0.5 rounded">
+                <span className="text-xs font-mono text-meme-lime bg-meme-lime/10 px-2 py-0.5 rounded">
                   {positions.length} {t("activePositions")}
                 </span>
               </div>
@@ -152,16 +152,16 @@ export default function AccountPage() {
                       {/* Position header */}
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <span className="font-mono text-[14px] font-semibold text-okx-text-primary">
+                          <span className="font-mono text-sm font-semibold text-okx-text-primary">
                             {pos.token.slice(0, 8)}...-PERP
                           </span>
-                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded ${
                             pos.isLong ? "bg-meme-lime/15 text-meme-lime" : "bg-okx-down/15 text-okx-down"
                           }`}>
                             {pos.isLong ? t("long") : t("short")} {parseFloat(pos.leverage)}x
                           </span>
                         </div>
-                        <span className={`font-mono text-[14px] font-bold ${isProfit ? "text-meme-lime" : "text-okx-down"}`}>
+                        <span className={`font-mono text-sm font-bold ${isProfit ? "text-meme-lime" : "text-okx-down"}`}>
                           {isProfit ? "+" : ""}{formatBal(pnl)} ETH ({isProfit ? "+" : ""}
                           {((Number(formatUnits(pnl, 18)) / Math.max(Number(formatUnits(BigInt(pos.collateral || "0"), 18)), 0.0001)) * 100).toFixed(1)}%)
                         </span>
@@ -170,20 +170,20 @@ export default function AccountPage() {
                       {/* Position grid */}
                       <div className="grid grid-cols-4 gap-3">
                         <div className="flex flex-col gap-0.5">
-                          <span className="text-[10px] text-okx-text-tertiary">{t("positionSize")}</span>
-                          <span className="font-mono text-[12px] text-okx-text-secondary">{formatBal(pos.size)} ETH</span>
+                          <span className="text-xs text-okx-text-tertiary">{t("positionSize")}</span>
+                          <span className="font-mono text-xs text-okx-text-secondary">{formatBal(pos.size)} ETH</span>
                         </div>
                         <div className="flex flex-col gap-0.5">
-                          <span className="text-[10px] text-okx-text-tertiary">{t("margin")}</span>
-                          <span className="font-mono text-[12px] text-okx-text-secondary">{formatBal(pos.collateral)} ETH</span>
+                          <span className="text-xs text-okx-text-tertiary">{t("margin")}</span>
+                          <span className="font-mono text-xs text-okx-text-secondary">{formatBal(pos.collateral)} ETH</span>
                         </div>
                         <div className="flex flex-col gap-0.5">
-                          <span className="text-[10px] text-okx-text-tertiary">{t("entryPrice")}</span>
-                          <span className="font-mono text-[12px] text-okx-text-secondary">{formatBal(pos.entryPrice)} ETH</span>
+                          <span className="text-xs text-okx-text-tertiary">{t("entryPrice")}</span>
+                          <span className="font-mono text-xs text-okx-text-secondary">{formatBal(pos.entryPrice)} ETH</span>
                         </div>
                         <div className="flex flex-col gap-0.5">
-                          <span className="text-[10px] text-okx-text-tertiary">{t("liqPrice")}</span>
-                          <span className="font-mono text-[12px] text-okx-down">{formatBal(pos.liquidationPrice || "0")} ETH</span>
+                          <span className="text-xs text-okx-text-tertiary">{t("liqPrice")}</span>
+                          <span className="font-mono text-xs text-okx-down">{formatBal(pos.liquidationPrice || "0")} ETH</span>
                         </div>
                       </div>
 
@@ -192,19 +192,19 @@ export default function AccountPage() {
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => router.push(`/perp?symbol=${pos.token}`)}
-                          className="flex-1 text-[11px] font-medium py-2 bg-okx-bg-card border border-okx-border-primary rounded text-okx-text-secondary hover:text-okx-text-primary transition-colors"
+                          className="flex-1 text-xs font-medium py-2 bg-okx-bg-card border border-okx-border-primary rounded text-okx-text-secondary hover:text-okx-text-primary transition-colors"
                         >
                           {t("addMargin")}
                         </button>
                         <button
                           onClick={() => router.push(`/perp?symbol=${pos.token}`)}
-                          className="flex-1 text-[11px] font-medium py-2 bg-okx-bg-card border border-okx-border-primary rounded text-okx-text-secondary hover:text-okx-text-primary transition-colors"
+                          className="flex-1 text-xs font-medium py-2 bg-okx-bg-card border border-okx-border-primary rounded text-okx-text-secondary hover:text-okx-text-primary transition-colors"
                         >
                           {t("closePosition")}
                         </button>
                         <button
                           onClick={() => router.push(`/perp?symbol=${pos.token}`)}
-                          className="flex-1 text-[11px] font-medium py-2 bg-okx-bg-card border border-okx-border-primary rounded text-okx-text-secondary hover:text-okx-text-primary transition-colors"
+                          className="flex-1 text-xs font-medium py-2 bg-okx-bg-card border border-okx-border-primary rounded text-okx-text-secondary hover:text-okx-text-primary transition-colors"
                         >
                           {t("adjustLeverage")}
                         </button>
@@ -223,17 +223,17 @@ export default function AccountPage() {
             <div className="flex-1 flex flex-col gap-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-[16px] font-semibold text-okx-text-primary">{t("spotHoldings")}</h2>
-                <span className="text-[12px] text-okx-text-tertiary">
+                <span className="text-xs text-okx-text-tertiary">
                   {tokens.length} {t("tokens")}
                 </span>
               </div>
 
               {/* Table Header */}
               <div className="flex items-center px-4 py-2">
-                <span className="w-[140px] text-[11px] font-medium text-okx-text-tertiary">{t("token")}</span>
-                <span className="flex-1 text-[11px] font-medium text-okx-text-tertiary">{t("holdingAmount")}</span>
-                <span className="flex-1 text-[11px] font-medium text-okx-text-tertiary text-right">{t("valueEth")}</span>
-                <span className="w-[80px] text-[11px] font-medium text-okx-text-tertiary text-right">{t("change")}</span>
+                <span className="w-[140px] text-xs font-medium text-okx-text-tertiary">{t("token")}</span>
+                <span className="flex-1 text-xs font-medium text-okx-text-tertiary">{t("holdingAmount")}</span>
+                <span className="flex-1 text-xs font-medium text-okx-text-tertiary text-right">{t("valueEth")}</span>
+                <span className="w-[80px] text-xs font-medium text-okx-text-tertiary text-right">{t("change")}</span>
               </div>
 
               {/* Token Rows */}
@@ -254,25 +254,25 @@ export default function AccountPage() {
                     >
                       <div className="w-[140px] flex items-center gap-2">
                         <div
-                          className="w-8 h-8 rounded-full flex items-center justify-center text-white text-[12px] font-bold flex-shrink-0"
+                          className="w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold flex-shrink-0"
                           style={{ backgroundColor: color }}
                         >
                           {token.symbol?.charAt(0)?.toUpperCase() || "?"}
                         </div>
                         <div className="flex flex-col gap-px">
-                          <span className="text-[13px] font-semibold text-okx-text-primary">{token.symbol}</span>
-                          <span className="font-mono text-[9px] text-okx-text-tertiary truncate max-w-[80px]">{token.name}</span>
+                          <span className="text-sm font-semibold text-okx-text-primary">{token.symbol}</span>
+                          <span className="font-mono text-xs text-okx-text-tertiary truncate max-w-[80px]">{token.name}</span>
                         </div>
                       </div>
-                      <span className="flex-1 font-mono text-[12px] font-medium text-okx-text-secondary">
+                      <span className="flex-1 font-mono text-xs font-medium text-okx-text-secondary">
                         {Number(token.soldSupply || "0") > 0
                           ? (Number(token.soldSupply) / 1e18).toLocaleString(undefined, { maximumFractionDigits: 0 })
                           : "--"}
                       </span>
-                      <span className="flex-1 font-mono text-[12px] font-medium text-okx-text-secondary text-right">
+                      <span className="flex-1 font-mono text-xs font-medium text-okx-text-secondary text-right">
                         {ethVal > 0 ? `${ethVal.toFixed(6)} ETH` : "-- ETH"}
                       </span>
-                      <span className={`w-[80px] font-mono text-[12px] font-semibold text-right ${
+                      <span className={`w-[80px] font-mono text-xs font-semibold text-right ${
                         change >= 0 ? "text-meme-lime" : "text-okx-down"
                       }`}>
                         {change >= 0 ? "+" : ""}{change.toFixed(1)}%
@@ -296,7 +296,7 @@ export default function AccountPage() {
                   <button
                     key={tab}
                     onClick={() => setTxTab(tab)}
-                    className={`px-4 py-1.5 rounded-full text-[11px] font-medium transition-colors ${
+                    className={`px-4 py-1.5 rounded-full text-xs font-medium transition-colors ${
                       txTab === tab
                         ? "bg-meme-lime text-black font-semibold"
                         : "bg-okx-bg-card text-okx-text-secondary border border-okx-border-primary hover:text-okx-text-primary"
@@ -306,17 +306,17 @@ export default function AccountPage() {
                   </button>
                 ))}
               </div>
-              <span className="font-mono text-[11px] text-okx-text-tertiary">{t("txRecords")}</span>
+              <span className="font-mono text-xs text-okx-text-tertiary">{t("txRecords")}</span>
             </div>
 
             {/* Table Header */}
             <div className="flex items-center bg-okx-bg-secondary rounded-t-md px-4 py-2.5">
-              <span className="w-[100px] text-[11px] font-medium text-okx-text-tertiary">{t("txType")}</span>
-              <span className="flex-1 text-[11px] font-medium text-okx-text-tertiary">{t("pair")}</span>
-              <span className="w-[120px] text-[11px] font-medium text-okx-text-tertiary text-right">{t("txAmount")}</span>
-              <span className="w-[120px] text-[11px] font-medium text-okx-text-tertiary text-right">{t("txPrice")}</span>
-              <span className="w-[100px] text-[11px] font-medium text-okx-text-tertiary text-right">{t("txPnl")}</span>
-              <span className="w-[120px] text-[11px] font-medium text-okx-text-tertiary text-right">{t("txTime")}</span>
+              <span className="w-[100px] text-xs font-medium text-okx-text-tertiary">{t("txType")}</span>
+              <span className="flex-1 text-xs font-medium text-okx-text-tertiary">{t("pair")}</span>
+              <span className="w-[120px] text-xs font-medium text-okx-text-tertiary text-right">{t("txAmount")}</span>
+              <span className="w-[120px] text-xs font-medium text-okx-text-tertiary text-right">{t("txPrice")}</span>
+              <span className="w-[100px] text-xs font-medium text-okx-text-tertiary text-right">{t("txPnl")}</span>
+              <span className="w-[120px] text-xs font-medium text-okx-text-tertiary text-right">{t("txTime")}</span>
             </div>
 
             {/* Empty State */}
