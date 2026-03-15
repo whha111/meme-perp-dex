@@ -9,7 +9,7 @@
 import "dotenv/config";
 import { enableStructuredConsole } from "./utils/logger";
 enableStructuredConsole(); // In production: all console.* outputs become JSON
-import { type Address, type Hex, verifyTypedData, verifyMessage, createPublicClient, http, webSocket, parseEther, formatUnits } from "viem";
+import { type Address, type Hex, verifyTypedData, verifyMessage, createPublicClient, http, webSocket, parseEther, formatUnits, getAddress } from "viem";
 import { bsc, bscTestnet } from "viem/chains";
 import { CHAIN_ID as CONFIG_CHAIN_ID } from "./config";
 const activeChain = CONFIG_CHAIN_ID === 97 ? bscTestnet : bsc;
@@ -31,7 +31,7 @@ import db, {
 } from "./database";
 import { connectRedis as connectNewRedis, disconnectRedis, TradeRepo, OrderMarginRepo, Mode2AdjustmentRepo, NonceRepo, InsuranceFundRepo, ReferralRepo, SettlementLogRepo as RedisSettlementLogRepo, withLock, safeBigInt, cleanupStaleOrders, cleanupClosedPositions, type PerpTrade } from "./database/redis";
 // P1-5: PostgreSQL 订单镜像 (Write-Through Cache)
-import { connectPostgres, disconnectPostgres, isPostgresConnected, OrderMirrorRepo, type PgOrderMirror } from "./database/postgres";
+import { connectPostgres, disconnectPostgres, isPostgresConnected, OrderMirrorRepo, PositionMirrorRepo, type PgOrderMirror, type PgPositionMirror } from "./database/postgres";
 // P2-4: 仓位大小限制常量
 import { TRADING, ALLOW_FAKE_DEPOSIT, RESET_MODE2_ON_START, PRECISION_MULTIPLIER } from "./config";
 import { verifyOrderSignature } from "./utils/crypto";
@@ -156,8 +156,8 @@ const TOKEN_POOL_CACHE = new Map<string, CachedPoolState>();
 // 当代币从 bonding curve 毕业到 Uniswap V2 后，价格源需要切换
 // token address (lowercase) => { pairAddress, isWethToken0 }
 
-const WETH_ADDRESS = (process.env.WETH_ADDRESS || process.env.COLLATERAL_TOKEN_ADDRESS || "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd") as Address; // WBNB — read from env
-const UNISWAP_V2_FACTORY_ADDRESS = (process.env.PANCAKESWAP_FACTORY_ADDRESS || "0x6725F303b657a9451d8BA641348b6733DCBd9f4c") as Address; // PancakeSwap V2 Factory — read from env
+const WETH_ADDRESS = getAddress(process.env.WETH_ADDRESS || process.env.COLLATERAL_TOKEN_ADDRESS || "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd") as Address; // WBNB — read from env
+const UNISWAP_V2_FACTORY_ADDRESS = getAddress(process.env.PANCAKESWAP_FACTORY_ADDRESS || "0x6725F303b657a9451d8BA641348b6733DCBd9f4c") as Address; // PancakeSwap V2 Factory — read from env
 
 interface GraduatedTokenInfo {
   pairAddress: Address;    // Uniswap V2 Pair 地址
@@ -750,11 +750,14 @@ async function loadPositionsFromRedis(): Promise<void> {
         }
 
         // ✅ 清理僵尸仓位: collateral=0 且 size>0 说明已被强平但未从 Redis 清理
-        const posCollateral = BigInt(dbPos.collateral?.toString() || "0");
+        // ⚠️ Redis 中用 initialMargin (DB schema), 内存中用 collateral — 必须两个都检查
+        const posCollateral = BigInt(
+          dbPos.initialMargin?.toString() || dbPos.collateral?.toString() || "0"
+        );
         const posSize = BigInt(dbPos.size?.toString() || "0");
         if (posCollateral <= 0n && posSize > 0n) {
           skippedLiquidating++;
-          console.log(`[Redis] Cleaning zombie position (collateral=0): ${dbPos.id} (${dbPos.trader?.slice(0, 10) || '?'} size=${dbPos.size})`);
+          console.log(`[Redis] Cleaning zombie position (collateral=0): ${dbPos.id} (${(dbPos.trader || dbPos.userAddress)?.slice(0, 10) || '?'} size=${dbPos.size})`);
           PositionRepo.delete(dbPos.id).catch(e => trackRedisError("Failed to delete zombie position", e));
           continue;
         }
@@ -966,16 +969,27 @@ async function _doSavePositionToRedis(position: Position): Promise<string | null
              p.side === (position.isLong ? "LONG" : "SHORT")
     );
 
+    let redisId: string;
     if (existing) {
       // 更新已有仓位
       await PositionRepo.update(existing.id, dbPos);
-      return existing.id;
+      redisId = existing.id;
+    } else {
+      // 创建新仓位
+      const created = await PositionRepo.create(dbPos);
+      console.log(`[Redis] Position created: ${created.id} (trader=${position.trader.slice(0, 10)})`);
+      redisId = created.id;
     }
 
-    // 创建新仓位
-    const created = await PositionRepo.create(dbPos);
-    console.log(`[Redis] Position created: ${created.id} (trader=${position.trader.slice(0, 10)})`);
-    return created.id;
+    // PostgreSQL 镜像 (fire-and-forget，不阻塞撮合)
+    if (isPostgresConnected()) {
+      const pgPos = memoryPositionToPgMirror(position);
+      pgPos.id = position.pairId || redisId; // 确保使用稳定 ID
+      PositionMirrorRepo.upsert(pgPos)
+        .catch(e => console.error(`[PG] Position mirror upsert failed for ${pgPos.id}: ${e.message}`));
+    }
+
+    return redisId;
   } catch (error) {
     console.error("[Redis] Failed to save position:", error);
     return null;
@@ -985,11 +999,19 @@ async function _doSavePositionToRedis(position: Position): Promise<string | null
 /**
  * 从 Redis 删除仓位
  */
-async function deletePositionFromRedis(positionId: string): Promise<boolean> {
+async function deletePositionFromRedis(positionId: string, closeStatus: "CLOSED" | "LIQUIDATED" = "CLOSED"): Promise<boolean> {
   if (!db.isConnected()) return false;
 
   try {
-    return await PositionRepo.delete(positionId);
+    const deleted = await PositionRepo.delete(positionId);
+
+    // PostgreSQL 镜像: 软删除 (保留历史数据供审计)
+    if (isPostgresConnected()) {
+      PositionMirrorRepo.markClosed(positionId, closeStatus)
+        .catch(e => console.error(`[PG] Position mirror markClosed failed for ${positionId}: ${e.message}`));
+    }
+
+    return deleted;
   } catch (error) {
     console.error("[Redis] Failed to delete position:", error);
     return false;
@@ -1058,6 +1080,7 @@ function memoryPositionToDB(pos: Position): Omit<DBPosition, "id" | "createdAt" 
     initialMargin: pos.collateral,  // 1e18 ETH
     maintMargin: pos.maintenanceMargin || "0",  // 1e18 ETH
     fundingIndex: pos.fundingIndex || "0",
+    fundingFee: pos.fundingFee || "0",  // 累计资金费 (负数=已扣除)
     isLiquidating: pos.isLiquidating || false,
     markPrice: pos.markPrice,
     unrealizedPnL: pos.unrealizedPnL,  // 1e18 ETH
@@ -1066,6 +1089,38 @@ function memoryPositionToDB(pos: Position): Omit<DBPosition, "id" | "createdAt" 
     riskLevel: pos.riskLevel,
     adlScore: pos.adlScore,
     adlRanking: pos.adlRanking,
+  };
+}
+
+/**
+ * 转换: 内存 Position → PgPositionMirror (PostgreSQL 镜像)
+ */
+function memoryPositionToPgMirror(pos: Position, status: "OPEN" | "CLOSED" | "LIQUIDATED" = "OPEN"): PgPositionMirror {
+  const now = Date.now();
+  return {
+    id: pos.pairId,
+    trader: pos.trader.toLowerCase(),
+    token: pos.token.toLowerCase(),
+    symbol: `${pos.token.toLowerCase()}-ETH`,
+    is_long: pos.isLong,
+    size: pos.size?.toString() || "0",
+    entry_price: (pos.entryPrice || pos.averageEntryPrice || "0").toString(),
+    leverage: Number(pos.leverage) || 1,
+    collateral: (pos.collateral || "0").toString(),
+    maintenance_margin: (pos.maintenanceMargin || "0").toString(),
+    mark_price: (pos.markPrice || "0").toString(),
+    liquidation_price: (pos.liquidationPrice || "0").toString(),
+    unrealized_pnl: (pos.unrealizedPnL || "0").toString(),
+    margin_ratio: (pos.marginRatio || "10000").toString(),
+    funding_index: (pos.fundingIndex || "0").toString(),
+    funding_fee: (pos.fundingFee || "0").toString(),
+    is_liquidating: (pos as any).isLiquidating || false,
+    risk_level: pos.riskLevel || "low",
+    adl_score: (pos.adlScore || "0").toString(),
+    adl_ranking: pos.adlRanking || 1,
+    status,
+    created_at: pos.createdAt || now,
+    updated_at: now,
   };
 }
 
@@ -1093,7 +1148,8 @@ function dbPositionToMemory(dbPos: DBPosition): Position {
     bankruptcyPrice: "0",
     roe: "0",
     realizedPnL: "0",
-    accFundingFee: "0",
+    accFundingFee: dbPos.fundingFee || "0",
+    fundingFee: dbPos.fundingFee || "0",
     adlRanking: dbPos.adlRanking || 1,
     adlScore: dbPos.adlScore || "0",
     riskLevel: dbPos.riskLevel || "low",
@@ -1352,11 +1408,14 @@ async function executeADL(
       }).catch(e => console.error("[DB] Failed to save ADL trade:", e));
 
       // ✅ 记录 ADL 账单 (穿仓补偿)
+      // FIX: 使用 computeSettlementBalance 替代硬编码 "0"
+      const adlEffectiveAfter = computeSettlementBalance(normalizedTrader);
       RedisSettlementLogRepo.create({
         userAddress: normalizedTrader,
         type: "SETTLE_PNL",
         amount: (-amount).toString(),
-        balanceBefore: "0", balanceAfter: "0",
+        balanceBefore: adlEffectiveAfter.toString(),
+        balanceAfter: adlEffectiveAfter.toString(),
         onChainStatus: "ENGINE_SETTLED",
         proofData: JSON.stringify({
           token: position.token, pairId: position.pairId,
@@ -1551,13 +1610,17 @@ function onPriceChange(token: Address, oldPrice: bigint, newPrice: bigint): void
         pos.isLong
       );
 
-      // 计算当前保证金
-      const currentMargin = BigInt(pos.collateral) + upnl;
+      // 计算当前保证金 (包含累积资金费)
+      const accFundingFee = BigInt(pos.fundingFee || "0");
+      const currentMargin = BigInt(pos.collateral) + upnl + accFundingFee;
 
       // 动态 MMR
       // ⚠️ size 是 ETH 名义价值 (1e18 精度)，直接就是 positionValue
       const positionValue = BigInt(pos.size);
-      const leverage = BigInt(Math.round(parseFloat(pos.leverage) * 10000)); // 1e4 basis points
+      const effectiveCollateral = BigInt(pos.collateral) + accFundingFee;
+      const leverage = effectiveCollateral > 0n
+        ? (positionValue * 10000n) / effectiveCollateral
+        : BigInt(Math.round(parseFloat(pos.leverage) * 10000));
       const initialMarginRate = 10000n * 10000n / leverage;
       const baseMmr = 200n;
       const maxMmr = initialMarginRate / 2n;
@@ -1718,21 +1781,37 @@ function runRiskCheck(): void {
       pos.unrealizedPnL = upnl.toString();
       traderTotalPnL += upnl; // 累加到交易者总 PnL
 
-      // 计算当前保证金
-      const currentMargin = BigInt(pos.collateral) + upnl;
+      // 计算当前保证金 (包含累积资金费 — 资金费减少有效保证金)
+      const accFundingFee = BigInt(pos.fundingFee || "0"); // 负数 = 已扣除
+      const currentMargin = BigInt(pos.collateral) + upnl + accFundingFee;
       pos.margin = currentMargin.toString();
+
+      // 计算有效抵押品 (原始保证金 + 累积资金费) 用于动态强平价
+      const effectiveCollateral = BigInt(pos.collateral) + accFundingFee;
 
       // 动态 MMR (根据杠杆调整)
       // ⚠️ size 是 ETH 名义价值 (1e18 精度)
       const positionValue = BigInt(pos.size);
+      // 基于有效抵押品重新计算实际杠杆
+      const effectiveLeverage = effectiveCollateral > 0n
+        ? (positionValue * 10000n) / effectiveCollateral  // 1e4 精度
+        : BigInt(Math.round(parseFloat(pos.leverage) * 10000));
+      const leverage = effectiveLeverage;
       // MMR = min(2%, 初始保证金率 * 50%)
       // 这样确保 MMR < 初始保证金率，强平价才会在正确的一侧
-      const leverage = BigInt(Math.round(parseFloat(pos.leverage) * 10000)); // 转换为 1e4 精度
       const initialMarginRate = 10000n * 10000n / leverage; // 基点
       const baseMmr = 200n; // 基础 2%
       const maxMmr = initialMarginRate / 2n; // 不能超过初始保证金率的一半
       const mmr = Number(baseMmr < maxMmr ? baseMmr : maxMmr);
       pos.mmr = mmr.toString();
+
+      // 动态重算强平价 (基于有效杠杆，资金费越多→杠杆越高→强平价越近)
+      const entryPriceBI = BigInt(pos.entryPrice);
+      if (entryPriceBI > 0n && effectiveCollateral > 0n) {
+        pos.liquidationPrice = calculateLiquidationPrice(
+          entryPriceBI, effectiveLeverage, pos.isLong, BigInt(mmr)
+        ).toString();
+      }
 
       // 计算维持保证金
       const maintenanceMargin = (positionValue * BigInt(mmr)) / 10000n;
@@ -2084,7 +2163,7 @@ async function processLiquidations(): Promise<void> {
     tpslOrders.delete(pos.pairId);
 
     // 3. 同步删除 Redis 中的仓位 (Bug fix: 强平后必须清理 Redis)
-    deletePositionFromRedis(pos.pairId).catch(e =>
+    deletePositionFromRedis(pos.pairId, "LIQUIDATED").catch(e =>
       console.error("[Redis] Failed to delete liquidated position:", e));
 
     // 4. 记录强平到交易历史
@@ -2125,14 +2204,16 @@ async function processLiquidations(): Promise<void> {
     }).catch(e => console.error(`[DB] Failed to save liquidation trade:`, e));
 
     // ✅ 记录 LIQUIDATION 账单
+    // FIX: 使用 computeSettlementBalance 替代硬编码值
     try {
-      const liqLoss = -(collateral + pnl < 0n ? collateral : collateral + pnl);
+      const liqEffectiveAfter = computeSettlementBalance(normalizedTrader);
+      const liqEffectiveBefore = liqEffectiveAfter + collateral; // undo the -collateral mode2 adjustment
       await RedisSettlementLogRepo.create({
         userAddress: normalizedTrader,
         type: "LIQUIDATION",
         amount: pnl.toString(),
-        balanceBefore: collateral.toString(),
-        balanceAfter: "0",
+        balanceBefore: liqEffectiveBefore.toString(),
+        balanceAfter: liqEffectiveAfter.toString(),
         onChainStatus: "ENGINE_SETTLED",
         proofData: JSON.stringify({
           token: pos.token, pairId: pos.pairId, isLong: pos.isLong,
@@ -2612,9 +2693,11 @@ async function settleFunding(token: Address): Promise<void> {
       };
       payments.push(payment);
 
-      // 更新仓位的累计资金费
+      // 更新仓位的累计资金费和 fundingIndex
       const currentFundingFee = BigInt(pos.fundingFee || "0");
       pos.fundingFee = (currentFundingFee - fundingAmount).toString();
+      const currentIndex = BigInt(pos.fundingIndex || "0");
+      pos.fundingIndex = (currentIndex + 1n).toString();
 
       // 从 trader 余额中扣除资金费
       const traderAddr = pos.trader.toLowerCase() as Address;
@@ -3168,17 +3251,24 @@ async function processTPSLTriggerQueue(): Promise<void> {
       }).catch(e => console.error("[DB] Failed to save TP/SL trade:", e));
 
       // ✅ 记录 SETTLE_PNL 账单
+      // FIX: 使用 computeSettlementBalance 替代硬编码 "0" / returnAmount
+      const tpslEffectiveAfter = computeSettlementBalance(normalizedTrader);
+      const tpslPnlMinusFeeForBill = pnl - closeFee;
+      const tpslEffectiveBefore = tpslEffectiveAfter - tpslPnlMinusFeeForBill;
       RedisSettlementLogRepo.create({
         userAddress: normalizedTrader,
         type: "SETTLE_PNL",
         amount: pnl.toString(),
-        balanceBefore: "0", balanceAfter: returnAmount.toString(),
+        balanceBefore: tpslEffectiveBefore.toString(),
+        balanceAfter: tpslEffectiveAfter.toString(),
         onChainStatus: "ENGINE_SETTLED",
         proofData: JSON.stringify({
           token: position.token, pairId: order.pairId,
           isLong: position.isLong, triggerType,
           entryPrice: position.entryPrice, exitPrice: currentPrice.toString(),
           size: position.size, closeFee: closeFee.toString(),
+          returnAmount: returnAmount.toString(),
+          releasedCollateral: BigInt(position.collateral).toString(),
           closeType: triggerType === "tp" ? "take_profit" : "stop_loss",
         }),
         positionId: order.pairId, orderId: tpslTrade.orderId, txHash: null,
@@ -3320,6 +3410,29 @@ function broadcastRiskData(): void {
     for (const ws of wsSet) {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(message);
+      }
+    }
+
+    // 同步推送该交易者的余额更新 (包含最新 unrealizedPnL + usedMargin)
+    // 解决: deposit 页面 WS storeBalance 中 unrealizedPnL 和 usedMargin 为 0 的问题
+    const traderBalance = getUserBalance(trader);
+    const balMessage = JSON.stringify({
+      type: "balance",
+      data: {
+        trader,
+        totalBalance: traderBalance.totalBalance.toString(),
+        availableBalance: traderBalance.availableBalance.toString(),
+        usedMargin: (traderBalance.usedMargin || 0n).toString(),
+        unrealizedPnL: (traderBalance.unrealizedPnL || 0n).toString(),
+        walletBalance: (traderBalance.walletBalance || 0n).toString(),
+        settlementAvailable: (traderBalance.settlementAvailable || 0n).toString(),
+        settlementLocked: (traderBalance.settlementLocked || 0n).toString(),
+      },
+      timestamp: Math.floor(now / 1000),
+    });
+    for (const ws of wsSet) {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(balMessage);
       }
     }
   }
@@ -4179,6 +4292,44 @@ function getUserBalance(trader: Address): UserBalance {
     userBalances.set(normalizedTrader, balance);
   }
   return balance;
+}
+
+/**
+ * 计算用户可用余额 (与 API balance endpoint 的 availableBalance 一致)
+ * = (链上 Settlement 可用 + 链下 mode2 调整) - 仓位保证金 - 挂单锁定
+ * 这是用户在前端右上角看到的余额
+ */
+function computeSettlementBalance(trader: Address): bigint {
+  const normalizedTrader = trader.toLowerCase() as Address;
+  const balance = getUserBalance(normalizedTrader);
+  const mode2Adj = getMode2Adjustment(normalizedTrader);
+  const effective = (balance.settlementAvailable || 0n) + mode2Adj;
+
+  // 计算仓位保证金 (与 balance API 一致)
+  const positions = userPositions.get(normalizedTrader) || [];
+  let positionMargin = 0n;
+  for (const pos of positions) {
+    positionMargin += BigInt(pos.collateral || "0");
+  }
+
+  // 计算挂单锁定金额 (与 balance API 一致)
+  let pendingOrdersLocked = 0n;
+  const userOrders = engine.getUserOrders(normalizedTrader);
+  for (const order of userOrders) {
+    if (order.status === "PENDING" || order.status === "PARTIALLY_FILLED") {
+      const marginInfo = orderMarginInfos.get(order.id);
+      if (marginInfo) {
+        const unfilledRatio = marginInfo.totalSize > 0n
+          ? ((marginInfo.totalSize - marginInfo.settledSize) * 10000n) / marginInfo.totalSize
+          : 10000n;
+        pendingOrdersLocked += (marginInfo.totalDeducted * unfilledRatio) / 10000n;
+      }
+    }
+  }
+
+  let available = effective - positionMargin - pendingOrdersLocked;
+  if (available < 0n) available = 0n;
+  return available;
 }
 
 /**
@@ -5042,7 +5193,9 @@ async function syncFullTokenData(): Promise<void> {
         };
         const price = priceResult.status === "success" ? (priceResult.result as bigint) : 0n;
 
-        TOKEN_POOL_CACHE.set(SUPPORTED_TOKENS[i].toLowerCase(), {
+        const tokenAddr = SUPPORTED_TOKENS[i].toLowerCase();
+        const prevState = TOKEN_POOL_CACHE.get(tokenAddr);
+        TOKEN_POOL_CACHE.set(tokenAddr, {
           creator: pool.creator,
           createdAt: Number(pool.createdAt),
           isGraduated: pool.isGraduated,
@@ -5054,6 +5207,13 @@ async function syncFullTokenData(): Promise<void> {
           price: price.toString(),
         });
         cached++;
+
+        // Sync graduation status to Redis metadata when chain state changes
+        if (pool.isGraduated && (!prevState || !prevState.isGraduated)) {
+          import("./modules/tokenMetadata").then(({ updateGraduationStatus }) => {
+            updateGraduationStatus(tokenAddr, true, Math.floor(Date.now() / 1000)).catch(() => {});
+          });
+        }
       }
     }
     console.log(`[TokenPool] Cached full pool state for ${cached}/${SUPPORTED_TOKENS.length} tokens via multicall`);
@@ -6726,17 +6886,17 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
     // P2-4: 仓位大小限制检查
     // ============================================================
     if (sizeBigInt > TRADING.MAX_POSITION_SIZE) {
-      return errorResponse(`Position too large. Maximum: ${TRADING.MAX_POSITION_SIZE} (1000 ETH)`);
+      return errorResponse(`Position too large. Maximum: ${Number(TRADING.MAX_POSITION_SIZE / PRECISION_MULTIPLIER.ETH)} BNB`);
     }
     if (sizeBigInt < TRADING.MIN_POSITION_SIZE) {
-      return errorResponse(`Position too small. Minimum: ${TRADING.MIN_POSITION_SIZE} (0.001 ETH)`);
+      return errorResponse(`Position too small. Minimum: ${Number(TRADING.MIN_POSITION_SIZE * 1000n / PRECISION_MULTIPLIER.ETH) / 1000} BNB`);
     }
 
     // ============================================================
     // AUDIT-FIX H-07: Validate leverage against MAX_LEVERAGE
     // Leverage is in 1e4 precision (10x = 100000n), so compare scaled values
     // ============================================================
-    const maxLeverageScaled = TRADING.MAX_LEVERAGE * PRECISION_MULTIPLIER.LEVERAGE; // 10 * 10000 = 100000
+    const maxLeverageScaled = TRADING.MAX_LEVERAGE * PRECISION_MULTIPLIER.LEVERAGE; // 75 * 10000 = 750000
     const minLeverageScaled = TRADING.MIN_LEVERAGE * PRECISION_MULTIPLIER.LEVERAGE; // 1 * 10000 = 10000
     if (leverageBigInt < minLeverageScaled || leverageBigInt > maxLeverageScaled) {
       return errorResponse(`Invalid leverage: must be between ${TRADING.MIN_LEVERAGE}x and ${TRADING.MAX_LEVERAGE}x`);
@@ -8727,19 +8887,26 @@ async function handleClosePair(req: Request, pairId: string): Promise<Response> 
         timestamp: closeTrade.timestamp, type: "close",
       }).catch(e => console.error("[DB] Failed to save close trade:", e));
 
-      // ✅ 记录 SETTLE_PNL 账单 (reuse `balance` from L8113 — same Map reference)
+      // ✅ 记录 SETTLE_PNL 账单
+      // FIX: 使用 computeSettlementBalance (chain + mode2) 与前端右上角余额一致
+      // 旧代码用 balance.totalBalance 包含了已释放的保证金，导致 balanceAfter 虚高
       try {
+        const effectiveAfter = computeSettlementBalance(normalizedTrader);
+        const pnlMinusFee = closePnL - closeFee;
+        const effectiveBefore = effectiveAfter - pnlMinusFee;
         await RedisSettlementLogRepo.create({
           userAddress: normalizedTrader,
           type: "SETTLE_PNL",
           amount: closePnL.toString(),
-          balanceBefore: (balance.totalBalance - returnAmount).toString(),
-          balanceAfter: balance.totalBalance.toString(),
+          balanceBefore: effectiveBefore.toString(),
+          balanceAfter: effectiveAfter.toString(),
           onChainStatus: "ENGINE_SETTLED",
           proofData: JSON.stringify({
             token: position.token, pairId, isLong: position.isLong,
             entryPrice: position.entryPrice, exitPrice: currentPrice.toString(),
             size: sizeToClose.toString(), closeFee: closeFee.toString(),
+            returnAmount: returnAmount.toString(),
+            releasedCollateral: releasedCollateral.toString(),
             closeType: "manual",
           }),
           positionId: pairId, orderId: closeTrade.orderId, txHash: null,
@@ -8808,18 +8975,24 @@ async function handleClosePair(req: Request, pairId: string): Promise<Response> 
       }).catch(e => console.error("[DB] Failed to save partial close trade:", e));
 
       // ✅ 记录部分平仓 SETTLE_PNL 账单
+      // FIX: 使用 computeSettlementBalance 替代硬编码 "0"
       try {
-        const bal = getUserBalance(normalizedTrader);
+        const effectiveAfter = computeSettlementBalance(normalizedTrader);
+        const partialPnlMinusFeeForBill = closePnL - closeFee;
+        const effectiveBefore = effectiveAfter - partialPnlMinusFeeForBill;
         await RedisSettlementLogRepo.create({
           userAddress: normalizedTrader,
           type: "SETTLE_PNL",
           amount: closePnL.toString(),
-          balanceBefore: "0", balanceAfter: "0",
+          balanceBefore: effectiveBefore.toString(),
+          balanceAfter: effectiveAfter.toString(),
           onChainStatus: "ENGINE_SETTLED",
           proofData: JSON.stringify({
             token: position.token, pairId, isLong: position.isLong,
             entryPrice: position.entryPrice, exitPrice: currentPrice.toString(),
             size: sizeToClose.toString(), closeFee: closeFee.toString(),
+            returnAmount: returnAmount.toString(),
+            releasedCollateral: releasedCollateral.toString(),
             closeType: "partial",
           }),
           positionId: pairId, orderId: partialCloseTrade.orderId, txHash: null,
@@ -13159,6 +13332,7 @@ async function handleWSMessage(ws: WebSocket, message: string): Promise<void> {
         if (!pool) continue;
         const priceWei = BigInt(pool.price || "0");
         const marketCapWei = priceWei > 0n ? (priceWei * TOTAL_SUPPLY_WEI) / 10n ** 18n : 0n;
+
         tokens.push({
           address: addr,
           name: info?.name || "Unknown",
@@ -13226,7 +13400,7 @@ async function startServer(): Promise<void> {
   console.log("[Server] Connecting to PostgreSQL (order mirror)...");
   const pgConnected = await connectPostgres();
   if (pgConnected) {
-    console.log("[Server] ✅ PostgreSQL connected — order mirroring enabled");
+    console.log("[Server] ✅ PostgreSQL connected — order + position mirroring enabled");
   } else {
     console.warn("[Server] ⚠️ PostgreSQL not available — running with Redis only (orders not mirrored)");
   }
@@ -13698,6 +13872,12 @@ async function startServer(): Promise<void> {
                 price: spotPriceEthRaw,
                 source: "uniswap_v2",
               });
+              // Update TOKEN_POOL_CACHE with DEX ETH reserve for graduated tokens
+              const poolCache = TOKEN_POOL_CACHE.get(token.toLowerCase());
+              if (poolCache) {
+                const ethReserve = info.isWethToken0 ? reserve0 : reserve1;
+                poolCache.realETHReserve = ethReserve.toString();
+              }
             }
           }
         }
@@ -13833,6 +14013,101 @@ async function startServer(): Promise<void> {
   }
 
   // ============================================================
+  // 🔄 Position recovery from PostgreSQL (如果 Redis 中仓位为空)
+  // ============================================================
+  if (isPostgresConnected()) {
+    const memoryPositionCount = Array.from(userPositions.values()).reduce((sum, arr) => sum + arr.length, 0);
+    if (memoryPositionCount === 0) {
+      console.log("[Server] Redis had no positions, attempting PostgreSQL recovery...");
+      try {
+        const pgPositions = await PositionMirrorRepo.getActivePositions();
+        if (pgPositions.length > 0) {
+          let recovered = 0;
+          for (const pgPos of pgPositions) {
+            try {
+              // 跳过强平中或 zombie 仓位
+              if (pgPos.is_liquidating) continue;
+              const collateral = BigInt(pgPos.collateral || "0");
+              const size = BigInt(pgPos.size || "0");
+              if (collateral <= 0n && size > 0n) continue;
+              if (size <= 0n) continue;
+
+              const token = pgPos.token.toLowerCase() as Address;
+              const trader = pgPos.trader.toLowerCase() as Address;
+
+              const memPos: Position = {
+                pairId: pgPos.id,
+                trader,
+                token,
+                isLong: pgPos.is_long,
+                size: pgPos.size,
+                entryPrice: pgPos.entry_price,
+                averageEntryPrice: pgPos.entry_price,
+                leverage: pgPos.leverage.toString(),
+                collateral: pgPos.collateral,
+                margin: pgPos.collateral,
+                maintenanceMargin: pgPos.maintenance_margin || "0",
+                markPrice: pgPos.mark_price || "0",
+                liquidationPrice: pgPos.liquidation_price || "0",
+                bankruptcyPrice: "0",
+                breakEvenPrice: pgPos.entry_price,
+                unrealizedPnL: pgPos.unrealized_pnl || "0",
+                realizedPnL: "0",
+                marginRatio: pgPos.margin_ratio || "10000",
+                mmr: "200",
+                roe: "0",
+                fundingFee: pgPos.funding_fee || "0",
+                fundingIndex: pgPos.funding_index || "0",
+                accFundingFee: pgPos.funding_fee || "0",
+                takeProfitPrice: null,
+                stopLossPrice: null,
+                orderId: "",
+                orderIds: [],
+                counterparty: "0x0000000000000000000000000000000000000000" as Address,
+                createdAt: pgPos.created_at,
+                updatedAt: pgPos.updated_at,
+                adlRanking: pgPos.adl_ranking || 1,
+                adlScore: pgPos.adl_score || "0",
+                riskLevel: (pgPos.risk_level as Position["riskLevel"]) || "low",
+                isLiquidatable: false,
+                isAdlCandidate: false,
+              };
+
+              // 去重: 同 (trader, token, isLong) 只保留一个
+              const existing = userPositions.get(trader) || [];
+              const dupeIdx = existing.findIndex(p => p.token === token && p.isLong === memPos.isLong);
+              if (dupeIdx >= 0) {
+                if (BigInt(memPos.size) > BigInt(existing[dupeIdx].size)) {
+                  existing[dupeIdx] = memPos;
+                }
+              } else {
+                existing.push(memPos);
+              }
+              userPositions.set(trader, existing);
+
+              // 回写 Redis 保持一致性
+              savePositionToRedis(memPos).catch(e =>
+                console.error(`[PG Recovery] Failed to re-save position to Redis: ${e.message}`)
+              );
+              recovered++;
+            } catch (err: any) {
+              console.error(`[PG Recovery] Failed to restore position ${pgPos.id}: ${err.message}`);
+            }
+          }
+          console.log(`[Server] ✅ Recovered ${recovered}/${pgPositions.length} positions from PostgreSQL`);
+        } else {
+          console.log("[Server] PostgreSQL also has no active positions");
+        }
+      } catch (pgError: any) {
+        console.error(`[Server] PostgreSQL position recovery failed: ${pgError.message}`);
+      }
+    } else {
+      const pgCount = await PositionMirrorRepo.countActive().catch(() => 0);
+      console.log(`[Server] Memory has ${memoryPositionCount} positions, PostgreSQL mirror has ${pgCount} active positions`);
+    }
+  }
+
+  // ============================================================
   // 🧹 清理孤儿 orderMarginInfos (重启后 Redis 恢复的记录可能已过期)
   // ============================================================
   // orderMarginInfos 在 Redis 恢复时加载 (line ~9822)，但对应的订单可能已成交/取消
@@ -13859,16 +14134,14 @@ async function startServer(): Promise<void> {
   }
 
   // ============================================================
-  // 🛡️ 启动安全检查: 单边仓位检测 (防止无对手方的虚假盈利)
+  // 🛡️ 启动安全检查: 单边仓位检测 (仅日志，不强制关闭)
   // ============================================================
-  // 永续合约是零和博弈: 多头盈利 = 空头亏损
-  // 如果某个代币只有单边仓位 (没有对手方)，说明对手方已被强平但 ADL 未正确执行
-  // 这种仓位的"盈利"是虚假的，系统中没有足够资金兑付
-  // 处理: 以当前价格强制平仓，只返还保证金 (不支付虚假盈利)
+  // PerpVault LP 架构下，单边仓位是正常的 — LP 池是对手方
+  // 对手方被强平后，剩余仓位的盈利由 PerpVault 兜底
+  // 仅记录日志供人工审查，不自动关闭
   {
     const tokenPositionMap = new Map<string, { longs: Position[], shorts: Position[] }>();
 
-    // 按 token 分组统计多空仓位
     for (const [, positions] of userPositions) {
       for (const pos of positions) {
         const tok = (pos.token || "").toLowerCase();
@@ -13891,58 +14164,9 @@ async function startServer(): Promise<void> {
       const hasShorts = group.shorts.length > 0;
 
       if (hasLongs && !hasShorts) {
-        // 只有多头，没有空头对手方
-        console.log(`[SafetyCheck] Token ${tok.slice(0, 10)}: ${group.longs.length} LONG positions with NO SHORT counterparty`);
-        for (const pos of group.longs) {
-          const pnl = BigInt(pos.unrealizedPnL || "0");
-          if (pnl > 0n) {
-            console.log(`[SafetyCheck] ⚠️ Orphan profitable LONG: ${pos.trader.slice(0, 10)} pnl=Ξ${Number(pnl) / 1e18}, collateral=Ξ${Number(BigInt(pos.collateral)) / 1e18}`);
-            console.log(`[SafetyCheck] Force-closing position ${pos.pairId} — returning collateral only, no profit payout`);
-
-            // 从 userPositions 中移除
-            const traderAddr = pos.trader.toLowerCase() as Address;
-            const traderPositions = userPositions.get(traderAddr) || [];
-            const filtered = traderPositions.filter(p => p.pairId !== pos.pairId);
-            userPositions.set(traderAddr, filtered);
-
-            // 退还保证金 (但不退盈利 — 因为没有对手方来支付)
-            const collateral = BigInt(pos.collateral);
-            adjustUserBalance(traderAddr, collateral, "ORPHAN_CLOSE_REFUND");
-            // Mode 2 调整: 保证金退还 = 净零 (开仓扣了 collateral，现在退回)
-            // 不需要 addMode2Adjustment，因为 adjustUserBalance 已经增加了 available
-
-            // 从 Redis 删除仓位
-            PositionRepo.delete(pos.pairId).catch(e =>
-              console.error(`[SafetyCheck] Failed to delete position from Redis: ${e}`)
-            );
-
-            console.log(`[SafetyCheck] ✅ Force-closed orphan LONG, refunded Ξ${Number(collateral) / 1e18}`);
-          }
-        }
+        console.log(`[SafetyCheck] Token ${tok.slice(0, 10)}: ${group.longs.length} LONG position(s), no SHORT — PerpVault LP is counterparty`);
       } else if (hasShorts && !hasLongs) {
-        // 只有空头，没有多头对手方
-        console.log(`[SafetyCheck] Token ${tok.slice(0, 10)}: ${group.shorts.length} SHORT positions with NO LONG counterparty`);
-        for (const pos of group.shorts) {
-          const pnl = BigInt(pos.unrealizedPnL || "0");
-          if (pnl > 0n) {
-            console.log(`[SafetyCheck] ⚠️ Orphan profitable SHORT: ${pos.trader.slice(0, 10)} pnl=Ξ${Number(pnl) / 1e18}, collateral=Ξ${Number(BigInt(pos.collateral)) / 1e18}`);
-            console.log(`[SafetyCheck] Force-closing position ${pos.pairId} — returning collateral only, no profit payout`);
-
-            const traderAddr = pos.trader.toLowerCase() as Address;
-            const traderPositions = userPositions.get(traderAddr) || [];
-            const filtered = traderPositions.filter(p => p.pairId !== pos.pairId);
-            userPositions.set(traderAddr, filtered);
-
-            const collateral = BigInt(pos.collateral);
-            adjustUserBalance(traderAddr, collateral, "ORPHAN_CLOSE_REFUND");
-
-            PositionRepo.delete(pos.pairId).catch(e =>
-              console.error(`[SafetyCheck] Failed to delete position from Redis: ${e}`)
-            );
-
-            console.log(`[SafetyCheck] ✅ Force-closed orphan SHORT, refunded Ξ${Number(collateral) / 1e18}`);
-          }
-        }
+        console.log(`[SafetyCheck] Token ${tok.slice(0, 10)}: ${group.shorts.length} SHORT position(s), no LONG — PerpVault LP is counterparty`);
       }
     }
   }

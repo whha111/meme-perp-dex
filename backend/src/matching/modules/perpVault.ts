@@ -753,6 +753,7 @@ export async function executeBatchSettlement(): Promise<void> {
             abi: PERP_VAULT_ABI,
             functionName: "settleTraderLoss",
             args: [item.amount],
+            value: item.amount,
           });
           totalSettled += item.amount;
         } else if (item.type === "liquidation") {
@@ -761,6 +762,7 @@ export async function executeBatchSettlement(): Promise<void> {
             abi: PERP_VAULT_ABI,
             functionName: "settleLiquidation",
             args: [item.collateralETH, item.liquidatorReward, item.liquidator],
+            value: item.collateralETH,
           });
           totalSettled += item.collateralETH;
         } else {
@@ -770,6 +772,7 @@ export async function executeBatchSettlement(): Promise<void> {
             abi: PERP_VAULT_ABI,
             functionName: "collectFee",
             args: [item.amount],
+            value: item.amount,
           });
           feesCollectedCount++;
           totalSettled += item.amount;
