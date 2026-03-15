@@ -38,9 +38,10 @@ import { usePoolState } from "@/hooks/spot/usePoolState";
 import { useWalletBalance } from "@/contexts/WalletBalanceContext";
 import { Copy, Check, Key, RefreshCw, ExternalLink } from "lucide-react";
 
-// AUDIT-FIX H-06: Leverage options must match engine MAX_LEVERAGE (10x).
+// AUDIT-FIX H-06: Leverage options must match engine MAX_LEVERAGE (75x).
 // Previously allowed up to 100x which caused confusing UX failures when engine rejected >10x.
-const LEVERAGE_OPTIONS = [1, 2, 3, 5, 10];
+// Updated to 75x after user testing feedback — meme tokens need higher leverage for viable trading.
+const LEVERAGE_OPTIONS = [1, 2, 3, 5, 10, 25, 50, 75];
 
 interface PerpetualOrderPanelV2Props {
   symbol: string;
@@ -657,7 +658,7 @@ export function PerpetualOrderPanelV2({
             <input
               type="range"
               min="1"
-              max="10"
+              max={LEVERAGE_OPTIONS[LEVERAGE_OPTIONS.length - 1]}
               value={leverage}
               onChange={(e) => setLeverage(parseInt(e.target.value))}
               className="w-full h-1 bg-okx-bg-hover rounded-lg appearance-none cursor-pointer accent-[#A3E635]"

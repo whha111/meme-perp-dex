@@ -60,7 +60,6 @@ export default function DepositPage() {
     settlementBalance,
     wethBalance,
     nativeEthBalance,
-    formattedWethBalance,
     refreshBalance: refreshGlobalBalance,
   } = useWalletBalance();
 
@@ -265,11 +264,31 @@ export default function DepositPage() {
     2: { label: t("depositBNBLabel"), desc: t("depositBNBDesc") },
   };
 
-  // Computed real balances from usePerpetualV2
-  const availableBalance = balance?.available || "0";
-  const lockedMargin = balance?.locked || "0";
-  const unrealizedPnL = balance?.unrealizedPnL || "0";
-  const equity = balance?.equity || "0";
+  // Computed real balances from usePerpetualV2 (matching engine data)
+  const availableBalance = balance?.available ?? 0n;
+  const lockedMargin = balance?.locked ?? 0n;
+  const unrealizedPnL = balance?.unrealizedPnL ?? 0n;
+  // Equity = available + usedMargin + unrealizedPnL (matching engine's full account value)
+  const equity = balance?.equity ?? 0n;
+
+  // 总资产 = 引擎 equity (包含 mode2 调整 + 仓位 + 未实现盈亏) + 钱包余额
+  // 当引擎 equity > 0 时优先使用引擎数据，否则回退到链上余额
+  const totalAssetsBigInt = useMemo(() => {
+    if (equity && equity > 0n) {
+      // equity already includes settlement + mode2 + margin + unrealizedPnL
+      // Add wallet balance (native BNB/WBNB not in settlement)
+      return equity + walletOnlyBalance;
+    }
+    // Fallback: on-chain only
+    return totalBalance;
+  }, [equity, walletOnlyBalance, totalBalance]);
+
+  const formattedTotalAssets = useMemo(() => {
+    const num = Number(totalAssetsBigInt) / 1e18;
+    if (num >= 1) return num.toFixed(4);
+    if (num >= 0.0001) return num.toFixed(6);
+    return num === 0 ? "0.0000" : num.toFixed(8);
+  }, [totalAssetsBigInt]);
 
   const fmtBalance = (val: string | bigint) => {
     const num = Number(val) / 1e18;
@@ -278,7 +297,7 @@ export default function DepositPage() {
     return num === 0 ? "0.0000" : num.toFixed(8);
   };
 
-  const equityUsd = (Number(equity) / 1e18 * 558).toFixed(2); // BNB ~$558
+  const equityUsd = (Number(totalAssetsBigInt) / 1e18 * 558).toFixed(2); // BNB ~$558
 
   return (
     <div className="min-h-screen bg-okx-bg-primary text-okx-text-primary">
@@ -611,10 +630,10 @@ export default function DepositPage() {
             <div className="meme-card p-6 space-y-5">
               <h3 className="text-lg font-bold">{t("balanceOverview")}</h3>
 
-              {/* Total Balance */}
+              {/* Total Balance — uses matching engine equity (not just on-chain) */}
               <div className="text-center py-4 border-b border-okx-border-primary">
                 <div className="text-3xl font-bold font-mono text-meme-lime">
-                  {formattedWethBalance} BNB
+                  {formattedTotalAssets} BNB
                 </div>
                 <div className="text-sm text-okx-text-tertiary mt-1">
                   {t("totalAssets")}

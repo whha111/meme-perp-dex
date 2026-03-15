@@ -200,19 +200,20 @@ export function PerpetualTradingTerminal({
     return Number(fundingRateData.rate) >= 0;
   }, [fundingRateData?.rate]);
 
-  // 资金费率倒计时
+  // 资金费率倒计时 — 使用引擎推送的 nextFundingTime，到期后自动推进到下一个周期
   const [fundingCountdown, setFundingCountdown] = useState<string>("--:--");
   useEffect(() => {
-    const FUNDING_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-    const nextTime = fundingRateData?.nextFundingTime ||
+    const FUNDING_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes (match engine FUNDING.BASE_INTERVAL_MS)
+    let nextTime = fundingRateData?.nextFundingTime ||
       Math.ceil(Date.now() / FUNDING_INTERVAL_MS) * FUNDING_INTERVAL_MS;
 
     const updateCountdown = () => {
-      const diff = nextTime - Date.now();
-      if (diff <= 0) {
-        setFundingCountdown("00:00");
-        return;
+      const now = Date.now();
+      // Auto-advance to next period when countdown expires
+      while (nextTime <= now) {
+        nextTime += FUNDING_INTERVAL_MS;
       }
+      const diff = nextTime - now;
       const minutes = Math.floor(diff / 60000);
       const seconds = Math.floor((diff % 60000) / 1000);
       setFundingCountdown(`${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`);
