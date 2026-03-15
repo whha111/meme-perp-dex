@@ -147,7 +147,7 @@ export default function InvitePage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#000000] text-white">
+    <div className="min-h-screen bg-okx-bg-primary text-okx-text-primary">
       <Navbar />
 
       {!isConnected ? (
@@ -155,11 +155,11 @@ export default function InvitePage() {
         <div className="flex flex-col items-center justify-center py-32 px-4">
           <svg className="w-16 h-16 mb-6 text-meme-lime mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}><path strokeLinecap="round" strokeLinejoin="round" d="M21 11.25v8.25a1.5 1.5 0 01-1.5 1.5H5.25a1.5 1.5 0 01-1.5-1.5v-8.25M12 4.875A2.625 2.625 0 109.375 7.5H12m0-2.625V7.5m0-2.625A2.625 2.625 0 1114.625 7.5H12m0 0V21m-8.625-9.75h18c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125h-18c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125z" /></svg>
           <h2 className="text-2xl font-bold mb-3">{t("connectWalletTitle")}</h2>
-          <p className="text-[#888888] text-base">{t("connectWalletDesc")}</p>
+          <p className="text-okx-text-secondary text-base">{t("connectWalletDesc")}</p>
         </div>
       ) : loading ? (
         <div className="flex justify-center items-center py-32">
-          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[#BFFF00]" />
+          <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-meme-lime" />
         </div>
       ) : (
         <>
@@ -169,7 +169,7 @@ export default function InvitePage() {
               <span className="text-sm text-red-400">{error}</span>
               <button
                 onClick={() => address && fetchReferrerInfo(address)}
-                className="text-xs text-red-300 hover:text-white underline ml-4"
+                className="text-xs text-red-300 hover:text-okx-text-primary underline ml-4"
               >
                 {t("retry") || "Retry"}
               </button>
@@ -179,29 +179,29 @@ export default function InvitePage() {
           {/* Hero Section — gradient bg */}
           <div
             className="px-16 py-12"
-            style={{ background: "linear-gradient(180deg, #0a0f00 0%, #000000 100%)" }}
+            style={{ background: "linear-gradient(180deg, var(--okx-bg-secondary) 0%, var(--okx-bg-primary) 100%)" }}
           >
-            <h1 className="text-4xl font-extrabold text-white mb-6">
+            <h1 className="text-4xl font-extrabold text-okx-text-primary mb-6">
               {t("heroTitle")}
             </h1>
-            <p className="text-base text-[#888888] mb-6">
+            <p className="text-base text-okx-text-secondary mb-6">
               {t("heroSubtitle")}
             </p>
 
             {/* Link Row */}
             <div className="flex items-center gap-3">
-              <div className="flex items-center px-5 py-3.5 bg-[#111111] border border-[#333333] rounded-lg w-[520px]">
-                <span className="text-sm font-mono text-[#BFFF00] truncate">
+              <div className="flex items-center px-5 py-3.5 bg-okx-bg-card border border-okx-border-secondary rounded-lg w-[520px]">
+                <span className="text-sm font-mono text-meme-lime truncate">
                   {inviteLink || "https://memeperp.io/invite/..."}
                 </span>
               </div>
               <button
                 onClick={handleCopy}
-                className="px-7 py-3.5 bg-[#BFFF00] text-black text-sm font-bold rounded-lg hover:bg-[#d4ff4d] transition-colors"
+                className="px-7 py-3.5 bg-meme-lime text-black text-sm font-bold rounded-lg hover:brightness-110 transition-colors"
               >
                 {copied ? t("copied") : t("copyLink")}
               </button>
-              <button className="px-7 py-3.5 border border-[#BFFF00] text-[#BFFF00] text-sm font-semibold rounded-lg hover:bg-[#BFFF00]/10 transition-colors">
+              <button className="px-7 py-3.5 border border-meme-lime text-meme-lime text-sm font-semibold rounded-lg hover:bg-meme-lime/10 transition-colors">
                 {t("sharePoster")}
               </button>
             </div>
@@ -210,54 +210,54 @@ export default function InvitePage() {
           {/* Stats Row — 4 cards */}
           <div className="flex gap-5 px-16 py-6">
             {/* Card 1: Total Invited */}
-            <div className="flex-1 bg-[#111111] border border-[#1a1a1a] rounded-xl p-6">
-              <div className="text-[13px] text-[#888888] mb-2">{t("totalInvited")}</div>
+            <div className="flex-1 bg-okx-bg-card border border-okx-border-primary rounded-xl p-6">
+              <div className="text-sm text-okx-text-secondary mb-2">{t("totalInvited")}</div>
               <div className="flex items-baseline gap-1">
-                <span className="text-[32px] font-extrabold font-mono text-[#BFFF00]">
+                <span className="text-[32px] font-extrabold font-mono text-meme-lime">
                   {info?.totalInvites ?? 0}
                 </span>
-                <span className="text-sm text-[#666666]">{t("personUnit")}</span>
+                <span className="text-sm text-okx-text-tertiary">{t("personUnit")}</span>
               </div>
             </div>
 
             {/* Card 2: Total Rebate */}
-            <div className="flex-1 bg-[#111111] border border-[#1a1a1a] rounded-xl p-6">
-              <div className="text-[13px] text-[#888888] mb-2">{t("totalRebate")}</div>
+            <div className="flex-1 bg-okx-bg-card border border-okx-border-primary rounded-xl p-6">
+              <div className="text-sm text-okx-text-secondary mb-2">{t("totalRebate")}</div>
               <div className="flex items-baseline gap-1">
-                <span className="text-[32px] font-extrabold font-mono text-white">
+                <span className="text-[32px] font-extrabold font-mono text-okx-text-primary">
                   {info?.totalEarned ?? "0"}
                 </span>
-                <span className="text-sm text-[#666666]">ETH</span>
+                <span className="text-sm text-okx-text-tertiary">ETH</span>
               </div>
             </div>
 
             {/* Card 3: Pending Rebate + Withdraw */}
-            <div className="flex-1 bg-[#111111] border border-[#1a1a1a] rounded-xl p-6">
-              <div className="text-[13px] text-[#888888] mb-2">{t("monthlyRebate")}</div>
+            <div className="flex-1 bg-okx-bg-card border border-okx-border-primary rounded-xl p-6">
+              <div className="text-sm text-okx-text-secondary mb-2">{t("monthlyRebate")}</div>
               <div className="flex items-baseline gap-1">
-                <span className="text-[32px] font-extrabold font-mono text-white">
+                <span className="text-[32px] font-extrabold font-mono text-okx-text-primary">
                   {info?.monthlyEarned ?? "0"}
                 </span>
-                <span className="text-sm text-[#666666]">ETH</span>
+                <span className="text-sm text-okx-text-tertiary">ETH</span>
               </div>
               {/* C-4: Withdraw button */}
               <button
                 onClick={handleWithdraw}
                 disabled={withdrawing || !info?.monthlyEarned || info.monthlyEarned === "0" || info.monthlyEarned === "0.0000"}
-                className="mt-3 w-full px-3 py-2 bg-[#BFFF00] text-black text-xs font-bold rounded-lg hover:bg-[#d4ff4d] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                className="mt-3 w-full px-3 py-2 bg-meme-lime text-black text-xs font-bold rounded-lg hover:brightness-110 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 {withdrawing ? t("withdrawing") || "Withdrawing..." : withdrawSuccess ? (t("withdrawSuccess") || "✓ Withdrawn!") : (t("withdraw") || "Withdraw")}
               </button>
             </div>
 
             {/* Card 4: Commission Rate */}
-            <div className="flex-1 bg-[#111111] border border-[#1a1a1a] rounded-xl p-6">
-              <div className="text-[13px] text-[#888888] mb-2">{t("currentLevel")}</div>
+            <div className="flex-1 bg-okx-bg-card border border-okx-border-primary rounded-xl p-6">
+              <div className="text-sm text-okx-text-secondary mb-2">{t("currentLevel")}</div>
               <div className="flex items-baseline gap-1">
-                <span className="text-[32px] font-extrabold font-mono text-[#BFFF00]">
+                <span className="text-[32px] font-extrabold font-mono text-meme-lime">
                   {COMMISSION_RATES.level1}%
                 </span>
-                <span className="text-sm text-[#666666]">
+                <span className="text-sm text-okx-text-tertiary">
                   {t("rebateSuffix")}
                 </span>
               </div>
@@ -268,22 +268,22 @@ export default function InvitePage() {
           <div className="flex gap-8 px-16 pb-12">
             {/* Left Column: Commission Rates */}
             <div className="flex-1 flex flex-col gap-4">
-              <h2 className="text-lg font-bold text-white">{t("rebateTierTitle")}</h2>
+              <h2 className="text-lg font-bold text-okx-text-primary">{t("rebateTierTitle")}</h2>
 
               {/* Commission Rate Cards */}
-              <div className="bg-[#111111] border border-[#1a1a1a] rounded-xl p-6 flex flex-col gap-5">
+              <div className="bg-okx-bg-card border border-okx-border-primary rounded-xl p-6 flex flex-col gap-5">
                 {/* Level 1: Direct Referral */}
-                <div className="flex items-center justify-between py-4 border-b border-[#1a1a1a]">
+                <div className="flex items-center justify-between py-4 border-b border-okx-border-primary">
                   <div className="flex flex-col gap-1">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-white">{t("level1Label")}</span>
-                      <span className="text-[9px] font-bold text-black bg-[#BFFF00] px-1.5 py-0.5 rounded">
+                      <span className="text-sm font-semibold text-okx-text-primary">{t("level1Label")}</span>
+                      <span className="text-xs font-bold text-black bg-meme-lime px-1.5 py-0.5 rounded">
                         L1
                       </span>
                     </div>
-                    <span className="text-xs text-[#888888]">{t("level1Desc")}</span>
+                    <span className="text-xs text-okx-text-secondary">{t("level1Desc")}</span>
                   </div>
-                  <span className="text-3xl font-extrabold font-mono text-[#BFFF00]">
+                  <span className="text-3xl font-extrabold font-mono text-meme-lime">
                     {COMMISSION_RATES.level1}%
                   </span>
                 </div>
@@ -292,22 +292,22 @@ export default function InvitePage() {
                 <div className="flex items-center justify-between py-4">
                   <div className="flex flex-col gap-1">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-white">{t("level2Label")}</span>
-                      <span className="text-[9px] font-bold text-[#BFFF00] border border-[#BFFF00] px-1.5 py-0.5 rounded">
+                      <span className="text-sm font-semibold text-okx-text-primary">{t("level2Label")}</span>
+                      <span className="text-xs font-bold text-meme-lime border border-meme-lime px-1.5 py-0.5 rounded">
                         L2
                       </span>
                     </div>
-                    <span className="text-xs text-[#888888]">{t("level2Desc")}</span>
+                    <span className="text-xs text-okx-text-secondary">{t("level2Desc")}</span>
                   </div>
-                  <span className="text-3xl font-extrabold font-mono text-[#BFFF00]">
+                  <span className="text-3xl font-extrabold font-mono text-meme-lime">
                     {COMMISSION_RATES.level2}%
                   </span>
                 </div>
               </div>
 
               {/* How it works */}
-              <div className="bg-[#0a0a0a] rounded-lg p-4">
-                <p className="text-xs text-[#666666] leading-relaxed">
+              <div className="bg-okx-bg-secondary rounded-lg p-4">
+                <p className="text-xs text-okx-text-tertiary leading-relaxed">
                   {t("commissionExplainer")}
                 </p>
               </div>
@@ -315,14 +315,14 @@ export default function InvitePage() {
 
             {/* Right Column: Invite History */}
             <div className="w-[480px] flex-shrink-0 flex flex-col gap-4">
-              <h2 className="text-lg font-bold text-white">{t("inviteHistory")}</h2>
+              <h2 className="text-lg font-bold text-okx-text-primary">{t("inviteHistory")}</h2>
 
               {/* Table Header */}
-              <div className="flex items-center px-3 py-2.5 bg-[#0a0a0a] rounded-lg">
-                <span className="flex-1 text-xs font-semibold text-[#888888]">{t("userCol")}</span>
-                <span className="flex-1 text-xs font-semibold text-[#888888] text-center">{t("registerTimeCol")}</span>
-                <span className="flex-1 text-xs font-semibold text-[#888888] text-center">{t("tradeVolumeCol")}</span>
-                <span className="flex-1 text-xs font-semibold text-[#888888] text-right">{t("rebateAmountCol")}</span>
+              <div className="flex items-center px-3 py-2.5 bg-okx-bg-secondary rounded-lg">
+                <span className="flex-1 text-xs font-semibold text-okx-text-secondary">{t("userCol")}</span>
+                <span className="flex-1 text-xs font-semibold text-okx-text-secondary text-center">{t("registerTimeCol")}</span>
+                <span className="flex-1 text-xs font-semibold text-okx-text-secondary text-center">{t("tradeVolumeCol")}</span>
+                <span className="flex-1 text-xs font-semibold text-okx-text-secondary text-right">{t("rebateAmountCol")}</span>
               </div>
 
               {/* Invite Rows (from API or placeholder) */}
@@ -330,16 +330,16 @@ export default function InvitePage() {
                 info.invitees.map((inv, idx) => (
                   <div
                     key={idx}
-                    className="flex items-center px-3 py-2.5 border-b border-[#1a1a1a]"
+                    className="flex items-center px-3 py-2.5 border-b border-okx-border-primary"
                   >
-                    <span className="flex-1 text-xs font-mono text-white">{inv.address}</span>
-                    <span className="flex-1 text-xs font-mono text-[#888888] text-center">{inv.joinedDate}</span>
-                    <span className="flex-1 text-xs font-mono text-white text-center">{inv.volume} ETH</span>
-                    <span className="flex-1 text-xs font-mono text-[#BFFF00] text-right">+{inv.rebate}</span>
+                    <span className="flex-1 text-xs font-mono text-okx-text-primary">{inv.address}</span>
+                    <span className="flex-1 text-xs font-mono text-okx-text-secondary text-center">{inv.joinedDate}</span>
+                    <span className="flex-1 text-xs font-mono text-okx-text-primary text-center">{inv.volume} ETH</span>
+                    <span className="flex-1 text-xs font-mono text-meme-lime text-right">+{inv.rebate}</span>
                   </div>
                 ))
               ) : (
-                <div className="flex items-center justify-center py-12 text-[#666666] text-sm">
+                <div className="flex items-center justify-center py-12 text-okx-text-tertiary text-sm">
                   {t("noInvitees")}
                 </div>
               )}

@@ -89,7 +89,7 @@ export default function Home() {
 
       {/* Stats Banner */}
       {mounted && (
-        <section className="border-y border-okx-border-primary bg-gradient-to-r from-meme-darker to-meme-dark">
+        <section className="border-y border-okx-border-primary bg-okx-bg-secondary">
           <div className="max-w-[1200px] mx-auto px-8 py-8 grid grid-cols-2 lg:grid-cols-4 gap-8">
             {[
               { label: t("stats.volume24h"), value: formatValue(stats.totalVolume) },

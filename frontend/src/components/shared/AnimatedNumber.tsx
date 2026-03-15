@@ -83,8 +83,8 @@ export function AnimatedNumber({
   // 颜色样式
   const colorClass = highlightChange && changeDirection
     ? changeDirection === "up"
-      ? "text-[#00D26A]"
-      : "text-[#FF3B30]"
+      ? "text-okx-up"
+      : "text-okx-down"
     : "";
 
   // 动画样式
@@ -102,8 +102,8 @@ export function AnimatedNumber({
     >
       {showArrow && changeDirection && (
         <span
-          className={`text-[10px] ${
-            changeDirection === "up" ? "text-[#00D26A]" : "text-[#FF3B30]"
+          className={`text-xs ${
+            changeDirection === "up" ? "text-okx-up" : "text-okx-down"
           }`}
         >
           {changeDirection === "up" ? "▲" : "▼"}

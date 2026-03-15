@@ -5,14 +5,7 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Pausable.sol";
 import "./IPerpVault.sol";
-
-/// @notice WETH interface for M-21 fallback transfers
-interface IWETH {
-    function deposit() external payable;
-    function withdraw(uint256) external;
-    function transfer(address to, uint256 value) external returns (bool);
-    function balanceOf(address) external view returns (uint256);
-}
+import "../interfaces/IWETH.sol";
 
 /**
  * @title PerpVault

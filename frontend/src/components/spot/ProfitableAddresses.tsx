@@ -90,9 +90,9 @@ export function ProfitableAddresses({
     return (
       <div className={`p-4 ${className}`}>
         <div className="animate-pulse space-y-3">
-          <div className="h-5 bg-[#1F1F1F] rounded w-1/3" />
+          <div className="h-5 bg-okx-bg-hover rounded w-1/3" />
           {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-10 bg-[#1F1F1F] rounded" />
+            <div key={i} className="h-10 bg-okx-bg-hover rounded" />
           ))}
         </div>
       </div>
@@ -118,16 +118,16 @@ export function ProfitableAddresses({
     <div className={`${className}`}>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-okx-border-primary">
-        <span className="text-okx-text-primary font-bold text-[14px]">
+        <span className="text-okx-text-primary font-bold text-sm">
           {t("trading.profitAddresses")}
         </span>
-        <span className="text-okx-text-tertiary text-[11px]">
+        <span className="text-okx-text-tertiary text-xs">
           {data.total_holders} {t("holders.holderCount").toLowerCase()}
         </span>
       </div>
 
       {/* Table Header */}
-      <div className="grid grid-cols-[auto_1fr_100px_100px] gap-2 px-4 py-2 text-[10px] text-okx-text-tertiary border-b border-okx-border-primary">
+      <div className="grid grid-cols-[auto_1fr_100px_100px] gap-2 px-4 py-2 text-xs text-okx-text-tertiary border-b border-okx-border-primary">
         <span>#</span>
         <span>{t("holders.address")}</span>
         <span className="text-right">{t("holders.amount")}</span>
@@ -143,11 +143,11 @@ export function ProfitableAddresses({
           return (
             <div
               key={holder.address}
-              className="grid grid-cols-[auto_1fr_100px_100px] gap-2 px-4 py-2 text-[11px] hover:bg-okx-bg-hover transition-colors items-center"
+              className="grid grid-cols-[auto_1fr_100px_100px] gap-2 px-4 py-2 text-xs hover:bg-okx-bg-hover transition-colors items-center"
             >
               {/* Rank */}
               <span className={`w-5 text-center font-bold ${
-                index < 3 ? "text-[#FFD700]" : "text-okx-text-tertiary"
+                index < 3 ? "text-okx-warning" : "text-okx-text-tertiary"
               }`}>
                 {index + 1}
               </span>
@@ -155,18 +155,18 @@ export function ProfitableAddresses({
               {/* Address + Label */}
               <div className="flex items-center gap-1.5 min-w-0">
                 <a
-                  href={`https://sepolia.basescan.org/address/${holder.address}`}
+                  href={`https://testnet.bscscan.com/address/${holder.address}`}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-okx-text-primary font-mono hover:text-[#007AFF] transition-colors"
+                  className="text-okx-text-primary font-mono hover:text-okx-accent transition-colors"
                 >
                   {formatAddress(holder.address)}
                 </a>
                 {holder.label && (
-                  <span className={`px-1 py-0.5 rounded text-[8px] font-medium ${
+                  <span className={`px-1 py-0.5 rounded text-xs font-medium ${
                     holder.is_creator
-                      ? "bg-[#007AFF]/20 text-[#007AFF]"
-                      : "bg-[#5856D6]/20 text-[#5856D6]"
+                      ? "bg-okx-accent/20 text-okx-accent"
+                      : "bg-purple-500/20 text-purple-500"
                   }`}>
                     {holder.label}
                   </span>
@@ -180,7 +180,7 @@ export function ProfitableAddresses({
 
               {/* Unrealized PnL */}
               <span className={`text-right font-medium ${
-                isProfit ? "text-[#00D26A]" : "text-okx-text-tertiary"
+                isProfit ? "text-okx-up" : "text-okx-text-tertiary"
               }`}>
                 {formatPnlValue(holder.unrealized_pnl)}
               </span>

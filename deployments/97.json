@@ -1,0 +1,55 @@
+{
+  "network": "bsc-testnet",
+  "chainId": 97,
+  "rpcUrl": "https://data-seed-prebsc-1-s1.binance.org:8545/",
+  "wssUrl": "wss://bsc-testnet-rpc.publicnode.com",
+  "explorer": "https://testnet.bscscan.com",
+  "deployedAt": "2026-03-13",
+  "deployer": "0xAecb229194314999E396468eb091b42E44Bc3c8c",
+  "contracts": {
+    "TokenFactory": {
+      "address": "0x86b2dC09b24C244DcdFE58dceF37b89d63B353bf"
+    },
+    "Settlement": {
+      "address": "0xB757f201e016495AB0DE7D9fda5c6CFFd2095426"
+    },
+    "SettlementV2": {
+      "address": "0x606F418508993DaD0B230729a47672d087A9DB2C"
+    },
+    "PriceFeed": {
+      "address": "0x016a65Fce5eC46ec563e1190986740ad4F2Fa789"
+    },
+    "PositionManager": {
+      "address": "0x60eF2d166DD1D3fAc42D7DaA14c9Eb6E055A6248"
+    },
+    "Vault": {
+      "address": "0x184BD81958eF34aA985e710BBDF90cA8DbBcb76C"
+    },
+    "PerpVault": {
+      "address": "0xe61558F7cfb4BcCD999FeF4230965152eA4D3dc1"
+    },
+    "InsuranceFund": {
+      "address": "0x30a70a61C01FdB73d19a8Cc7aAe814a0a359adE2"
+    },
+    "ContractRegistry": {
+      "address": "0x566c7584E1158977Fb3B0B28eae57C31E1FcF4e3"
+    },
+    "FundingRate": {
+      "address": "0xa33f2c84589079e7AC6037D81B472AF9cf421cC8"
+    },
+    "Liquidation": {
+      "address": "0xadBBFE5F01290297050b2AB2a2BeF2DE244a83D0"
+    },
+    "RiskManager": {
+      "address": "0xD22CCFDD884405c23CFaE08Da8437440FA724966"
+    },
+    "LendingPool": {
+      "address": "0x98a7665301C0dB32ceff957e1A2c505dF8384CA4"
+    }
+  },
+  "external": {
+    "WBNB": "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd",
+    "PancakeSwapRouterV2": "0xD99D1c33F9fC3444f8101754aBC46c52416550D1",
+    "PancakeSwapFactoryV2": "0x6725F303b657a9451d8BA641348b6761A6CC7a17"
+  }
+}

@@ -165,6 +165,9 @@ export function PerpetualPriceChart({ tokenAddress, displaySymbol, className, cu
   const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const scaleFactorRef = useRef(1); // 价格缩放因子，用于处理极小的价格
+  const dataInitializedRef = useRef(false); // 是否已完成首次数据加载
+  const prevDataLengthRef = useRef(0); // 上次数据长度，检测新蜡烛
+  const autoScrollRef = useRef(true); // 用户是否在最新位置（智能自动滚动）
 
   const [resolution, setResolution] = useState<Resolution>("1m");
   const [ohlcDisplay, setOhlcDisplay] = useState<OHLCDisplay | null>(null);
@@ -215,6 +218,9 @@ export function PerpetualPriceChart({ tokenAddress, displaySymbol, className, cu
   const isLoading = wsLoading && effectiveChartData.length === 0;
 
   // 处理 K线数据更新 (WS K线 + 链上种子蜡烛)
+  // ★ 关键修复: 区分首次加载 (setData) 和增量更新 (update)
+  //   首次加载: setData + fitContent (完整初始化)
+  //   增量更新: update 最后一根蜡烛 (保留用户缩放/滚动位置)
   useEffect(() => {
     if (!effectiveChartData || effectiveChartData.length === 0) {
       setKlineCount(0);
@@ -240,7 +246,6 @@ export function PerpetualPriceChart({ tokenAddress, displaySymbol, className, cu
     }
 
     // ★ 修复2: 极小价格缩放因子（与 TokenPriceChart 一致）
-    // TradingView Lightweight Charts 在处理极小数值时有精度问题
     const refPrice = displayData[0]?.close || 1;
     let scaleFactor = 1;
 
@@ -250,46 +255,92 @@ export function PerpetualPriceChart({ tokenAddress, displaySymbol, className, cu
     }
     scaleFactorRef.current = scaleFactor;
 
-    // 应用缩放因子
-    const candles: CandlestickData<Time>[] = displayData.map(k => ({
-      time: k.time as Time,
-      open: k.open * scaleFactor,
-      high: k.high * scaleFactor,
-      low: k.low * scaleFactor,
-      close: k.close * scaleFactor,
-    }));
-
     const colors = getChartColors(useAppStore.getState().preferences.theme);
-    const volumes: HistogramData<Time>[] = displayData.map((k, i) => {
-      const prevClose = i > 0 ? displayData[i - 1].close : k.open;
-      const isUp = k.close >= prevClose;
-      return {
+
+    // ═══ 首次加载: 全量 setData ═══
+    if (!dataInitializedRef.current) {
+      const candles: CandlestickData<Time>[] = displayData.map(k => ({
         time: k.time as Time,
-        value: k.volume,
-        color: isUp ? colors.volumeUpColor : colors.volumeDownColor,
-      };
-    });
+        open: k.open * scaleFactor,
+        high: k.high * scaleFactor,
+        low: k.low * scaleFactor,
+        close: k.close * scaleFactor,
+      }));
 
-    // 更新价格轴格式化以显示原始价格
-    if (scaleFactor !== 1) {
-      candleSeriesRef.current.applyOptions({
-        priceFormat: {
-          type: 'custom',
-          formatter: (price: number) => formatPriceETH(price / scaleFactor),
-          minMove: 0.000001,
-        },
+      const volumes: HistogramData<Time>[] = displayData.map((k, i) => {
+        const prevClose = i > 0 ? displayData[i - 1].close : k.open;
+        const isUp = k.close >= prevClose;
+        return {
+          time: k.time as Time,
+          value: k.volume,
+          color: isUp ? colors.volumeUpColor : colors.volumeDownColor,
+        };
       });
+
+      // 更新价格轴格式化以显示原始价格
+      if (scaleFactor !== 1) {
+        candleSeriesRef.current.applyOptions({
+          priceFormat: {
+            type: 'custom',
+            formatter: (price: number) => formatPriceETH(price / scaleFactor),
+            minMove: 0.000001,
+          },
+        });
+      }
+
+      candleSeriesRef.current.setData(candles);
+      volumeSeriesRef.current.setData(volumes);
+
+      // 仅首次加载时 fitContent + scrollToRealTime
+      chartRef.current.timeScale().fitContent();
+      setTimeout(() => {
+        chartRef.current?.timeScale().scrollToRealTime();
+      }, 100);
+
+      dataInitializedRef.current = true;
+      prevDataLengthRef.current = displayData.length;
     }
+    // ═══ 增量更新: 只 update 最后 1-2 根蜡烛 (保留缩放) ═══
+    else {
+      const isNewCandle = displayData.length > prevDataLengthRef.current;
+      prevDataLengthRef.current = displayData.length;
 
-    // 更新图表
-    candleSeriesRef.current.setData(candles);
-    volumeSeriesRef.current.setData(volumes);
+      // 如果新增了蜡烛（跨分钟），需要 update 最后 2 根
+      // 否则只 update 最后 1 根（当前分钟的实时更新）
+      const updateCount = isNewCandle ? Math.min(2, displayData.length) : 1;
+      const startIdx = displayData.length - updateCount;
 
-    // 缩放到合适范围
-    chartRef.current.timeScale().fitContent();
-    setTimeout(() => {
-      chartRef.current?.timeScale().scrollToRealTime();
-    }, 100);
+      for (let i = startIdx; i < displayData.length; i++) {
+        const k = displayData[i];
+        // 跳过无效时间的蜡烛 (防止 [object Object] 错误)
+        if (!k.time || typeof k.time !== "number" || isNaN(k.time)) continue;
+        const prevClose = i > 0 ? displayData[i - 1].close : k.open;
+        const isUp = k.close >= prevClose;
+
+        try {
+          candleSeriesRef.current.update({
+            time: k.time as Time,
+            open: k.open * scaleFactor,
+            high: k.high * scaleFactor,
+            low: k.low * scaleFactor,
+            close: k.close * scaleFactor,
+          });
+
+          volumeSeriesRef.current.update({
+            time: k.time as Time,
+            value: k.volume,
+            color: isUp ? colors.volumeUpColor : colors.volumeDownColor,
+          });
+        } catch {
+          // "Cannot update oldest data" — 时间戳乱序时忽略，不崩溃
+        }
+      }
+
+      // 仅当用户在最新位置且新增蜡烛时才自动滚动
+      if (isNewCandle && autoScrollRef.current) {
+        chartRef.current.timeScale().scrollToRealTime();
+      }
+    }
 
     // 更新最新 OHLC (使用原始未缩放的数据)
     const latest = displayData[displayData.length - 1];
@@ -314,6 +365,12 @@ export function PerpetualPriceChart({ tokenAddress, displaySymbol, className, cu
   }, [effectiveChartData]);
 
   // ✅ WebSocket 自动更新，无需定时刷新
+
+  // ★ 切换时间周期时重置初始化标志，强制下次更新走 setData 路径
+  useEffect(() => {
+    dataInitializedRef.current = false;
+    prevDataLengthRef.current = 0;
+  }, [resolution]);
 
   // UTC 时间更新
   useEffect(() => {
@@ -385,12 +442,16 @@ export function PerpetualPriceChart({ tokenAddress, displaySymbol, className, cu
       wickUpColor: colors.upColor,
       wickDownColor: colors.downColor,
       priceFormat: { type: 'price', precision: 12, minMove: 0.000000000001 },
+      lastValueVisible: true,
+      priceLineVisible: false,
     });
 
     const histogramSeries = chart.addHistogramSeries({
       color: colors.upColor,
       priceFormat: { type: 'volume' },
       priceScaleId: '',
+      lastValueVisible: false,
+      priceLineVisible: false,
     });
 
     histogramSeries.priceScale().applyOptions({
@@ -400,6 +461,17 @@ export function PerpetualPriceChart({ tokenAddress, displaySymbol, className, cu
     chartRef.current = chart;
     candleSeriesRef.current = candlestickSeries;
     volumeSeriesRef.current = histogramSeries;
+
+    // ★ 监听时间轴滚动 - 检测用户是否手动滚动离开最新数据
+    chart.timeScale().subscribeVisibleTimeRangeChange(() => {
+      const timeScale = chart.timeScale();
+      const visibleRange = timeScale.getVisibleLogicalRange();
+      if (visibleRange) {
+        // 如果可见范围的右边界接近最新数据，启用自动滚动
+        const scrolledToEnd = visibleRange.to >= timeScale.scrollPosition() + (visibleRange.to - visibleRange.from) * 0.9;
+        autoScrollRef.current = scrolledToEnd;
+      }
+    });
 
     // 十字光标事件
     chart.subscribeCrosshairMove((param: MouseEventParams<Time>) => {
@@ -525,7 +597,7 @@ export function PerpetualPriceChart({ tokenAddress, displaySymbol, className, cu
         {/* 左侧：交易对 */}
         <div className="flex items-center gap-2">
           <span className="text-okx-text-primary font-bold text-[16px]">{tokenSymbol}</span>
-          <span className="text-[#787B86] text-[12px]">/BNB Perp</span>
+          <span className="text-[#787B86] text-xs">/BNB Perp</span>
         </div>
 
         {displayOHLC && (
@@ -538,7 +610,7 @@ export function PerpetualPriceChart({ tokenAddress, displaySymbol, className, cu
             </div>
 
             {/* 涨跌幅 */}
-            <div className={`ml-3 px-2 py-1 rounded text-[13px] font-medium ${
+            <div className={`ml-3 px-2 py-1 rounded text-sm font-medium ${
               displayOHLC.isUp
                 ? 'text-[#26a69a] bg-[#26a69a]/15'
                 : 'text-[#ef5350] bg-[#ef5350]/15'
@@ -550,7 +622,7 @@ export function PerpetualPriceChart({ tokenAddress, displaySymbol, className, cu
             <div className="mx-4 h-6 w-px bg-[#2A2E39]" />
 
             {/* High/Low */}
-            <div className="flex items-center gap-4 text-[12px]">
+            <div className="flex items-center gap-4 text-xs">
               <div className="flex items-center gap-1.5">
                 <span className="text-[#787B86]">{t("high")}</span>
                 <span className="text-[#26a69a]">{formatPrice(displayOHLC.high)}</span>
@@ -575,7 +647,7 @@ export function PerpetualPriceChart({ tokenAddress, displaySymbol, className, cu
             <button
               key={key}
               onClick={() => setResolution(key)}
-              className={`px-2 py-0.5 text-[11px] font-medium rounded transition-all ${
+              className={`px-2 py-0.5 text-xs font-medium rounded transition-all ${
                 resolution === key
                   ? 'text-okx-text-primary bg-[#2962FF]'
                   : 'text-[#787B86] hover:text-okx-text-primary hover:bg-[#2A2E39]'
@@ -588,7 +660,7 @@ export function PerpetualPriceChart({ tokenAddress, displaySymbol, className, cu
 
         <div className="flex-1" />
 
-        <div className="flex items-center gap-3 text-[12px]">
+        <div className="flex items-center gap-3 text-xs">
           <span className="text-[#787B86]">{currentTime} UTC</span>
           <span className="text-[#363A45]">|</span>
 
@@ -656,7 +728,7 @@ export function PerpetualPriceChart({ tokenAddress, displaySymbol, className, cu
                 )}
               </div>
               <div>
-                <p className="text-[#787B86] text-[13px]">
+                <p className="text-[#787B86] text-sm">
                   {isLoading
                     ? t("loadingKline")
                     : error

@@ -43,6 +43,9 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
     address: tradingWallet,
     getSignature,
     wrapAndDeposit,
+    sendETH,
+    ethBalance: tradingWalletNativeBalance,
+    refreshBalance: refreshTradingWalletBalance,
   } = useTradingWallet();
 
   // SettlementV2 deposit/withdraw via usePerpetualV2
@@ -74,6 +77,8 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
   const [withdrawStep, setWithdrawStep] = useState(0); // 0=idle, 1=in-progress
   const [stepError, setStepError] = useState<string | null>(null);
   const depositStepRef = useRef(0); // For accurate logging in async closures
+  // Total withdrawable = settlement + trading wallet native BNB
+  const totalWithdrawable = (settlementBalance ?? 0n) + tradingWalletNativeBalance;
 
   // Main wallet BNB balance
   const { data: mainWalletBalance, refetch: refetchMainBalance } = useBalance({
@@ -98,12 +103,19 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
   //   2. Trading wallet: BNB → WBNB (WBNB.deposit)
   //   3. Trading wallet: approve WBNB + SettlementV2.deposit
   // ═══════════════════════════════════════════════════════════
+  const GAS_BUFFER = parseEther("0.005"); // 0.005 BNB for Step 2 & 3 gas
+
   const handleDeposit = useCallback(async () => {
     if (!tradingWallet || amountWei === 0n || !publicClient) return;
     setStepError(null);
 
     try {
-      // Step 1: Transfer BNB from main wallet to trading wallet
+      // Actual deposit = user amount - gas buffer (for Step 2 & 3)
+      const depositAmount = amountWei - GAS_BUFFER;
+      if (depositAmount <= 0n) return;
+      const depositAmountStr = formatEther(depositAmount);
+
+      // Step 1: Transfer full amount to trading wallet (includes gas reserve)
       setDepositStep(1);
       depositStepRef.current = 1;
       const txHash = await sendTransactionAsync({
@@ -112,16 +124,16 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
       });
       await publicClient.waitForTransactionReceipt({ hash: txHash });
 
-      // Step 2: Wrap BNB → WBNB on trading wallet
+      // Step 2: Wrap (amount - gas) BNB → WBNB, keep gas for Step 3
       setDepositStep(2);
       depositStepRef.current = 2;
-      const wrapHash = await wrapAndDeposit(amount);
+      const wrapHash = await wrapAndDeposit(depositAmountStr);
       await publicClient.waitForTransactionReceipt({ hash: wrapHash });
 
       // Step 3: Approve WBNB + deposit to SettlementV2
       setDepositStep(3);
       depositStepRef.current = 3;
-      await settlementDeposit(CONTRACTS.WETH, amount);
+      await settlementDeposit(CONTRACTS.WETH, depositAmountStr);
 
       // Success — engine event listener auto-syncs balance
       setDepositStep(0);
@@ -151,9 +163,9 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
   ]);
 
   // ═══════════════════════════════════════════════════════════
-  // On-chain withdrawal via Merkle proof:
-  //   1. POST /api/wallet/withdraw → backend generates proof + sig
-  //   2. usePerpetualV2.withdraw → SettlementV2.withdraw on-chain
+  // Withdraw: supports both sources
+  //   A. SettlementV2 contract → Merkle proof withdrawal
+  //   B. Trading wallet native BNB → direct sendETH to main wallet
   // ═══════════════════════════════════════════════════════════
   const handleWithdraw = useCallback(async () => {
     if (!tradingWallet || !mainWallet || amountWei === 0n) return;
@@ -161,13 +173,29 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
 
     try {
       setWithdrawStep(1);
-      await settlementWithdraw(CONTRACTS.WETH, amount);
+      const sBalance = settlementBalance ?? 0n;
 
-      // Success
+      if (sBalance > 0n && amountWei <= sBalance) {
+        // Case A: settlement contract has enough → Merkle proof withdrawal
+        await settlementWithdraw(CONTRACTS.WETH, amount);
+      } else {
+        // Case B: use trading wallet native BNB → direct transfer
+        const gasReserve = parseEther("0.001");
+        const maxSend = tradingWalletNativeBalance > gasReserve
+          ? tradingWalletNativeBalance - gasReserve : 0n;
+        if (amountWei > maxSend) {
+          setStepError("余额不足");
+          setWithdrawStep(0);
+          return;
+        }
+        await sendETH(mainWallet, amount);
+      }
+
       setWithdrawStep(0);
       setAmount("");
       refreshGlobalBalance();
       refetchMainBalance();
+      refreshTradingWalletBalance();
     } catch (e) {
       console.error("[Withdraw] Failed:", e);
       setStepError(
@@ -176,13 +204,9 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
       setWithdrawStep(0);
     }
   }, [
-    tradingWallet,
-    mainWallet,
-    amountWei,
-    amount,
-    settlementWithdraw,
-    refreshGlobalBalance,
-    refetchMainBalance,
+    tradingWallet, mainWallet, amountWei, amount, settlementBalance,
+    tradingWalletNativeBalance, settlementWithdraw, sendETH,
+    refreshGlobalBalance, refetchMainBalance, refreshTradingWalletBalance,
   ]);
 
   const copy = () => {
@@ -213,12 +237,12 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
     : "提现到主钱包";
 
   return (
-    <div className="bg-[#131722] rounded-xl border border-gray-800">
+    <div className="bg-okx-bg-card rounded-xl border border-gray-800">
       {/* 标题 */}
       <div className="flex justify-between items-center p-4 border-b border-gray-800">
-        <span className="text-white font-semibold">账户</span>
+        <span className="text-okx-text-primary font-semibold">账户</span>
         {onClose && (
-          <button onClick={onClose} className="text-gray-500 hover:text-white">
+          <button onClick={onClose} className="text-gray-500 hover:text-okx-text-primary">
             &times;
           </button>
         )}
@@ -226,7 +250,7 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
 
       {/* 交易账户余额 */}
       <div className="p-4 text-center border-b border-gray-800">
-        <div className="text-3xl font-bold text-white">
+        <div className="text-3xl font-bold text-okx-text-primary">
           BNB {formattedWethBalance}
         </div>
         <div className="text-gray-500 text-sm mb-2">交易账户总余额</div>
@@ -250,7 +274,7 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
           <input
             value={tradingWallet || ""}
             readOnly
-            className="flex-1 bg-[#1e222d] text-gray-300 text-xs px-3 py-2 rounded font-mono"
+            className="flex-1 bg-okx-bg-secondary text-gray-300 text-xs px-3 py-2 rounded font-mono"
           />
           <button
             onClick={copy}
@@ -264,7 +288,7 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
       {/* 充值/提现 */}
       <div className="p-4 space-y-4">
         {/* Tab 切换 */}
-        <div className="flex gap-2 bg-[#1e222d] rounded-lg p-1">
+        <div className="flex gap-2 bg-okx-bg-secondary rounded-lg p-1">
           <button
             onClick={() => {
               setActiveTab("deposit");
@@ -274,7 +298,7 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
             className={`flex-1 py-2 rounded text-sm font-medium transition-colors ${
               activeTab === "deposit"
                 ? "bg-blue-600 text-white"
-                : "text-gray-400 hover:text-white"
+                : "text-gray-400 hover:text-okx-text-primary"
             }`}
           >
             充值
@@ -288,7 +312,7 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
             className={`flex-1 py-2 rounded text-sm font-medium transition-colors ${
               activeTab === "withdraw"
                 ? "bg-blue-600 text-white"
-                : "text-gray-400 hover:text-white"
+                : "text-gray-400 hover:text-okx-text-primary"
             }`}
           >
             提现
@@ -298,12 +322,12 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
         {/* 余额显示 */}
         <div className="flex justify-between items-center text-sm">
           <span className="text-gray-500">
-            {activeTab === "deposit" ? "钱包余额" : "交易账户余额"}
+            {activeTab === "deposit" ? "钱包余额" : "可提现余额"}
           </span>
-          <span className="text-white">
+          <span className="text-okx-text-primary">
             BNB {activeTab === "deposit"
               ? fmtETH(mainWalletBalance?.value)
-              : formattedWethBalance}
+              : fmtETH(totalWithdrawable)}
           </span>
         </div>
 
@@ -315,7 +339,7 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
             onChange={(e) => setAmount(e.target.value)}
             placeholder="0"
             disabled={isProcessing}
-            className="w-full bg-[#1e222d] text-white text-lg px-4 py-3 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
+            className="w-full bg-okx-bg-secondary text-okx-text-primary text-lg px-4 py-3 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
           />
           <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
             <span className="text-gray-400 text-sm">BNB</span>
@@ -331,7 +355,10 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
                     setAmount(formatEther(maxDeposit));
                   }
                 } else {
-                  totalBalance && setAmount(formatEther(totalBalance));
+                  // Withdraw MAX: total withdrawable minus gas reserve
+                  const gasReserve = parseEther("0.001");
+                  const maxW = totalWithdrawable > gasReserve ? totalWithdrawable - gasReserve : 0n;
+                  if (maxW > 0n) setAmount(formatEther(maxW));
                 }
               }}
               disabled={isProcessing}
@@ -349,7 +376,7 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
               key={v}
               onClick={() => setAmount(v)}
               disabled={isProcessing}
-              className="flex-1 py-2 bg-[#1e222d] text-gray-400 text-sm rounded hover:text-white disabled:opacity-50"
+              className="flex-1 py-2 bg-okx-bg-secondary text-gray-400 text-sm rounded hover:text-okx-text-primary disabled:opacity-50"
             >
               BNB {v}
             </button>
@@ -427,6 +454,7 @@ export function AccountBalance({ onClose }: { onClose?: () => void }) {
             请先在交易面板激活交易钱包
           </div>
         )}
+
       </div>
     </div>
   );

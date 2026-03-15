@@ -19,8 +19,8 @@ import { useTradingWallet } from "@/hooks/perpetual/useTradingWallet";
 import { useToast } from "@/components/shared/Toast";
 import { CONTRACTS, SETTLEMENT_V2_ABI, ERC20_ABI } from "@/lib/contracts";
 
-// BNB 本位: 使用 WBNB (BSC Mainnet)
-const WETH_ADDRESS = (process.env.NEXT_PUBLIC_WETH_ADDRESS || "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c") as Address;
+// WBNB address — read from env
+const WETH_ADDRESS = (process.env.NEXT_PUBLIC_WETH_ADDRESS || "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd") as Address;
 
 export default function WalletPage() {
   const t = useTranslations("walletManagement");
@@ -373,7 +373,7 @@ export default function WalletPage() {
                   <div className="mt-4 p-3 bg-okx-up/10 border border-okx-up/30 rounded-xl">
                     <p className="text-okx-text-secondary text-sm mb-1">{t("transactionSent")}</p>
                     <a
-                      href={`https://sepolia.basescan.org/tx/${txHash}`}
+                      href={`https://testnet.bscscan.com/tx/${txHash}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-okx-up text-sm font-mono hover:underline break-all"

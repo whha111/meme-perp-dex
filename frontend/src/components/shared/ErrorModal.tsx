@@ -211,7 +211,7 @@ function ErrorModal({
       >
         <div className="
           relative overflow-hidden
-          bg-white dark:bg-[#1a1a2e]
+          bg-white dark:bg-okx-bg-card
           border border-gray-200 dark:border-gray-700
           rounded-2xl shadow-2xl
         ">

@@ -22,17 +22,17 @@ export function TierProgress({ currentTier, activeInvites, totalVolume, tierConf
   const t = useTranslations("referral");
 
   const tierColors = [
-    "bg-[#CD7F32]", // Bronze
-    "bg-[#C0C0C0]", // Silver
-    "bg-[#FFD700]", // Gold
-    "bg-[#B9F2FF]", // Diamond
+    "bg-amber-600", // Bronze
+    "bg-gray-400", // Silver
+    "bg-yellow-400", // Gold
+    "bg-cyan-200", // Diamond
   ];
 
   const tierTextColors = [
-    "text-[#CD7F32]",
-    "text-[#C0C0C0]",
-    "text-[#FFD700]",
-    "text-[#B9F2FF]",
+    "text-amber-600",
+    "text-gray-400",
+    "text-yellow-400",
+    "text-cyan-200",
   ];
 
   const nextTier = currentTier < 3 ? tierConfig[currentTier + 1] : null;

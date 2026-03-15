@@ -93,7 +93,7 @@ export function PriceBoard({
       {/* 左侧：代币身份与社交 */}
       <div className="flex items-center gap-3">
         <div className="relative">
-          <div className="w-9 h-9 rounded-full overflow-hidden border border-[#333]">
+          <div className="w-9 h-9 rounded-full overflow-hidden border border-okx-border-secondary">
              <img
                src={metadata?.logoUrl || `https://api.dicebear.com/7.x/identicon/svg?seed=${symbol}`}
                alt=""
@@ -104,15 +104,15 @@ export function PriceBoard({
              />
           </div>
           <div className="absolute -bottom-1 -right-1 bg-okx-bg-primary rounded-full p-0.5">
-            <div className="bg-[#A3E635] w-3 h-3 rounded-full flex items-center justify-center"><svg className="w-2 h-2 text-black" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" /></svg></div>
+            <div className="bg-meme-lime w-3 h-3 rounded-full flex items-center justify-center"><svg className="w-2 h-2 text-black" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" /></svg></div>
           </div>
         </div>
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-okx-text-primary font-bold text-[16px] uppercase tracking-tight">{tokenSymbol}</h1>
-            <span className="text-okx-text-secondary text-[11px] uppercase">${tokenSymbol}</span>
+            <span className="text-okx-text-secondary text-xs uppercase">${tokenSymbol}</span>
             <span
-              className="text-okx-text-tertiary text-[10px] cursor-pointer hover:text-okx-text-primary transition-colors"
+              className="text-okx-text-tertiary text-xs cursor-pointer hover:text-okx-text-primary transition-colors"
               onClick={() => {
                 if (tokenAddress) {
                   navigator.clipboard.writeText(tokenAddress);
@@ -131,7 +131,7 @@ export function PriceBoard({
                 href={metadata.website.startsWith("http") ? metadata.website : `https://${metadata.website}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-okx-text-tertiary text-[12px] hover:text-okx-text-primary transition-colors"
+                className="text-okx-text-tertiary text-xs hover:text-okx-text-primary transition-colors"
                 title={metadata.website}
               >
                 <svg className="w-3.5 h-3.5 inline-block" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418" /></svg>
@@ -142,7 +142,7 @@ export function PriceBoard({
                 href={metadata.twitter.startsWith("http") ? metadata.twitter : `https://twitter.com/${metadata.twitter.replace("@", "")}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-okx-text-tertiary text-[12px] hover:text-[#1DA1F2] transition-colors"
+                className="text-okx-text-tertiary text-xs hover:text-sky-400 transition-colors"
                 title={metadata.twitter}
               >
                 𝕏
@@ -153,7 +153,7 @@ export function PriceBoard({
                 href={metadata.telegram.startsWith("http") ? metadata.telegram : `https://t.me/${metadata.telegram.replace("@", "")}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-okx-text-tertiary text-[12px] hover:text-[#0088cc] transition-colors"
+                className="text-okx-text-tertiary text-xs hover:text-blue-400 transition-colors"
                 title={metadata.telegram}
               >
                 <svg className="w-3.5 h-3.5 inline-block" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5" /></svg>
@@ -164,20 +164,20 @@ export function PriceBoard({
                 href={metadata.discord.startsWith("http") ? metadata.discord : `https://discord.gg/${metadata.discord}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-okx-text-tertiary text-[12px] hover:text-[#5865F2] transition-colors"
+                className="text-okx-text-tertiary text-xs hover:text-indigo-400 transition-colors"
                 title={metadata.discord}
               >
                 <svg className="w-3.5 h-3.5 inline-block" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M20.25 8.511c.884.284 1.5 1.128 1.5 2.097v4.286c0 1.136-.847 2.1-1.98 2.193-.34.027-.68.052-1.02.072v3.091l-3-3c-1.354 0-2.694-.055-4.02-.163a2.115 2.115 0 01-.825-.242m9.345-8.334a2.126 2.126 0 00-.476-.095 48.64 48.64 0 00-8.048 0c-1.131.094-1.976 1.057-1.976 2.192v4.286c0 .837.46 1.58 1.155 1.951m9.345-8.334V6.637c0-1.621-1.152-3.026-2.76-3.235A48.455 48.455 0 0011.25 3c-2.115 0-4.198.137-6.24.402-1.608.209-2.76 1.614-2.76 3.235v6.226c0 1.621 1.152 3.026 2.76 3.235.577.075 1.157.14 1.74.194V21l4.155-4.155" /></svg>
               </a>
             )}
           </div>
-          <div className="flex items-center gap-2 mt-0.5 text-[11px]">
-            <span className="text-[#FFB800]">★</span>
-            <span className={`${price24hChange >= 0 ? "text-[#00D26A]" : "text-[#FF3B30]"} font-medium`}>
+          <div className="flex items-center gap-2 mt-0.5 text-xs">
+            <span className="text-okx-warning">★</span>
+            <span className={`${price24hChange >= 0 ? "text-okx-up" : "text-okx-down"} font-medium`}>
               {price24hChange >= 0 ? "+" : ""}{price24hChange.toFixed(2)}%
             </span>
             <span className="text-okx-text-secondary">BSC Testnet</span>
-            <span className="bg-[#00D26A] text-black px-1 rounded-[2px] text-[9px] font-bold italic">{t("verified")}</span>
+            <span className="bg-okx-up text-black px-1 rounded-[2px] text-xs font-bold italic">{t("verified")}</span>
           </div>
         </div>
       </div>
@@ -192,9 +192,9 @@ export function PriceBoard({
                 format={(val) => val >= 1000000 ? (val / 1000000).toFixed(2) + "M" : val >= 1000 ? (val / 1000).toFixed(2) + "K" : val.toFixed(2)} 
               />
             </span>
-            <span className="text-okx-text-secondary text-[11px]">{t("marketCap")}</span>
+            <span className="text-okx-text-secondary text-xs">{t("marketCap")}</span>
           </div>
-          <div className="flex items-center gap-4 text-[11px] text-okx-text-secondary mt-1">
+          <div className="flex items-center gap-4 text-xs text-okx-text-secondary mt-1">
              <div className="flex gap-1">{t("price")} <b className="text-okx-text-primary">
                $<AnimatedNumber
                  value={currentPriceUsd}
@@ -202,7 +202,7 @@ export function PriceBoard({
                />
              </b></div>
              <div className="flex gap-1">{t("volume24h")} <b className="text-okx-text-primary">${volumeUsd >= 1000 ? (volumeUsd / 1000).toFixed(2) + "K" : volumeUsd.toFixed(2)}</b></div>
-             <div className="flex gap-1">{t("security")} <b className={securityStatus === 'MISMATCH' || securityStatus === 'MISSING' ? "text-[#FF3B30]" : "text-[#00D26A]"}>
+             <div className="flex gap-1">{t("security")} <b className={securityStatus === 'MISMATCH' || securityStatus === 'MISSING' ? "text-okx-down" : "text-okx-up"}>
                {securityStatus === 'MISMATCH' || securityStatus === 'MISSING' ? t("risky") : t("safe")} ›
              </b></div>
           </div>

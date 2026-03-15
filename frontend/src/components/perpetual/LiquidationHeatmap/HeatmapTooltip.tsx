@@ -30,12 +30,12 @@ export function HeatmapTooltip({ data, visible }: Props) {
       {/* 价格和时间 */}
       <div className="flex items-center justify-between gap-4 mb-2 border-b border-gray-700 pb-2">
         <span className="text-gray-400">{t("price")}:</span>
-        <span className="text-white font-mono">{data.price}</span>
+        <span className="text-okx-text-primary font-mono">{data.price}</span>
       </div>
 
       <div className="flex items-center justify-between gap-4 mb-3">
         <span className="text-gray-400">{t("time") || "Time"}:</span>
-        <span className="text-white">{data.time}</span>
+        <span className="text-okx-text-primary">{data.time}</span>
       </div>
 
       {/* 多头清算 */}
@@ -44,7 +44,7 @@ export function HeatmapTooltip({ data, visible }: Props) {
           <div className="w-2 h-2 bg-red-500 rounded-full" />
           <span className="text-red-400">{t("longs")}</span>
         </div>
-        <span className="text-white">
+        <span className="text-okx-text-primary">
           {formatUsdAmount(data.longSize)} ({data.longCount} {t("accounts")})
         </span>
       </div>
@@ -55,7 +55,7 @@ export function HeatmapTooltip({ data, visible }: Props) {
           <div className="w-2 h-2 bg-green-500 rounded-full" />
           <span className="text-green-400">{t("shorts")}</span>
         </div>
-        <span className="text-white">
+        <span className="text-okx-text-primary">
           {formatUsdAmount(data.shortSize)} ({data.shortCount} {t("accounts")})
         </span>
       </div>

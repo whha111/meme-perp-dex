@@ -217,7 +217,7 @@ function PerpContent() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="space-y-1">
             <h1 className="text-lg md:text-[22px] font-bold text-okx-text-primary">{tPerp("marketTitle")}</h1>
-            <p className="text-[12px] md:text-[13px] text-okx-text-tertiary">{tPerp("marketSubtitle")}</p>
+            <p className="text-xs md:text-sm text-okx-text-tertiary">{tPerp("marketSubtitle")}</p>
           </div>
 
           {/* Search */}
@@ -228,7 +228,7 @@ function PerpContent() {
               placeholder={tPerp("searchPairs")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="flex-1 bg-transparent text-[13px] text-okx-text-primary placeholder:text-okx-text-tertiary focus:outline-none"
+              className="flex-1 bg-transparent text-sm text-okx-text-primary placeholder:text-okx-text-tertiary focus:outline-none"
             />
           </div>
         </div>
@@ -242,7 +242,7 @@ function PerpContent() {
             { label: tPerp("insuranceFund"), value: "2.00 ETH", color: "text-okx-up" },
           ].map((stat, idx) => (
             <div key={idx} className="bg-okx-bg-card rounded-lg py-3 px-4 md:py-4 md:px-5">
-              <div className="text-[11px] md:text-[12px] text-okx-text-tertiary mb-1">{stat.label}</div>
+              <div className="text-xs md:text-xs text-okx-text-tertiary mb-1">{stat.label}</div>
               <div className={`text-[15px] md:text-[18px] font-bold font-mono ${stat.color}`}>{stat.value}</div>
             </div>
           ))}
@@ -257,7 +257,7 @@ function PerpContent() {
             <button
               key={cat.key}
               onClick={() => setActiveCategory(cat.key)}
-              className={`px-5 py-2 rounded-md text-[13px] font-medium transition-all ${
+              className={`px-5 py-2 rounded-md text-sm font-medium transition-all ${
                 activeCategory === cat.key
                   ? "bg-okx-accent text-black font-bold"
                   : "text-okx-text-secondary hover:text-okx-text-primary hover:bg-okx-bg-card"
@@ -272,7 +272,7 @@ function PerpContent() {
         <div className="overflow-x-auto">
         <div className="min-w-[960px]">
         {/* Table Header */}
-        <div className="flex items-center bg-okx-bg-card rounded-t-md px-4 py-3 text-[12px] font-semibold text-okx-text-tertiary">
+        <div className="flex items-center bg-okx-bg-card rounded-t-md px-4 py-3 text-xs font-semibold text-okx-text-tertiary">
           <div className="w-[200px]">{tPerp("pair")}</div>
           <div className="w-[130px] text-right">{tPerp("latestPrice")}</div>
           <div className="w-[100px] text-right">{tPerp("change24h")}</div>
@@ -317,12 +317,12 @@ function PerpContent() {
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-okx-text-primary">{token.symbol}/USDT</span>
                       {isNew && (
-                        <span className="text-[10px] bg-okx-accent/20 text-okx-accent px-1.5 py-0.5 rounded font-bold">
+                        <span className="text-xs bg-okx-accent/20 text-okx-accent px-1.5 py-0.5 rounded font-bold">
                           NEW
                         </span>
                       )}
                     </div>
-                    <div className="text-[11px] text-okx-text-tertiary">{tPerp("perpetualLabel")}</div>
+                    <div className="text-xs text-okx-text-tertiary">{tPerp("perpetualLabel")}</div>
                   </div>
                 </div>
 

@@ -1,56 +1,60 @@
 {
   "network": "bsc-testnet",
   "chainId": 97,
-  "deployedAt": "2026-03-03",
+  "deployedAt": "2026-03-13",
   "contracts": {
     "TokenFactory": {
-      "address": "0x22276744bAF24eD503dB50Cc999a9c5AD62728cb",
-      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+      "address": "0x86b2dC09b24C244DcdFE58dceF37b89d63B353bf",
+      "deployer": "0xAecb229194314999E396468eb091b42E44Bc3c8c"
     },
     "Settlement": {
-      "address": "0x63df8d6acF3f99Ae59Bee6184A5EB6beA8663eb7",
-      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+      "address": "0xB757f201e016495AB0DE7D9fda5c6CFFd2095426",
+      "deployer": "0xAecb229194314999E396468eb091b42E44Bc3c8c"
     },
     "SettlementV2": {
-      "address": "0x7fF9d60aE49F14bB604FeF1961910D7931067873",
-      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+      "address": "0x606F418508993DaD0B230729a47672d087A9DB2C",
+      "deployer": "0xAecb229194314999E396468eb091b42E44Bc3c8c"
     },
     "PriceFeed": {
-      "address": "0xe2b22673fFBeB7A2a4617125E885C12EC072ee48",
-      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+      "address": "0x016a65Fce5eC46ec563e1190986740ad4F2Fa789",
+      "deployer": "0xAecb229194314999E396468eb091b42E44Bc3c8c"
     },
     "PositionManager": {
-      "address": "0x04C515CcFac80BFFF27E0c5A9113e515171057b6",
-      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+      "address": "0x60eF2d166DD1D3fAc42D7DaA14c9Eb6E055A6248",
+      "deployer": "0xAecb229194314999E396468eb091b42E44Bc3c8c"
     },
     "Vault": {
-      "address": "0xACE7014F60eF9c367E7fA5Dd80601A9945E6F4d1",
-      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+      "address": "0x184BD81958eF34aA985e710BBDF90cA8DbBcb76C",
+      "deployer": "0xAecb229194314999E396468eb091b42E44Bc3c8c"
     },
     "PerpVault": {
-      "address": "0x7F98ed779c3352f39b041C57d5B2C73F84dcAA75",
-      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+      "address": "0xe61558F7cfb4BcCD999FeF4230965152eA4D3dc1",
+      "deployer": "0xAecb229194314999E396468eb091b42E44Bc3c8c"
     },
     "InsuranceFund": {
-      "address": "0x162CEbAe2013545D191360d13ceA5083E6fcE1a7",
-      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+      "address": "0x30a70a61C01FdB73d19a8Cc7aAe814a0a359adE2",
+      "deployer": "0xAecb229194314999E396468eb091b42E44Bc3c8c"
     },
     "ContractRegistry": {
-      "address": "0x6956c982aec9Ad08040b91417a313003879d0f48",
-      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+      "address": "0x566c7584E1158977Fb3B0B28eae57C31E1FcF4e3",
+      "deployer": "0xAecb229194314999E396468eb091b42E44Bc3c8c"
     },
     "FundingRate": {
-      "address": "0x0a513bf3DE079Bf2439A5884583712bD014487aa",
-      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+      "address": "0xa33f2c84589079e7AC6037D81B472AF9cf421cC8",
+      "deployer": "0xAecb229194314999E396468eb091b42E44Bc3c8c"
     },
     "Liquidation": {
-      "address": "0x322AeeD67C12c10684B134e1727866425dc75F1c",
-      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+      "address": "0xadBBFE5F01290297050b2AB2a2BeF2DE244a83D0",
+      "deployer": "0xAecb229194314999E396468eb091b42E44Bc3c8c"
     },
     "RiskManager": {
-      "address": "0xd4fbB0f140d8909e73e3D91C897EBe66f01B15F9",
-      "deployer": "0x5AF11d4784c3739cf2FD51Fdc272ae4957ADf7fE"
+      "address": "0xD22CCFDD884405c23CFaE08Da8437440FA724966",
+      "deployer": "0xAecb229194314999E396468eb091b42E44Bc3c8c"
+    },
+    "LendingPool": {
+      "address": "0x98a7665301C0dB32ceff957e1A2c505dF8384CA4",
+      "deployer": "0xAecb229194314999E396468eb091b42E44Bc3c8c"
     }
   },
-  "explorer": "https://testnet.bscscan.com/address/0x22276744bAF24eD503dB50Cc999a9c5AD62728cb"
+  "explorer": "https://testnet.bscscan.com/address/0x86b2dC09b24C244DcdFE58dceF37b89d63B353bf"
 }

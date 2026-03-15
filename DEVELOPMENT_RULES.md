@@ -581,8 +581,9 @@ Merkle 快照提交 → SettlementV2.updateStateRoot()
 
 | 合约 | 地址 | 角色 |
 |------|------|------|
-| SettlementV2 | `0x7fF9d60aE49F14bB604FeF1961910D7931067873` | 用户 WBNB 托管 + Merkle 提款 |
-| PerpVault | `0x7F98ed779c3352f39b041C57d5B2C73F84dcAA75` | LP 池 + 保险基金 + OI 管理 |
+| TradingVault | `0x7Cb5f078e43BE7b1FA6F509ffF3e35ac191E81e9` | 统一资金合约 (替代 SettlementV2 + PerpVault) |
+| SettlementV2 (旧) | `0x97d8f964bb908083432621dbae52f38D2bDd1245` | 已被 TradingVault 替代 |
+| PerpVault (旧) | `0x7F98ed779c3352f39b041C57d5B2C73F84dcAA75` | 已被 TradingVault 替代 |
 | TokenFactory | `0x22276744bAF24eD503dB50Cc999a9c5AD62728cb` | Meme 代币发射台 |
 | PriceFeed | `0xe2b22673fFBeB7A2a4617125E885C12EC072ee48` | 价格预言机 |
 | WBNB | `0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd` | 抵押品代币 |
@@ -591,10 +592,10 @@ Merkle 快照提交 → SettlementV2.updateStateRoot()
 
 | 模块 | 文件 | 职责 |
 |------|------|------|
-| 批量结算队列 | `backend/src/matching/modules/perpVault.ts` | payable 调用排队, 30s 批量执行 |
-| 存款事件监听 | `backend/src/matching/server.ts` (L~5167) | SettlementV2 Deposited/DepositedFor → 余额同步 |
-| Merkle 快照 | `backend/src/matching/modules/snapshot.ts` | 每小时生成 Merkle root → 链上提交 |
-| 提款授权 | `backend/src/matching/modules/withdraw.ts` | EIP-712 签名 + nonce 链上同步 |
+| 批量结算队列 | `backend/src/matching/modules/perpVault.ts` | nonpayable 记账调用排队, 30s 批量执行 |
+| 存款事件监听 | `backend/src/matching/server.ts` (L~5167) | TradingVault Deposited/DepositedFor → 余额同步 |
+| Merkle 快照 | `backend/src/matching/modules/snapshot.ts` | 每小时生成 Merkle root → 链上提交 (保底) |
+| 提款授权 | `backend/src/matching/modules/withdraw.ts` | fastWithdraw EIP-712 签名 + Merkle 保底 |
 | Keeper 仓位查询 | `backend/internal/keeper/liquidation.go` | HTTP 查询引擎 → 降级 PostgreSQL |
 
 ### 运维引导 (Phase 0)
@@ -607,9 +608,8 @@ forge script script/ConfigureSettlement.s.sol --rpc-url $BASE_SEPOLIA_RPC_URL --
 ### 余额不变量
 
 ```
-SettlementV2.WETH >= sum(userDeposits) - sum(totalWithdrawn)
-PerpVault.balance >= 最低安全阈值 (2 ETH seed)
-engineWallet.balance >= 0.05 ETH (gas 预留)
+TradingVault.WBNB >= sum(userDeposits) - sum(totalWithdrawn) + lpPoolBalance
+engineWallet.balance >= 0.05 BNB (gas 预留, 不再需要结算资金)
 ```
 
 ---
@@ -620,9 +620,10 @@ engineWallet.balance >= 0.05 ETH (gas 预留)
 
 | 合约 | 地址 | 网络 |
 |------|------|------|
-| SettlementV2 | `0x7fF9d60aE49F14bB604FeF1961910D7931067873` | BSC Testnet (97) |
+| TradingVault | `0x7Cb5f078e43BE7b1FA6F509ffF3e35ac191E81e9` | BSC Testnet (97) |
+| SettlementV2 (旧) | `0x97d8f964bb908083432621dbae52f38D2bDd1245` | BSC Testnet (97) |
 | Collateral (WBNB) | `0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd` | BSC Testnet (97) |
-| PerpVault | `0x7F98ed779c3352f39b041C57d5B2C73F84dcAA75` | BSC Testnet (97) |
+| PerpVault (旧) | `0x7F98ed779c3352f39b041C57d5B2C73F84dcAA75` | BSC Testnet (97) |
 
 ### 架构说明 (dYdX v3 模式)
 
@@ -1030,7 +1031,7 @@ cast send 0x246c4A147F8b7Afb2b4b820284f11F5119553106 "mint(address,uint256)" <us
 # 设置到 contracts/.env: BSCSCAN_API_KEY=your_key_here
 
 # 验证 SettlementV2 (BSC Testnet)
-forge verify-contract 0x7fF9d60aE49F14bB604FeF1961910D7931067873 \
+forge verify-contract 0x97d8f964bb908083432621dbae52f38D2bDd1245 \
   src/perpetual/SettlementV2.sol:SettlementV2 \
   --chain 97 \
   --constructor-args $(cast abi-encode "constructor(address,address,address)" \

@@ -286,7 +286,7 @@ function LoadingSkeleton() {
           </div>
           <div
             data-testid="connect-wallet-btn"
-            className="bg-okx-up text-black px-4 py-1.5 rounded-full text-[13px] font-bold opacity-50"
+            className="bg-okx-up text-black px-4 py-1.5 rounded-full text-sm font-bold opacity-50"
           >
             {t.connectWallet}
           </div>
@@ -424,7 +424,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
           <WagmiProvider config={config}>
             <QueryClientProvider client={queryClient}>
               <RainbowKitProvider
-                initialChain={parseInt(process.env.NEXT_PUBLIC_TARGET_CHAIN_ID || "56")}
+                initialChain={parseInt(process.env.NEXT_PUBLIC_TARGET_CHAIN_ID || "97")}
                 modalSize="compact"
               >
                 <ToastProvider>
