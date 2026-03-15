@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { WssOnChainToken, useTradingDataStore } from "@/lib/stores/tradingDataStore";
 import { formatTokenPrice } from "@/utils/formatters";
+import { SOLD_TOKENS_TARGET } from "@/lib/protocol-constants";
 import type { Address } from "viem";
 
 // Avatar color palette for deterministic token colors
@@ -37,6 +38,16 @@ function formatVolume(weiStr: string): string {
   return `${(eth / 1000).toFixed(1)}K BNB`;
 }
 
+// Format ETH value that's already in ETH units (not wei)
+function formatEthValue(ethStr: string): string {
+  const eth = Number(ethStr || "0");
+  if (eth === 0 || isNaN(eth)) return "0 BNB";
+  if (eth < 0.01) return `${eth.toFixed(4)} BNB`;
+  if (eth < 1) return `${eth.toFixed(2)} BNB`;
+  if (eth < 1000) return `${eth.toFixed(1)} BNB`;
+  return `${(eth / 1000).toFixed(1)}K BNB`;
+}
+
 function formatMarketCap(weiStr: string): string {
   const usd = Number(weiStr) / 1e18;
   if (usd < 1000) return `$${usd.toFixed(0)}`;
@@ -55,12 +66,13 @@ function timeAgo(timestamp: number): string {
   return `${days}d`;
 }
 
-// Graduation progress: soldSupply / totalSupply (bonding curve fills at ~800M of 1B)
+// Graduation progress: soldSupply / SOLD_TOKENS_TARGET (793M = 1B - 207M graduation threshold)
 function getGradProgress(token: WssOnChainToken): number {
-  const sold = Number(token.soldSupply || "0");
-  const threshold = 800_000_000 * 1e18; // 800M tokens
-  if (sold <= 0) return 0;
-  const pct = (sold / threshold) * 100;
+  // If already graduated, always show 100%
+  if (token.isGraduated) return 100;
+  const soldBigInt = BigInt(token.soldSupply || "0");
+  if (soldBigInt <= 0n) return 0;
+  const pct = Number((soldBigInt * 10000n) / SOLD_TOKENS_TARGET) / 100;
   return Math.min(pct, 100);
 }
 
@@ -437,9 +449,9 @@ export function SpotListingView({ tokens: rawTokens }: SpotListingViewProps) {
                     {formatVolume(tokenStat?.volume24h || "0")}
                   </span>
 
-                  {/* Liquidity */}
+                  {/* Liquidity — realETHReserve is already in ETH units from WS */}
                   <span className="w-[120px] font-mono text-xs font-medium text-okx-text-tertiary">
-                    {formatVolume(token.realETHReserve)}
+                    {formatEthValue(token.realETHReserve)}
                   </span>
 
                   {/* Progress */}

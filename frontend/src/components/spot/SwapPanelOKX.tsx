@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useMemo, useEffect, useCallback } from "react";
-import { useWriteContract, useWaitForTransactionReceipt, useAccount, useBalance, useReadContract } from "wagmi";
+import { useWriteContract, useWaitForTransactionReceipt, useAccount, useBalance, useReadContract, usePublicClient } from "wagmi";
 import { parseUnits, formatUnits, type Address, erc20Abi } from "viem";
 import { useExecuteSwap, ETH_DECIMALS } from "@/hooks/spot/useExecuteSwap";
 import { useOnChainQuote } from "@/hooks/spot/useOnChainQuote";
@@ -134,6 +134,8 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
 
   const bondingCurveProgress = animatedProgress;
 
+  const publicClient = usePublicClient();
+
   // 余额从链上查询
   const { data: ethBalanceData, refetch: refetchEthBalance } = useBalance({ address });
   // 临时使用 0 作为占位符
@@ -259,8 +261,14 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
       if (isGraduated) {
         // 毕业代币: approve PancakeSwap V2 Router
         const MAX_UINT256 = 2n ** 256n - 1n;
-        await approveDexRouter(MAX_UINT256);
+        const hash = await approveDexRouter(MAX_UINT256);
         showToast(t("approvalSubmitted"), "success");
+        // Wait for on-chain confirmation then refetch DEX allowance
+        if (hash && publicClient) {
+          await publicClient.waitForTransactionReceipt({ hash });
+          showToast(t("approvalSuccess"), "success");
+          refetchDexAllowance();
+        }
       } else {
         // 内盘代币: approve TokenFactory
         if (!TOKEN_FACTORY_ADDRESS) return;
