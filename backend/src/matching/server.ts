@@ -29,7 +29,7 @@ import db, {
   type SettlementLog,
   type MarketStats,
 } from "./database";
-import { connectRedis as connectNewRedis, disconnectRedis, PositionRepo, TradeRepo, OrderMarginRepo, Mode2AdjustmentRepo, NonceRepo, InsuranceFundRepo, ReferralRepo, SettlementLogRepo as RedisSettlementLogRepo, withLock, safeBigInt, cleanupStaleOrders, cleanupClosedPositions, type PerpTrade } from "./database/redis";
+import { connectRedis as connectNewRedis, disconnectRedis, PositionRepo, TradeRepo, OrderMarginRepo, Mode2AdjustmentRepo, NonceRepo, InsuranceFundRepo, ReferralRepo, SettlementLogRepo as RedisSettlementLogRepo, PendingWithdrawalMode2Repo, type PendingWithdrawalMode2, withLock, safeBigInt, cleanupStaleOrders, cleanupClosedPositions, type PerpTrade } from "./database/redis";
 // P1-5: PostgreSQL 订单镜像 (Write-Through Cache)
 import { connectPostgres, disconnectPostgres, isPostgresConnected, OrderMirrorRepo, PositionMirrorRepo, type PgOrderMirror, type PgPositionMirror } from "./database/postgres";
 // P2-4: 仓位大小限制常量
@@ -4297,6 +4297,98 @@ function addMode2Adjustment(trader: Address, amount: bigint, reason: string): vo
   Mode2AdjustmentRepo.save(normalized, updated).catch(e =>
     console.error(`[Mode2Adj] Failed to persist: ${e}`)
   );
+}
+
+// ============================================================
+// Pending Withdrawal Mode2 Reconciliation
+// ============================================================
+// 提款授权时预扣 mode2 → 链上 tx 可能回退 → 需要定期对账自动回滚。
+// dYdX v3 等平台也有类似的 "pending withdrawal" 追踪机制。
+const pendingWithdrawalMode2s = new Map<string, PendingWithdrawalMode2>();
+
+/** Record a pending mode2 deduction when generating withdrawal auth */
+function recordPendingWithdrawalMode2(
+  trader: Address,
+  mode2Portion: bigint,
+  withdrawAmount: bigint,
+  deadline: number,
+  nonce: bigint,
+  totalWithdrawnBefore: bigint,
+): void {
+  const id = `${trader.toLowerCase()}:${nonce.toString()}`;
+  const record: PendingWithdrawalMode2 = {
+    id,
+    trader: trader.toLowerCase(),
+    mode2Portion: mode2Portion.toString(),
+    withdrawAmount: withdrawAmount.toString(),
+    deadline,
+    nonce: nonce.toString(),
+    totalWithdrawnBefore: totalWithdrawnBefore.toString(),
+    createdAt: Date.now(),
+  };
+  pendingWithdrawalMode2s.set(id, record);
+  PendingWithdrawalMode2Repo.save(record).catch(e =>
+    console.error(`[Reconcile] Failed to persist pending withdrawal: ${e}`)
+  );
+  console.log(`[Reconcile] Recorded pending mode2 deduction: ${id}, mode2Portion=Ξ${Number(mode2Portion) / 1e18}`);
+}
+
+/**
+ * Reconcile pending withdrawal mode2 deductions against on-chain state.
+ * Called periodically (every 60s). For each pending record:
+ * - If deadline + buffer expired AND on-chain totalWithdrawn didn't increase → REVERSE mode2
+ * - If on-chain totalWithdrawn increased → withdrawal succeeded, FINALIZE (remove record)
+ * - If not yet expired → skip (wait for user to submit or for deadline to pass)
+ */
+async function reconcilePendingWithdrawals(): Promise<void> {
+  if (pendingWithdrawalMode2s.size === 0) return;
+
+  const now = Math.floor(Date.now() / 1000);
+  const EXPIRY_BUFFER_SECONDS = 300; // 5 minutes after deadline to allow for slow tx confirmations
+
+  for (const [id, record] of pendingWithdrawalMode2s) {
+    // Don't reconcile until deadline + buffer has passed
+    if (now < record.deadline + EXPIRY_BUFFER_SECONDS) continue;
+
+    try {
+      const { getUserTotalWithdrawn } = await import("./modules/relay");
+      const currentTotalWithdrawn = await getUserTotalWithdrawn(record.trader as Address);
+      const beforeWithdrawn = BigInt(record.totalWithdrawnBefore);
+
+      if (currentTotalWithdrawn > beforeWithdrawn) {
+        // ✅ Withdrawal confirmed on-chain — mode2 deduction was correct
+        console.log(`[Reconcile] ✅ Withdrawal confirmed on-chain for ${record.trader.slice(0, 10)}, ` +
+          `totalWithdrawn: ${Number(beforeWithdrawn) / 1e18} → ${Number(currentTotalWithdrawn) / 1e18}. Mode2 deduction finalized.`);
+      } else {
+        // ❌ Withdrawal did NOT happen on-chain — REVERSE the mode2 deduction
+        const mode2Portion = BigInt(record.mode2Portion);
+        addMode2Adjustment(record.trader as Address, mode2Portion, "WITHDRAW_REVERSAL");
+        console.log(`[Reconcile] 🔄 REVERSED mode2 deduction for ${record.trader.slice(0, 10)}: ` +
+          `+Ξ${Number(mode2Portion) / 1e18} (withdrawal expired without on-chain confirmation)`);
+      }
+
+      // Clean up — whether confirmed or reversed
+      pendingWithdrawalMode2s.delete(id);
+      PendingWithdrawalMode2Repo.remove(id).catch(e =>
+        console.error(`[Reconcile] Failed to remove record ${id}: ${e}`)
+      );
+    } catch (e) {
+      console.error(`[Reconcile] Failed to check on-chain state for ${id}:`, e);
+      // Don't delete — will retry on next cycle
+    }
+  }
+}
+
+/** Load pending records from Redis on startup */
+async function loadPendingWithdrawalMode2s(): Promise<number> {
+  const records = await PendingWithdrawalMode2Repo.getAll();
+  for (const record of records) {
+    pendingWithdrawalMode2s.set(record.id, record);
+  }
+  if (records.length > 0) {
+    console.log(`[Reconcile] Loaded ${records.length} pending withdrawal mode2 records from Redis`);
+  }
+  return records.length;
 }
 
 /**
@@ -11517,7 +11609,17 @@ async function handleRequest(req: Request): Promise<Response> {
             );
           }
 
-          // 4. Generate Merkle proof withdrawal authorization
+          // 4. Snapshot on-chain totalWithdrawn BEFORE authorization
+          // Used by reconciliation job to detect if chain tx reverted
+          let totalWithdrawnBefore = 0n;
+          try {
+            const { getUserTotalWithdrawn } = await import("./modules/relay");
+            totalWithdrawnBefore = await getUserTotalWithdrawn(normalizedTrader as Address);
+          } catch (e) {
+            console.warn(`[Withdraw:Merkle] Failed to read on-chain totalWithdrawn, proceeding: ${e}`);
+          }
+
+          // 5. Generate Merkle proof withdrawal authorization
           // SettlementV2 uses: withdraw(amount, userEquity, merkleProof[], deadline, signature)
           const result = await requestWithdrawal(normalizedTrader as Address, withdrawAmount);
           if (!result.success || !result.authorization) {
@@ -11528,7 +11630,7 @@ async function handleRequest(req: Request): Promise<Response> {
           const proof = getUserProof(normalizedTrader as Address);
           const userEquity = proof?.equity ?? 0n;
 
-          // 5. Pre-deduct balance to prevent double-spending
+          // 6. Pre-deduct balance to prevent double-spending
           if (userBal.availableBalance >= withdrawAmount) {
             userBal.availableBalance -= withdrawAmount;
           } else {
@@ -11536,19 +11638,34 @@ async function handleRequest(req: Request): Promise<Response> {
           }
           userBal.totalBalance = userBal.availableBalance + (userBal.usedMargin || 0n);
 
-          // 6. Deduct mode2 adjustment for the portion exceeding chain deposit
+          // 7. Deduct mode2 adjustment for the portion exceeding chain deposit
           // Without this, after syncUserBalanceFromChain the balance would "resurrect":
           //   chainAvailable = deposits - withdrawn = 0 (correct)
           //   mode2Adj = +0.5 (NOT deducted → 0.5 BNB appears from nowhere!)
           // Fix: deduct the excess from mode2 so effective stays correct
+          // ⚠️ CRITICAL: Record pending deduction for reconciliation — if chain tx reverts,
+          // the reconciliation job will automatically reverse this deduction
           const chainDeposit = userBal.settlementAvailable || 0n;
+          let mode2Portion = 0n;
           if (withdrawAmount > chainDeposit) {
-            const mode2Portion = withdrawAmount - chainDeposit;
+            mode2Portion = withdrawAmount - chainDeposit;
             addMode2Adjustment(normalizedTrader, -mode2Portion, "WITHDRAW_PROFIT");
             console.log(`[Withdraw:Merkle] ${normalizedTrader.slice(0, 10)} mode2 deducted Ξ${Number(mode2Portion) / 1e18} (profit withdrawal)`);
           }
 
-          console.log(`[Withdraw:Merkle] ${normalizedTrader.slice(0, 10)} authorized Ξ${Number(withdrawAmount) / 1e18} (balance pre-deducted)`);
+          // 8. Record pending deduction for auto-reversal if chain tx reverts
+          if (mode2Portion > 0n) {
+            recordPendingWithdrawalMode2(
+              normalizedTrader as Address,
+              mode2Portion,
+              withdrawAmount,
+              result.authorization.deadline,
+              result.authorization.nonce,
+              totalWithdrawnBefore,
+            );
+          }
+
+          console.log(`[Withdraw:Merkle] ${normalizedTrader.slice(0, 10)} authorized Ξ${Number(withdrawAmount) / 1e18} (balance pre-deducted, reconciliation=${mode2Portion > 0n ? 'tracked' : 'n/a'})`);
 
           // 7. Return Merkle proof authorization for frontend
           // Frontend calls SettlementV2.withdraw(amount, userEquity, merkleProof, deadline, signature)
@@ -13534,6 +13651,16 @@ async function startServer(): Promise<void> {
       console.error("[Server] Failed to restore Mode 2 adjustments:", e);
     }
 
+    // 从 Redis 恢复待确认提款 mode2 扣减记录
+    try {
+      const pendingCount = await loadPendingWithdrawalMode2s();
+      if (pendingCount > 0) {
+        console.log(`[Server] ⚠️ ${pendingCount} pending withdrawal mode2 deductions loaded — reconciliation will run in 60s`);
+      }
+    } catch (e) {
+      console.error("[Server] Failed to load pending withdrawal mode2 records:", e);
+    }
+
     // 从 Redis 恢复保险基金 (防重启后归零)
     try {
       const savedGlobal = await InsuranceFundRepo.getGlobal();
@@ -13844,6 +13971,15 @@ async function startServer(): Promise<void> {
 
   // AUDIT-FIX ME-H01: 定期清理过期的 pendingWithdrawals（每 5 分钟）
   setInterval(cleanupExpiredWithdrawals, 5 * 60 * 1000);
+
+  // ⚠️ CRITICAL: 提款 mode2 对账 — 每 60 秒检查链上 totalWithdrawn
+  // 如果签名过期 + 5分钟缓冲后链上 totalWithdrawn 未增加 → 自动回滚 mode2 扣减
+  // 修复: 链上 tx 回退但后端不回滚导致用户资金「凭空消失」的严重 bug
+  setInterval(reconcilePendingWithdrawals, 60 * 1000);
+  // 启动时立即运行一次（处理上次重启前遗留的待确认记录）
+  reconcilePendingWithdrawals().catch(e =>
+    console.error("[Reconcile] Startup reconciliation failed:", e)
+  );
 
   // 定期从 TokenFactory / Uniswap V2 Pair 同步现货价格并更新 K 线
   // ✅ ETH 本位: 直接使用 Token/ETH 价格 (1e18 精度)，不做 USD 转换

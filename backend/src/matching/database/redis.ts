@@ -274,6 +274,10 @@ export const Keys = {
   mode2Adjustment: (user: Address) => `mode2_adj:${user.toLowerCase()}`,
   allMode2Adjustments: () => "mode2_adj:all",
 
+  // Pending withdrawal mode2 deductions (链上确认前的待回滚记录)
+  pendingWithdrawalMode2: (id: string) => `pending_wd_mode2:${id}`,
+  allPendingWithdrawalMode2: () => "pending_wd_mode2:all",
+
   // Auth nonce keys (防重放攻击，必须持久化)
   userNonce: (user: Address) => `nonce:${user.toLowerCase()}`,
   allUserNonces: () => "nonces:all",
@@ -1408,6 +1412,76 @@ export const Mode2AdjustmentRepo = {
       }
     } catch (e) {
       logger.error("Redis", `Failed to load mode2 adjustments: ${e}`);
+    }
+    return result;
+  },
+};
+
+// ============================================================
+// Pending Withdrawal Mode2 Deductions (链上确认前的回滚记录)
+// ============================================================
+// 当后端预扣 mode2 后返回提款签名，但链上 tx 可能回退。
+// 这些记录允许定期对账：deadline 过期 + 链上 totalWithdrawn 未增加 → 自动回滚。
+
+export interface PendingWithdrawalMode2 {
+  id: string;                  // `${trader}:${nonce}`
+  trader: string;              // 用户地址
+  mode2Portion: string;        // 被扣减的 mode2 金额 (bigint string)
+  withdrawAmount: string;      // 请求提款金额 (bigint string)
+  deadline: number;            // 提款签名过期时间 (Unix 秒)
+  nonce: string;               // 提款 nonce (bigint string)
+  totalWithdrawnBefore: string; // 授权时链上 totalWithdrawn 快照 (bigint string)
+  createdAt: number;           // 创建时间 (Date.now())
+}
+
+export const PendingWithdrawalMode2Repo = {
+  async save(record: PendingWithdrawalMode2): Promise<void> {
+    if (!isRedisConnected()) return;
+    try {
+      const client = getRedisClient();
+      const key = Keys.pendingWithdrawalMode2(record.id);
+      await client.set(key, JSON.stringify(record));
+      await client.sadd(Keys.allPendingWithdrawalMode2(), record.id);
+    } catch (e) {
+      logger.error("Redis", `Failed to save pending withdrawal mode2: ${e}`);
+    }
+  },
+
+  async remove(id: string): Promise<void> {
+    if (!isRedisConnected()) return;
+    try {
+      const client = getRedisClient();
+      await client.del(Keys.pendingWithdrawalMode2(id));
+      await client.srem(Keys.allPendingWithdrawalMode2(), id);
+    } catch (e) {
+      logger.error("Redis", `Failed to remove pending withdrawal mode2: ${e}`);
+    }
+  },
+
+  async getAll(): Promise<PendingWithdrawalMode2[]> {
+    const result: PendingWithdrawalMode2[] = [];
+    if (!isRedisConnected()) return result;
+    try {
+      const client = getRedisClient();
+      const ids = await client.smembers(Keys.allPendingWithdrawalMode2());
+      for (const id of ids) {
+        const key = Keys.pendingWithdrawalMode2(id);
+        const value = await client.get(key);
+        if (value) {
+          try {
+            result.push(JSON.parse(value));
+          } catch {
+            // Corrupted record — clean up
+            await client.del(key);
+            await client.srem(Keys.allPendingWithdrawalMode2(), id);
+          }
+        } else {
+          // Dangling set member — clean up
+          await client.srem(Keys.allPendingWithdrawalMode2(), id);
+        }
+      }
+    } catch (e) {
+      logger.error("Redis", `Failed to load pending withdrawal mode2 records: ${e}`);
     }
     return result;
   },
