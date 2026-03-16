@@ -92,10 +92,16 @@ export default function DepositPage() {
 
   const isProcessing = depositStep > 0 || withdrawStep > 0 || isWithdrawingToMain || isDepositingBNB;
 
-  // Total withdrawable = settlement (fastWithdraw) + wallet (direct transfer)
+  // Total withdrawable = engine available (includes chain + mode2 profits) + wallet
+  // Engine availableBalance = (chainSettlement + mode2Adjustment) - positionMargin - pendingOrders
+  // Falls back to on-chain only when engine data is not yet loaded
   const totalWithdrawable = useMemo(() => {
+    const engineAvailable = balance?.available ?? 0n;
+    if (engineAvailable > 0n) {
+      return engineAvailable + walletOnlyBalance;
+    }
     return settlementBalance + walletOnlyBalance;
-  }, [settlementBalance, walletOnlyBalance]);
+  }, [balance?.available, walletOnlyBalance, settlementBalance]);
 
   // Format BNB balance
   const fmtETH = (val: bigint | undefined) => {
@@ -206,9 +212,13 @@ export default function DepositPage() {
       }
 
       // Phase 2: Fast withdrawal from TradingVault (if still need more)
-      if (remaining > 0n && settlementBalance > 0n) {
+      // Use engine available (includes mode2 trading profits), not just on-chain settlementBalance
+      // The engine's /api/wallet/withdraw validates the actual available balance server-side
+      const engineAvailable = balance?.available ?? 0n;
+      const vaultCap = engineAvailable > settlementBalance ? engineAvailable : settlementBalance;
+      if (remaining > 0n && vaultCap > 0n) {
         setWithdrawStep(3); // "Fast withdrawal from TradingVault"
-        const vaultAmount = remaining > settlementBalance ? settlementBalance : remaining;
+        const vaultAmount = remaining > vaultCap ? vaultCap : remaining;
         const vaultStr = formatEther(vaultAmount);
         const vaultTxHash = await settlementWithdraw(CONTRACTS.WETH, vaultStr);
         if (vaultTxHash) lastTxHash = vaultTxHash;
@@ -252,7 +262,7 @@ export default function DepositPage() {
       setWithdrawStep(0);
     }
   }, [
-    tradingWallet, mainWallet, amountWei, amount,
+    tradingWallet, mainWallet, amountWei, amount, balance,
     walletOnlyBalance, wethBalance, nativeEthBalance, settlementBalance,
     withdrawToMainWallet, settlementWithdraw, sendTransactionAsync, publicClient,
     refreshGlobalBalance, refetchMainBalance, t,
