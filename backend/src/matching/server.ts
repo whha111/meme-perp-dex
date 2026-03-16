@@ -11474,6 +11474,18 @@ async function handleRequest(req: Request): Promise<Response> {
           }
           userBal.totalBalance = userBal.availableBalance + (userBal.usedMargin || 0n);
 
+          // 6. Deduct mode2 adjustment for the portion exceeding chain deposit
+          // Without this, after syncUserBalanceFromChain the balance would "resurrect":
+          //   chainAvailable = deposits - withdrawn = 0 (correct)
+          //   mode2Adj = +0.5 (NOT deducted → 0.5 BNB appears from nowhere!)
+          // Fix: deduct the excess from mode2 so effective stays correct
+          const chainDeposit = userBal.settlementAvailable || 0n;
+          if (withdrawAmount > chainDeposit) {
+            const mode2Portion = withdrawAmount - chainDeposit;
+            addMode2Adjustment(normalizedTrader, -mode2Portion, "WITHDRAW_PROFIT");
+            console.log(`[Withdraw:Fast] ${normalizedTrader.slice(0, 10)} mode2 deducted Ξ${Number(mode2Portion) / 1e18} (profit withdrawal)`);
+          }
+
           console.log(`[Withdraw:Fast] ${normalizedTrader.slice(0, 10)} authorized Ξ${Number(withdrawAmount) / 1e18} (balance pre-deducted)`);
 
           // 6. Return fast withdrawal params for frontend
