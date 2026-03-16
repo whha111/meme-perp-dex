@@ -11124,11 +11124,16 @@ async function handleRequest(req: Request): Promise<Response> {
 
       console.log(`[Withdraw] CR-01 FIX: Authenticated withdrawal for ${normalizedUser.slice(0, 10)}, amount=${withdrawAmount.toString()}, balance deducted`);
 
+      // Include userEquity from Merkle proof — needed by SettlementV2.withdraw()
+      const proof = getUserProof(normalizedUser);
+      const userEquity = proof?.equity ?? 0n;
+
       return jsonResponse({
         success: true,
         authorization: {
           user: result.authorization!.user,
           amount: result.authorization!.amount.toString(),
+          userEquity: userEquity.toString(),
           nonce: result.authorization!.nonce.toString(),
           deadline: result.authorization!.deadline,
           merkleRoot: result.authorization!.merkleRoot,
@@ -11474,8 +11479,8 @@ async function handleRequest(req: Request): Promise<Response> {
       const withdrawAmount = BigInt(amount);
 
       // ═══════════════════════════════════════════════════════════
-      // TradingVault Fast Withdrawal (daily path — signature only)
-      // Returns fastWithdraw params for frontend to call TradingVault.fastWithdraw()
+      // SettlementV2 Merkle Proof Withdrawal
+      // Returns authorization params for frontend to call SettlementV2.withdraw()
       // H-6: withLock prevents concurrent withdrawal requests from double-spending
       // ═══════════════════════════════════════════════════════════
       if (SETTLEMENT_V2_ADDRESS) {
@@ -11512,11 +11517,16 @@ async function handleRequest(req: Request): Promise<Response> {
             );
           }
 
-          // 4. Generate fast withdrawal signature (no Merkle proof needed)
-          const result = await generateFastWithdrawalSignature(normalizedTrader, withdrawAmount);
-          if (!result.success || !result.data) {
-            return errorResponse(result.error || "Fast withdrawal signing failed");
+          // 4. Generate Merkle proof withdrawal authorization
+          // SettlementV2 uses: withdraw(amount, userEquity, merkleProof[], deadline, signature)
+          const result = await requestWithdrawal(normalizedTrader as Address, withdrawAmount);
+          if (!result.success || !result.authorization) {
+            return errorResponse(result.error || "Withdrawal authorization failed");
           }
+
+          // Get user equity from Merkle proof (needed by SettlementV2.withdraw)
+          const proof = getUserProof(normalizedTrader as Address);
+          const userEquity = proof?.equity ?? 0n;
 
           // 5. Pre-deduct balance to prevent double-spending
           if (userBal.availableBalance >= withdrawAmount) {
@@ -11535,20 +11545,21 @@ async function handleRequest(req: Request): Promise<Response> {
           if (withdrawAmount > chainDeposit) {
             const mode2Portion = withdrawAmount - chainDeposit;
             addMode2Adjustment(normalizedTrader, -mode2Portion, "WITHDRAW_PROFIT");
-            console.log(`[Withdraw:Fast] ${normalizedTrader.slice(0, 10)} mode2 deducted Ξ${Number(mode2Portion) / 1e18} (profit withdrawal)`);
+            console.log(`[Withdraw:Merkle] ${normalizedTrader.slice(0, 10)} mode2 deducted Ξ${Number(mode2Portion) / 1e18} (profit withdrawal)`);
           }
 
-          console.log(`[Withdraw:Fast] ${normalizedTrader.slice(0, 10)} authorized Ξ${Number(withdrawAmount) / 1e18} (balance pre-deducted)`);
+          console.log(`[Withdraw:Merkle] ${normalizedTrader.slice(0, 10)} authorized Ξ${Number(withdrawAmount) / 1e18} (balance pre-deducted)`);
 
-          // 6. Return fast withdrawal params for frontend
-          // Frontend calls TradingVault.fastWithdraw(amount, nonce, deadline, signature)
+          // 7. Return Merkle proof authorization for frontend
+          // Frontend calls SettlementV2.withdraw(amount, userEquity, merkleProof, deadline, signature)
           return jsonResponse({
             success: true,
-            fastWithdraw: {
+            authorization: {
               amount: withdrawAmount.toString(),
-              nonce: result.data.nonce.toString(),
-              deadline: result.data.deadline.toString(),
-              signature: result.data.signature,
+              userEquity: userEquity.toString(),
+              merkleProof: result.authorization.merkleProof,
+              deadline: result.authorization.deadline.toString(),
+              signature: result.authorization.signature,
             },
           });
         });

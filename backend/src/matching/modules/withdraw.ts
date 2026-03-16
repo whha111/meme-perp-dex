@@ -31,10 +31,11 @@ import { getUserProof, verifyProof as verifyMerkleProof } from "./snapshot";
 import { type MerkleProof } from "./merkle";
 
 /**
- * EIP-712 Domain — must match TradingVault contract's EIP712("TradingVault", "1")
+ * EIP-712 Domain — must match SettlementV2 contract's EIP712("SettlementV2", "1")
+ * ⚠️ 之前用 "TradingVault" 但 TradingVault 从未部署，实际合约是 SettlementV2
  */
 const EIP712_DOMAIN = {
-  name: "TradingVault",
+  name: "SettlementV2",
   version: "1",
   chainId: parseInt(process.env.CHAIN_ID || "97"),
   verifyingContract: "0x0000000000000000000000000000000000000000" as Address, // Will be set on init

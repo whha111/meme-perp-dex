@@ -93,6 +93,9 @@ hasProfit = isLong ? (currentPrice > avgPrice) : (avgPrice > currentPrice)
 | 功能 | 文件 |
 |------|------|
 | 撮合引擎入口 | backend/src/matching/server.ts (12000+ 行) |
+| Redis 数据层 (新，主用) | backend/src/matching/database/redis.ts — PositionRepo/OrderRepo/BalanceRepo |
+| Redis 数据层 (旧，废弃) | backend/src/matching/database.ts — ⚠️ PositionRepo 已废弃，勿导入 |
+| PostgreSQL 镜像 | backend/src/matching/database/postgres.ts — OrderMirrorRepo + PositionMirrorRepo |
 | PerpVault 模块 | backend/src/matching/modules/perpVault.ts |
 | Merkle 快照 | backend/src/matching/modules/snapshot.ts |
 | 提款授权 | backend/src/matching/modules/withdraw.ts |
@@ -141,6 +144,9 @@ backend/internal/     # Go API + Keeper
 10. ❌ 不要混淆 Unix 秒和 `Date.now()` 毫秒（ME-C02）
 11. ❌ 不要在前端用 `parseFloat` 处理 ETH 金额 — 使用 BigInt 全程（FE-C02）
 12. ❌ 修改合约地址时必须同步更新 7 个配置文件（见 CODE_REVIEW_V2.md 第八部分）
+13. ❌ 不要从 `database.ts` 导入 `PositionRepo` — 用 `database/redis.ts` 的版本（旧版用 `userAddress/symbol/side`，新版用 `trader/token/isLong`）
+14. ❌ 不要用 `memoryPositionToDB()` 转换仓位再存 Redis — 直接传 Position 对象给 `PositionRepo`
+15. ❌ server.ts 内存 Position 用 **string** 字段，database/redis.ts Position (types.ts) 用 **bigint** — 跨边界必须显式转换
 
 ## 修改检查清单
 
@@ -154,4 +160,6 @@ backend/internal/     # Go API + Keeper
 - [ ] 时间比较是否统一使用秒或毫秒?
 - [ ] ETH 金额计算是否全程使用 BigInt?
 - [ ] WS 广播是否只发送给目标用户（不是全量广播）?
+- [ ] Redis 仓位保存后是否能正常 `JSON.stringify`（无 BigInt 泄漏）?
+- [ ] 仓位删除是否传了 `traderHint` 参数（pairId≠Redis UUID）?
 - [ ] DEVELOPMENT_RULES.md 是否需要更新?
