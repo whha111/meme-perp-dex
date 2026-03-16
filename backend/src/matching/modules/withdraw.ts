@@ -260,22 +260,27 @@ export async function canWithdraw(user: Address, amount: bigint): Promise<{ canW
     };
   }
 
-  // M-07 FIX: 检查链上可用余额 (deposits - totalWithdrawn)
+  // M-07 FIX: 检查链上可提额 — 必须与 SettlementV2.withdraw() 合约逻辑一致
+  // 合约公式: maxWithdrawable = userEquity - totalWithdrawn[user]  (line 285-286)
+  // 其中 userEquity 来自 Merkle 树叶节点 (包含已实现利润)
+  // ⚠️ 旧代码错误地用 deposits - totalWithdrawn，导致已实现利润无法提取
   try {
-    const { getUserDeposits, getUserTotalWithdrawn } = await import("./relay");
-    const deposits = await getUserDeposits(user);
+    const { getUserTotalWithdrawn } = await import("./relay");
     const totalWithdrawn = await getUserTotalWithdrawn(user);
-    const onChainAvailable = deposits > totalWithdrawn ? deposits - totalWithdrawn : 0n;
+    // 用 Merkle equity (与合约一致)，而不是 deposits (只有链上存款)
+    const maxWithdrawable = proof.equity > totalWithdrawn
+      ? proof.equity - totalWithdrawn
+      : 0n;
 
-    if (amount > onChainAvailable) {
+    if (amount > maxWithdrawable) {
       return {
         canWithdraw: false,
-        reason: `On-chain available insufficient: deposits=${deposits}, withdrawn=${totalWithdrawn}, available=${onChainAvailable} < ${amount}`,
-        availableEquity: onChainAvailable,
+        reason: `Exceeds withdrawable: equity=${proof.equity}, withdrawn=${totalWithdrawn}, maxWithdrawable=${maxWithdrawable} < ${amount}`,
+        availableEquity: maxWithdrawable,
       };
     }
   } catch (e) {
-    console.warn(`[Withdraw] Failed to check on-chain balance for ${user.slice(0, 10)}, proceeding with equity check only:`, e);
+    console.warn(`[Withdraw] Failed to check on-chain totalWithdrawn for ${user.slice(0, 10)}, proceeding with equity check only:`, e);
   }
 
   return {
