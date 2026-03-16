@@ -324,8 +324,10 @@ export const PositionRepo = {
     // Add to liquidation trigger ZSet
     // 注意: ZSet score 是 64位浮点数，最大安全整数 ~9e15
     // 价格精度 1e12，降为 1e6 存储防止精度丢失 (支持价格到 $9,000,000,000)
-    if (position.liquidationPrice > 0n) {
-      const liqPriceScaled = Number(position.liquidationPrice / 1_000_000n);
+    // ⚠️ liquidationPrice 可能是 bigint 或 string (server.ts 传 string)
+    const liqPrice = safeBigInt(position.liquidationPrice);
+    if (liqPrice > 0n) {
+      const liqPriceScaled = Number(liqPrice / 1_000_000n);
       const triggerKey = position.isLong
         ? Keys.liquidationLong(data.token)
         : Keys.liquidationShort(data.token);
@@ -355,10 +357,12 @@ export const PositionRepo = {
     await client.hset(key, serialized);
 
     // Update liquidation trigger if price changed (1e6 scaled)
+    // ⚠️ updates.liquidationPrice 可能是 bigint 或 string
     if (updates.liquidationPrice !== undefined) {
       const position = await this.get(id);
       if (position) {
-        const liqPriceScaled = Number(updates.liquidationPrice / 1_000_000n);
+        const liqPrice = safeBigInt(updates.liquidationPrice);
+        const liqPriceScaled = Number(liqPrice / 1_000_000n);
         const triggerKey = position.isLong
           ? Keys.liquidationLong(position.token)
           : Keys.liquidationShort(position.token);
@@ -925,6 +929,7 @@ export const MarketStatsRepo = {
 // ============================================================
 
 function serializePosition(pos: Position): Record<string, string> {
+  // ✅ 使用 ?? 防御 undefined/null，避免 .toString() 在缺失字段上 crash
   return {
     id: pos.id,
     pairId: pos.pairId,
@@ -933,38 +938,38 @@ function serializePosition(pos: Position): Record<string, string> {
     // 旧格式兼容 (双写)
     userAddress: pos.trader,
     symbol: `${pos.token}-ETH`,
-    counterparty: pos.counterparty,
-    isLong: pos.isLong.toString(),
-    size: pos.size.toString(),
-    entryPrice: pos.entryPrice.toString(),
-    averageEntryPrice: pos.averageEntryPrice.toString(),
-    leverage: pos.leverage.toString(),
-    marginMode: pos.marginMode.toString(),  // 保证金模式 (0=ISOLATED, 1=CROSS)
-    markPrice: pos.markPrice.toString(),
-    liquidationPrice: pos.liquidationPrice.toString(),
-    bankruptcyPrice: pos.bankruptcyPrice.toString(),
-    breakEvenPrice: pos.breakEvenPrice.toString(),
-    collateral: pos.collateral.toString(),
-    margin: pos.margin.toString(),
-    marginRatio: pos.marginRatio.toString(),
-    mmr: pos.mmr.toString(),
-    maintenanceMargin: pos.maintenanceMargin.toString(),
-    unrealizedPnL: pos.unrealizedPnL.toString(),
-    realizedPnL: pos.realizedPnL.toString(),
-    roe: pos.roe.toString(),
-    accumulatedFunding: pos.accumulatedFunding.toString(),
+    counterparty: pos.counterparty || "",
+    isLong: String(pos.isLong ?? false),
+    size: String(pos.size ?? "0"),
+    entryPrice: String(pos.entryPrice ?? "0"),
+    averageEntryPrice: String(pos.averageEntryPrice ?? pos.entryPrice ?? "0"),
+    leverage: String(pos.leverage ?? "1"),
+    marginMode: String(pos.marginMode ?? 0),  // 保证金模式 (0=ISOLATED, 1=CROSS)
+    markPrice: String(pos.markPrice ?? "0"),
+    liquidationPrice: String(pos.liquidationPrice ?? "0"),
+    bankruptcyPrice: String(pos.bankruptcyPrice ?? "0"),
+    breakEvenPrice: String(pos.breakEvenPrice ?? pos.entryPrice ?? "0"),
+    collateral: String(pos.collateral ?? "0"),
+    margin: String(pos.margin ?? "0"),
+    marginRatio: String(pos.marginRatio ?? "10000"),
+    mmr: String(pos.mmr ?? "200"),
+    maintenanceMargin: String(pos.maintenanceMargin ?? "0"),
+    unrealizedPnL: String(pos.unrealizedPnL ?? "0"),
+    realizedPnL: String(pos.realizedPnL ?? "0"),
+    roe: String(pos.roe ?? "0"),
+    accumulatedFunding: String(pos.accumulatedFunding ?? (pos as any).accFundingFee ?? "0"),
     takeProfitPrice: pos.takeProfitPrice?.toString() || "",
     stopLossPrice: pos.stopLossPrice?.toString() || "",
-    adlRanking: pos.adlRanking.toString(),
-    adlScore: pos.adlScore.toString(),
-    riskLevel: pos.riskLevel,
-    isLiquidatable: pos.isLiquidatable.toString(),
-    isAdlCandidate: pos.isAdlCandidate.toString(),
-    status: pos.status.toString(),
-    fundingIndex: pos.fundingIndex.toString(),
-    isLiquidating: pos.isLiquidating.toString(),
-    createdAt: pos.createdAt.toString(),
-    updatedAt: pos.updatedAt.toString(),
+    adlRanking: String(pos.adlRanking ?? 1),
+    adlScore: String(pos.adlScore ?? "0"),
+    riskLevel: pos.riskLevel || "low",
+    isLiquidatable: String(pos.isLiquidatable ?? false),
+    isAdlCandidate: String(pos.isAdlCandidate ?? false),
+    status: String(pos.status ?? 0),
+    fundingIndex: String(pos.fundingIndex ?? "0"),
+    isLiquidating: String(pos.isLiquidating ?? false),
+    createdAt: String(pos.createdAt ?? Date.now()),
+    updatedAt: String(pos.updatedAt ?? Date.now()),
   };
 }
 

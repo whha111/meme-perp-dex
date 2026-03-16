@@ -18,7 +18,7 @@ import { MatchingEngine, OrderType, OrderStatus, TimeInForce, OrderSource, regis
 // ❌ Mode 2: SettlementSubmitter 已从导入中移除
 import type { TradeRecord } from "./types";
 import db, {
-  PositionRepo,
+  // ⚠️ PositionRepo 已移至 database/redis.ts — 用 trader/token/isLong 字段 (不再用 userAddress/symbol/side)
   OrderRepo,
   VaultRepo,
   SettlementLogRepo,
@@ -29,7 +29,7 @@ import db, {
   type SettlementLog,
   type MarketStats,
 } from "./database";
-import { connectRedis as connectNewRedis, disconnectRedis, TradeRepo, OrderMarginRepo, Mode2AdjustmentRepo, NonceRepo, InsuranceFundRepo, ReferralRepo, SettlementLogRepo as RedisSettlementLogRepo, withLock, safeBigInt, cleanupStaleOrders, cleanupClosedPositions, type PerpTrade } from "./database/redis";
+import { connectRedis as connectNewRedis, disconnectRedis, PositionRepo, TradeRepo, OrderMarginRepo, Mode2AdjustmentRepo, NonceRepo, InsuranceFundRepo, ReferralRepo, SettlementLogRepo as RedisSettlementLogRepo, withLock, safeBigInt, cleanupStaleOrders, cleanupClosedPositions, type PerpTrade } from "./database/redis";
 // P1-5: PostgreSQL 订单镜像 (Write-Through Cache)
 import { connectPostgres, disconnectPostgres, isPostgresConnected, OrderMirrorRepo, PositionMirrorRepo, type PgOrderMirror, type PgPositionMirror } from "./database/postgres";
 // P2-4: 仓位大小限制常量
@@ -779,34 +779,45 @@ async function loadPositionsFromRedis(): Promise<void> {
           continue;
         }
 
-        // 直接使用 deserializePosition 返回的数据 (已经是正确的 Position 格式)
-        // 补充 dbPositionToMemory 中的额外处理
+        // deserializePosition 返回 bigint 字段 (types.ts Position)
+        // 内存中用 string 字段 (server.ts local Position) — 必须全部转换
         const memPos: Position = {
-          ...dbPos,
+          id: dbPos.id,
           pairId: dbPos.pairId || dbPos.id,
           trader: userAddr,
           token: tokenAddr,
+          counterparty: dbPos.counterparty || ("0x0000000000000000000000000000000000000000" as Address),
+          isLong: dbPos.isLong,
+          size: dbPos.size?.toString() || "0",
+          entryPrice: dbPos.entryPrice?.toString() || "0",
+          averageEntryPrice: dbPos.averageEntryPrice?.toString() || dbPos.entryPrice?.toString() || "0",
           leverage: dbPos.leverage?.toString() || "1",
-          collateral: dbPos.collateral?.toString() || dbPos.margin?.toString() || "0",
-          margin: dbPos.margin?.toString() || dbPos.collateral?.toString() || "0",
-          maintenanceMargin: dbPos.maintenanceMargin?.toString() || "0",
           markPrice: dbPos.markPrice?.toString() || "0",
-          unrealizedPnL: dbPos.unrealizedPnL?.toString() || "0",
-          marginRatio: dbPos.marginRatio?.toString() || "10000",
-          mmr: dbPos.mmr?.toString() || "200",
           liquidationPrice: dbPos.liquidationPrice?.toString() || "0",
           bankruptcyPrice: dbPos.bankruptcyPrice?.toString() || "0",
-          roe: dbPos.roe?.toString() || "0",
+          breakEvenPrice: dbPos.breakEvenPrice?.toString() || "0",
+          collateral: dbPos.collateral?.toString() || dbPos.margin?.toString() || "0",
+          margin: dbPos.margin?.toString() || dbPos.collateral?.toString() || "0",
+          marginRatio: dbPos.marginRatio?.toString() || "10000",
+          mmr: dbPos.mmr?.toString() || "200",
+          maintenanceMargin: dbPos.maintenanceMargin?.toString() || "0",
+          unrealizedPnL: dbPos.unrealizedPnL?.toString() || "0",
           realizedPnL: dbPos.realizedPnL?.toString() || "0",
-          accFundingFee: "0",
+          roe: dbPos.roe?.toString() || "0",
+          fundingFee: dbPos.accumulatedFunding?.toString() || "0",
+          takeProfitPrice: dbPos.takeProfitPrice?.toString() || null,
+          stopLossPrice: dbPos.stopLossPrice?.toString() || null,
+          orderId: "",
+          orderIds: [],
           adlRanking: dbPos.adlRanking || 1,
           adlScore: dbPos.adlScore?.toString() || "0",
           riskLevel: dbPos.riskLevel || "low",
           isLiquidatable: dbPos.riskLevel === "critical",
           isAdlCandidate: false,
+          accFundingFee: dbPos.accumulatedFunding?.toString() || "0",
           fundingIndex: dbPos.fundingIndex?.toString() || "0",
-          size: dbPos.size?.toString() || "0",
-          entryPrice: dbPos.entryPrice?.toString() || "0",
+          createdAt: dbPos.createdAt || Date.now(),
+          updatedAt: dbPos.updatedAt || Date.now(),
         };
 
         const existing = userPositions.get(userAddr) || [];
@@ -960,23 +971,25 @@ async function savePositionToRedis(position: Position): Promise<string | null> {
 
 async function _doSavePositionToRedis(position: Position): Promise<string | null> {
   try {
-    const dbPos = memoryPositionToDB(position);
+    // ⚠️ 直接使用 Position 对象保存到 Redis — 不用 memoryPositionToDB()
+    // memoryPositionToDB 把 collateral→initialMargin, trader→userAddress 等字段名映射
+    // 这导致 serializePosition 找不到 collateral 字段而 crash, 每次保存都静默失败
 
-    // 先按 token + trader + side 查找已有仓位
+    // 先按 token + trader + isLong 查找已有仓位
     const existingPositions = await PositionRepo.getByUser(position.trader);
     const existing = existingPositions.find(
       (p) => p.token === position.token &&
-             p.side === (position.isLong ? "LONG" : "SHORT")
+             p.isLong === position.isLong  // ✅ 用 isLong 比较, 不用 p.side (deserialized Position 没有 side 字段)
     );
 
     let redisId: string;
     if (existing) {
-      // 更新已有仓位
-      await PositionRepo.update(existing.id, dbPos);
+      // 更新已有仓位 — 直接传 position (不是 DBPosition)
+      await PositionRepo.update(existing.id, position);
       redisId = existing.id;
     } else {
-      // 创建新仓位
-      const created = await PositionRepo.create(dbPos);
+      // 创建新仓位 — 直接传 position
+      const created = await PositionRepo.create(position);
       console.log(`[Redis] Position created: ${created.id} (trader=${position.trader.slice(0, 10)})`);
       redisId = created.id;
     }
@@ -999,11 +1012,27 @@ async function _doSavePositionToRedis(position: Position): Promise<string | null
 /**
  * 从 Redis 删除仓位
  */
-async function deletePositionFromRedis(positionId: string, closeStatus: "CLOSED" | "LIQUIDATED" = "CLOSED"): Promise<boolean> {
+async function deletePositionFromRedis(positionId: string, closeStatus: "CLOSED" | "LIQUIDATED" = "CLOSED", traderHint?: Address): Promise<boolean> {
   if (!db.isConnected()) return false;
 
   try {
-    const deleted = await PositionRepo.delete(positionId);
+    // 先尝试直接删除 (positionId 可能就是 Redis UUID)
+    let deleted = await PositionRepo.delete(positionId);
+
+    // ✅ 如果直接删除失败, 说明 positionId 是 pairId 而非 Redis UUID
+    // 需要按 trader 遍历查找真正的 Redis ID
+    if (!deleted && traderHint) {
+      const userPositionIds = await PositionRepo.getByUser(traderHint);
+      for (const pos of userPositionIds) {
+        if (pos.pairId === positionId || pos.id === positionId) {
+          deleted = await PositionRepo.delete(pos.id);
+          if (deleted) {
+            console.log(`[Redis] Deleted position by pairId lookup: ${pos.id} (pairId=${positionId})`);
+            break;
+          }
+        }
+      }
+    }
 
     // PostgreSQL 镜像: 软删除 (保留历史数据供审计)
     if (isPostgresConnected()) {
@@ -1021,7 +1050,7 @@ async function deletePositionFromRedis(positionId: string, closeStatus: "CLOSED"
 /**
  * 更新 Redis 中的仓位风险指标
  */
-async function updatePositionRiskInRedis(positionId: string, updates: Partial<DBPosition>): Promise<void> {
+async function updatePositionRiskInRedis(positionId: string, updates: Partial<Position>): Promise<void> {
   if (!db.isConnected()) return;
 
   try {
@@ -1981,7 +2010,7 @@ function runRiskCheck(): void {
 function syncPositionRisksToRedis(): void {
   if (!db.isConnected()) return;
 
-  const updates: Array<{ id: string; data: Partial<DBPosition> }> = [];
+  const updates: Array<{ id: string; data: Partial<Position> }> = [];
 
   for (const [trader, positions] of userPositions.entries()) {
     for (const pos of positions) {
@@ -2163,7 +2192,7 @@ async function processLiquidations(): Promise<void> {
     tpslOrders.delete(pos.pairId);
 
     // 3. 同步删除 Redis 中的仓位 (Bug fix: 强平后必须清理 Redis)
-    deletePositionFromRedis(pos.pairId, "LIQUIDATED").catch(e =>
+    deletePositionFromRedis(pos.pairId, "LIQUIDATED", normalizedTrader).catch(e =>
       console.error("[Redis] Failed to delete liquidated position:", e));
 
     // 4. 记录强平到交易历史
@@ -3275,7 +3304,7 @@ async function processTPSLTriggerQueue(): Promise<void> {
       }).catch(e => console.error("[TP/SL] Failed to log settle PnL bill:", e));
 
       // 同步删除 Redis 中的仓位
-      deletePositionFromRedis(order.pairId).catch(e =>
+      deletePositionFromRedis(order.pairId, "CLOSED", normalizedTrader).catch(e =>
         console.error("[Redis] Failed to delete TP/SL closed position:", e));
 
       // 广播执行事件
@@ -6182,7 +6211,7 @@ function removePositionByPairId(pairId: string): void {
       userPositions.set(trader, filteredPositions);
 
       // 同步删除 Redis 中的仓位
-      deletePositionFromRedis(pairId).catch((err) => {
+      deletePositionFromRedis(pairId, "CLOSED", trader as Address).catch((err) => {
         console.error("[Redis] Failed to delete position:", err);
       });
     }
@@ -6647,7 +6676,7 @@ function closePositionByMatch(
 
     positions.splice(posIdx, 1);
     userPositions.set(normalizedTrader, positions);
-    deletePositionFromRedis(pos.pairId).catch(e => console.error("[Redis] Failed to delete closed position:", e));
+    deletePositionFromRedis(pos.pairId, "CLOSED", normalizedTrader).catch(e => console.error("[Redis] Failed to delete closed position:", e));
     tpslOrders.delete(pos.pairId);
 
     console.log(`[CloseByMatch] Fully closed ${closingSide ? 'LONG' : 'SHORT'}: ${normalizedTrader.slice(0, 10)} PnL=$${Number(pnl) / 1e18}, fee=$${Number(closeFee) / 1e18}`);
@@ -6705,7 +6734,8 @@ function closePositionByMatch(
 // ============================================================
 
 function jsonResponse(data: object, status = 200): Response {
-  return new Response(JSON.stringify(data), {
+  // ⚠️ BigInt 值无法直接 JSON.stringify — 需要 replacer 转为字符串
+  return new Response(JSON.stringify(data, (_, v) => typeof v === "bigint" ? v.toString() : v), {
     status,
     headers: {
       "Content-Type": "application/json",
@@ -8790,7 +8820,7 @@ async function handleClosePair(req: Request, pairId: string): Promise<Response> 
       userPositions.set(normalizedTrader, updatedPositions);
 
       // 同步删除 Redis 中的仓位
-      deletePositionFromRedis(pairId).catch((err) => {
+      deletePositionFromRedis(pairId, "CLOSED", normalizedTrader).catch((err) => {
         console.error("[Redis] Failed to delete closed position:", err);
       });
 
@@ -11148,18 +11178,40 @@ async function handleRequest(req: Request): Promise<Response> {
     }
     try {
       const testPosition = await PositionRepo.create({
-        userAddress: "0x0000000000000000000000000000000000000001" as Address,
-        symbol: "TEST-ETH",
-        side: "LONG",
-        size: "1000000000000000000",
-        entryPrice: "100000000",
-        leverage: 10,
-        marginType: "ISOLATED",
-        initialMargin: "10000000",
-        maintMargin: "500000",
-        fundingIndex: "0",
+        pairId: `test_${Date.now()}`,
+        trader: "0x0000000000000000000000000000000000000001" as Address,
+        token: "0x0000000000000000000000000000000000000002" as Address,
+        counterparty: "0x0000000000000000000000000000000000000000" as Address,
+        isLong: true,
+        size: 1000000000000000000n,
+        entryPrice: 100000000n,
+        averageEntryPrice: 100000000n,
+        leverage: 100000n,
+        marginMode: 0,
+        markPrice: 100000000n,
+        liquidationPrice: 0n,
+        bankruptcyPrice: 0n,
+        breakEvenPrice: 0n,
+        collateral: 10000000n,
+        margin: 10000000n,
+        marginRatio: 10000n,
+        mmr: 200n,
+        maintenanceMargin: 500000n,
+        unrealizedPnL: 0n,
+        realizedPnL: 0n,
+        roe: 0n,
+        accumulatedFunding: 0n,
+        takeProfitPrice: null,
+        stopLossPrice: null,
+        adlRanking: 1,
+        adlScore: 0n,
+        riskLevel: "low" as const,
+        isLiquidatable: false,
+        isAdlCandidate: false,
+        status: 0,
+        fundingIndex: 0n,
         isLiquidating: false,
-      });
+      } as any);
       // Delete test position immediately
       await PositionRepo.delete(testPosition.id);
       return jsonResponse({
@@ -14025,97 +14077,153 @@ async function startServer(): Promise<void> {
   }
 
   // ============================================================
-  // 🔄 Position recovery from PostgreSQL (如果 Redis 中仓位为空)
+  // 🧹 清理 Redis 中不在内存的 orphan position keys
+  // 原因: deletePositionFromRedis 之前用 pairId 而非 Redis UUID, 导致 delete 失败
+  // 这些 orphan 在每次重启时被 loadPositionsFromRedis 重新加载, 造成 zombie 强平
+  // ============================================================
+  if (db.isConnected()) {
+    try {
+      const allRedisPositions = await PositionRepo.getAll();
+      const memoryPairIds = new Set<string>();
+      for (const [, positions] of userPositions.entries()) {
+        for (const pos of positions) {
+          memoryPairIds.add(pos.pairId);
+          memoryPairIds.add(pos.id || "");
+        }
+      }
+
+      let orphanCount = 0;
+      for (const redisPos of allRedisPositions) {
+        const inMemory = memoryPairIds.has(redisPos.pairId) || memoryPairIds.has(redisPos.id);
+        if (!inMemory) {
+          // Not in memory → orphan, delete from Redis
+          await PositionRepo.delete(redisPos.id).catch(() => {});
+          orphanCount++;
+        }
+      }
+      if (orphanCount > 0) {
+        console.log(`[Server] 🧹 Cleaned ${orphanCount} orphaned position keys from Redis (of ${allRedisPositions.length} total)`);
+      }
+    } catch (err: any) {
+      console.error(`[Server] Redis position cleanup failed: ${err.message}`);
+    }
+  }
+
+  // ============================================================
+  // 🔄 Position recovery from PostgreSQL + cross-validation
   // ============================================================
   if (isPostgresConnected()) {
     const memoryPositionCount = Array.from(userPositions.values()).reduce((sum, arr) => sum + arr.length, 0);
-    if (memoryPositionCount === 0) {
-      console.log("[Server] Redis had no positions, attempting PostgreSQL recovery...");
-      try {
-        const pgPositions = await PositionMirrorRepo.getActivePositions();
-        if (pgPositions.length > 0) {
-          let recovered = 0;
-          for (const pgPos of pgPositions) {
-            try {
-              // 跳过强平中或 zombie 仓位
-              if (pgPos.is_liquidating) continue;
-              const collateral = BigInt(pgPos.collateral || "0");
-              const size = BigInt(pgPos.size || "0");
-              if (collateral <= 0n && size > 0n) continue;
-              if (size <= 0n) continue;
 
-              const token = pgPos.token.toLowerCase() as Address;
-              const trader = pgPos.trader.toLowerCase() as Address;
+    // ✅ 获取 PG 中的活跃仓位 (无论 Redis 是否有数据, 都与 PG 对比)
+    try {
+      const pgPositions = await PositionMirrorRepo.getActivePositions();
+      const pgCount = pgPositions.length;
 
-              const memPos: Position = {
-                pairId: pgPos.id,
-                trader,
-                token,
-                isLong: pgPos.is_long,
-                size: pgPos.size,
-                entryPrice: pgPos.entry_price,
-                averageEntryPrice: pgPos.entry_price,
-                leverage: pgPos.leverage.toString(),
-                collateral: pgPos.collateral,
-                margin: pgPos.collateral,
-                maintenanceMargin: pgPos.maintenance_margin || "0",
-                markPrice: pgPos.mark_price || "0",
-                liquidationPrice: pgPos.liquidation_price || "0",
-                bankruptcyPrice: "0",
-                breakEvenPrice: pgPos.entry_price,
-                unrealizedPnL: pgPos.unrealized_pnl || "0",
-                realizedPnL: "0",
-                marginRatio: pgPos.margin_ratio || "10000",
-                mmr: "200",
-                roe: "0",
-                fundingFee: pgPos.funding_fee || "0",
-                fundingIndex: pgPos.funding_index || "0",
-                accFundingFee: pgPos.funding_fee || "0",
-                takeProfitPrice: null,
-                stopLossPrice: null,
-                orderId: "",
-                orderIds: [],
-                counterparty: "0x0000000000000000000000000000000000000000" as Address,
-                createdAt: pgPos.created_at,
-                updatedAt: pgPos.updated_at,
-                adlRanking: pgPos.adl_ranking || 1,
-                adlScore: pgPos.adl_score || "0",
-                riskLevel: (pgPos.risk_level as Position["riskLevel"]) || "low",
-                isLiquidatable: false,
-                isAdlCandidate: false,
-              };
-
-              // 去重: 同 (trader, token, isLong) 只保留一个
-              const existing = userPositions.get(trader) || [];
-              const dupeIdx = existing.findIndex(p => p.token === token && p.isLong === memPos.isLong);
-              if (dupeIdx >= 0) {
-                if (BigInt(memPos.size) > BigInt(existing[dupeIdx].size)) {
-                  existing[dupeIdx] = memPos;
-                }
-              } else {
-                existing.push(memPos);
-              }
-              userPositions.set(trader, existing);
-
-              // 回写 Redis 保持一致性
-              savePositionToRedis(memPos).catch(e =>
-                console.error(`[PG Recovery] Failed to re-save position to Redis: ${e.message}`)
-              );
-              recovered++;
-            } catch (err: any) {
-              console.error(`[PG Recovery] Failed to restore position ${pgPos.id}: ${err.message}`);
-            }
-          }
-          console.log(`[Server] ✅ Recovered ${recovered}/${pgPositions.length} positions from PostgreSQL`);
-        } else {
-          console.log("[Server] PostgreSQL also has no active positions");
-        }
-      } catch (pgError: any) {
-        console.error(`[Server] PostgreSQL position recovery failed: ${pgError.message}`);
+      if (memoryPositionCount === 0 && pgCount > 0) {
+        // Case 1: Redis 空, PG 有数据 → 完全恢复
+        console.log(`[Server] Redis had no positions, recovering ${pgCount} from PostgreSQL...`);
+      } else if (memoryPositionCount > 0 && pgCount > 0) {
+        // Case 2: 两边都有 → 交叉验证, 修复 collateral=0 的 zombie
+        console.log(`[Server] Cross-validating: memory=${memoryPositionCount} positions vs PG=${pgCount} active`);
+      } else {
+        console.log(`[Server] Memory=${memoryPositionCount} positions, PG=${pgCount} active — no recovery needed`);
       }
-    } else {
-      const pgCount = await PositionMirrorRepo.countActive().catch(() => 0);
-      console.log(`[Server] Memory has ${memoryPositionCount} positions, PostgreSQL mirror has ${pgCount} active positions`);
+
+      if (pgCount > 0) {
+        let recovered = 0;
+        let repaired = 0;
+        for (const pgPos of pgPositions) {
+          try {
+            // 跳过强平中或 zombie 仓位
+            if (pgPos.is_liquidating) continue;
+            const pgCollateral = BigInt(pgPos.collateral || "0");
+            const pgSize = BigInt(pgPos.size || "0");
+            if (pgCollateral <= 0n && pgSize > 0n) continue;
+            if (pgSize <= 0n) continue;
+
+            const token = pgPos.token.toLowerCase() as Address;
+            const trader = pgPos.trader.toLowerCase() as Address;
+
+            // 检查内存中是否已有此仓位 (从 Redis 加载)
+            const existingPositions = userPositions.get(trader) || [];
+            const memMatch = existingPositions.find(
+              p => p.token === token && p.isLong === pgPos.is_long
+            );
+
+            if (memMatch) {
+              // ✅ 内存中已有 — 检查 collateral 是否为 0 (zombie 修复)
+              const memCollateral = BigInt(memMatch.collateral || "0");
+              if (memCollateral <= 0n && pgCollateral > 0n) {
+                // Zombie detected! 用 PG 的正确数据修复
+                memMatch.collateral = pgPos.collateral;
+                memMatch.margin = pgPos.collateral;
+                memMatch.maintenanceMargin = pgPos.maintenance_margin || memMatch.maintenanceMargin;
+                repaired++;
+                console.log(`[PG Repair] Fixed zombie collateral: ${trader.slice(0, 10)} ${pgPos.is_long ? 'LONG' : 'SHORT'} collateral: 0 → ${Number(pgCollateral) / 1e18}`);
+              }
+              continue; // 已存在, 不需要恢复
+            }
+
+            // 内存中没有此仓位 → 从 PG 恢复
+            const memPos: Position = {
+              pairId: pgPos.id,
+              trader,
+              token,
+              isLong: pgPos.is_long,
+              size: pgPos.size,
+              entryPrice: pgPos.entry_price,
+              averageEntryPrice: pgPos.entry_price,
+              leverage: pgPos.leverage.toString(),
+              collateral: pgPos.collateral,
+              margin: pgPos.collateral,
+              maintenanceMargin: pgPos.maintenance_margin || "0",
+              markPrice: pgPos.mark_price || "0",
+              liquidationPrice: pgPos.liquidation_price || "0",
+              bankruptcyPrice: "0",
+              breakEvenPrice: pgPos.entry_price,
+              unrealizedPnL: pgPos.unrealized_pnl || "0",
+              realizedPnL: "0",
+              marginRatio: pgPos.margin_ratio || "10000",
+              mmr: "200",
+              roe: "0",
+              fundingFee: pgPos.funding_fee || "0",
+              fundingIndex: pgPos.funding_index || "0",
+              accFundingFee: pgPos.funding_fee || "0",
+              takeProfitPrice: null,
+              stopLossPrice: null,
+              orderId: "",
+              orderIds: [],
+              counterparty: "0x0000000000000000000000000000000000000000" as Address,
+              createdAt: pgPos.created_at,
+              updatedAt: pgPos.updated_at,
+              adlRanking: pgPos.adl_ranking || 1,
+              adlScore: pgPos.adl_score || "0",
+              riskLevel: (pgPos.risk_level as Position["riskLevel"]) || "low",
+              isLiquidatable: false,
+              isAdlCandidate: false,
+            };
+
+            // 添加到内存
+            const existing = userPositions.get(trader) || [];
+            existing.push(memPos);
+            userPositions.set(trader, existing);
+
+            // 回写 Redis 保持一致性
+            savePositionToRedis(memPos).catch(e =>
+              console.error(`[PG Recovery] Failed to re-save position to Redis: ${e.message}`)
+            );
+            recovered++;
+          } catch (err: any) {
+            console.error(`[PG Recovery] Failed to restore position ${pgPos.id}: ${err.message}`);
+          }
+        }
+        if (recovered > 0 || repaired > 0) {
+          console.log(`[Server] ✅ PG sync: recovered=${recovered}, zombie-repaired=${repaired} (from ${pgCount} PG active)`);
+        }
+      }
+    } catch (pgError: any) {
+      console.error(`[Server] PostgreSQL position recovery failed: ${pgError.message}`);
     }
   }
 
