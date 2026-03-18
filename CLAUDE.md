@@ -22,10 +22,43 @@ cat /Users/qinlinqiu/Desktop/meme-perp-dex/DEVELOPMENT_RULES.md
 
 **当前关键状态 (BSC Testnet, Chain 97)**:
 - ✅ 链上资金托管已连通（PerpVault LP, SettlementV2 存取款）
-- ✅ 合约部署到 BSC Testnet (97)，E2E 测试 36/36 通过
+- ✅ **合约全量重新部署 2026-03-18** — 所有地址已更新
 - ✅ V1/V2/V3 审计中 **35 个完全修复 + 9 个部分修复**
 - ✅ **V3 全部 CRITICAL + HIGH 已清零** (0/0) — 372 contract tests pass
 - ⚠️ 12 个 OPEN + 9 个 PARTIAL (全部 MEDIUM/LOW)（详见 AUDIT_V3_FULL.md）
+
+## 合约地址 (BSC Testnet — 2026-03-18 部署)
+
+**⚠️ 唯一真实来源: `deployments/97.json` — 所有配置文件必须与之一致**
+
+| 合约 | 地址 |
+|------|------|
+| TokenFactory | `0xd75be83c73fb331cc566e3d58563f74058e4ca0b` |
+| SettlementV2 | `0xac85c7ed31fa521bfdb7ae63d6e9385e4af79f1b` |
+| Settlement V1 | `0xe866e042dc6ec594c7534974cff0f9eaeebc2a1a` |
+| PerpVault | `0xeafa2fad2bb336da8cd8309669b0c16f597decdb` |
+| PriceFeed | `0x5c727ea9ac9be9036e538064e7db245cc09545fd` |
+| PositionManager | `0x5176a9f4093dede515c3a524f218cb4324500d22` |
+| Vault | `0xf00a94a1ae8a276c3aed24f5b542f4ec5e1f373c` |
+| Liquidation | `0x6c9a628219501c3271ea5b95b5aab8d1b593383e` |
+| FundingRate | `0x05a2bb4ad567f2b078a7028d4ca47998fb7f88d6` |
+| InsuranceFund | `0x6140b2f99a95b4e056d0bc6360c17232f1a8ab91` |
+| RiskManager | `0x6338608189d8153608d1d014e928490a33cfabf4` |
+| ContractRegistry | `0x4bd177026918c774feaad56aa6ce3d69e0d67021` |
+| WBNB | `0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd` |
+| PancakeRouter V2 | `0xD99D1c33F9fC3444f8101754aBC46c52416550D1` |
+| Deployer | `0xAecb229194314999E396468eb091b42E44Bc3c8c` |
+
+**配置文件同步清单** (修改地址时必须全部更新):
+1. `deployments/97.json` — 唯一真实来源
+2. `.env` (根目录 `MEMEPERP_*` 变量)
+3. `frontend/.env.local` (`NEXT_PUBLIC_*` 变量)
+4. `backend/.env`
+5. `backend/src/matching/.env`
+6. `backend/configs/config.yaml`
+7. `backend/configs/config.local.yaml`
+8. `frontend/contracts/deployments/base-sepolia.json`
+9. `scripts/sync-contract-addresses.ts` (ADDRESSES 常量)
 
 ## 项目概述
 
@@ -93,6 +126,9 @@ hasProfit = isLong ? (currentPrice > avgPrice) : (avgPrice > currentPrice)
 | 功能 | 文件 |
 |------|------|
 | 撮合引擎入口 | backend/src/matching/server.ts (12000+ 行) |
+| Redis 数据层 (新，主用) | backend/src/matching/database/redis.ts — PositionRepo/OrderRepo/BalanceRepo |
+| Redis 数据层 (旧，废弃) | backend/src/matching/database.ts — ⚠️ PositionRepo 已废弃，勿导入 |
+| PostgreSQL 镜像 | backend/src/matching/database/postgres.ts — OrderMirrorRepo + PositionMirrorRepo |
 | PerpVault 模块 | backend/src/matching/modules/perpVault.ts |
 | Merkle 快照 | backend/src/matching/modules/snapshot.ts |
 | 提款授权 | backend/src/matching/modules/withdraw.ts |
@@ -141,6 +177,9 @@ backend/internal/     # Go API + Keeper
 10. ❌ 不要混淆 Unix 秒和 `Date.now()` 毫秒（ME-C02）
 11. ❌ 不要在前端用 `parseFloat` 处理 ETH 金额 — 使用 BigInt 全程（FE-C02）
 12. ❌ 修改合约地址时必须同步更新 7 个配置文件（见 CODE_REVIEW_V2.md 第八部分）
+13. ❌ 不要从 `database.ts` 导入 `PositionRepo` — 用 `database/redis.ts` 的版本（旧版用 `userAddress/symbol/side`，新版用 `trader/token/isLong`）
+14. ❌ 不要用 `memoryPositionToDB()` 转换仓位再存 Redis — 直接传 Position 对象给 `PositionRepo`
+15. ❌ server.ts 内存 Position 用 **string** 字段，database/redis.ts Position (types.ts) 用 **bigint** — 跨边界必须显式转换
 
 ## 修改检查清单
 
@@ -154,4 +193,6 @@ backend/internal/     # Go API + Keeper
 - [ ] 时间比较是否统一使用秒或毫秒?
 - [ ] ETH 金额计算是否全程使用 BigInt?
 - [ ] WS 广播是否只发送给目标用户（不是全量广播）?
+- [ ] Redis 仓位保存后是否能正常 `JSON.stringify`（无 BigInt 泄漏）?
+- [ ] 仓位删除是否传了 `traderHint` 参数（pairId≠Redis UUID）?
 - [ ] DEVELOPMENT_RULES.md 是否需要更新?

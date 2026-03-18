@@ -26,20 +26,26 @@ redis:
   pool_size: 10
 
 blockchain:
-  # BSC Mainnet
-  rpc_url: "${MEMEPERP_BLOCKCHAIN_RPC_URL:-https://bsc-dataseed.binance.org/}"
-  chain_id: 56  # BSC Mainnet
+  # BSC Testnet (Chain 97) — synced with fresh deploy 2026-03-13
+  rpc_url: "${MEMEPERP_BLOCKCHAIN_RPC_URL:-https://data-seed-prebsc-1-s1.binance.org:8545/}"
+  chain_id: 97
 
-  # Contract addresses (Deployed 2026-03-03)
-  # AUDIT-FIX M-18: All contract addresses belong here, NOT under matching_engine
-  position_address: "0x04C515CcFac80BFFF27E0c5A9113e515171057b6"
-  router_address: "0xF15197BA411b578dafC7936C241bE9DD725c22BE"
-  vault_address: "0xACE7014F60eF9c367E7fA5Dd80601A9945E6F4d1"
+  # Contract addresses (BSC Testnet — fresh deploy 2026-03-18)
+  position_address: "0x5176a9f4093dede515c3a524f218cb4324500d22"
+  router_address: "0xD99D1c33F9fC3444f8101754aBC46c52416550D1"
+  vault_address: "0xf00a94a1ae8a276c3aed24f5b542f4ec5e1f373c"
   amm_address: "0x2c23046DC1595754528a10b8340F2AD8fdE05112"
-  liquidation_address: "0x322AeeD67C12c10684B134e1727866425dc75F1c"
-  funding_rate_address: "0x0a513bf3DE079Bf2439A5884583712bD014487aa"
+  liquidation_address: "0x6c9a628219501c3271ea5b95b5aab8d1b593383e"
+  funding_rate_address: "0x05a2bb4ad567f2b078a7028d4ca47998fb7f88d6"
   lending_pool_address: "0x98a7665301C0dB32ceff957e1A2c505dF8384CA4"
-  price_feed_address: "0xe2b22673fFBeB7A2a4617125E885C12EC072ee48"
+  price_feed_address: "0x5c727ea9ac9be9036e538064e7db245cc09545fd"
+  token_factory_address: "0xd75be83c73fb331cc566e3d58563f74058e4ca0b"
+  settlement_address: "0xe866e042dc6ec594c7534974cff0f9eaeebc2a1a"
+  settlement_v2_address: "0xac85c7ed31fa521bfdb7ae63d6e9385e4af79f1b"
+  perp_vault_address: "0xeafa2fad2bb336da8cd8309669b0c16f597decdb"
+  risk_manager_address: "0x6338608189d8153608d1d014e928490a33cfabf4"
+  insurance_fund_address: "0x6140b2f99a95b4e056d0bc6360c17232f1a8ab91"
+  contract_registry_address: "0x4bd177026918c774feaad56aa6ce3d69e0d67021"
 
   # P0-1: Private key MUST come from env — set MEMEPERP_BLOCKCHAIN_PRIVATE_KEY in .env.local
   private_key: "${MEMEPERP_BLOCKCHAIN_PRIVATE_KEY}"
