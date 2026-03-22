@@ -381,6 +381,110 @@ export function PerpetualTradingTerminal({
     }
   }, [marginModal, marginAmount, tradingWalletAddress, exportKey, showToast, t, refreshPositions, refreshBalance]);
 
+  // ── TP/SL 弹窗 (止盈止损) ──────────────────────────
+  const [tpslModal, setTpslModal] = useState<{
+    pairId: string;
+    isLong: boolean;
+    entryPrice: number;
+    liqPrice: number;
+  } | null>(null);
+  const [tpInput, setTpInput] = useState("");
+  const [slInput, setSlInput] = useState("");
+  const [isSettingTpsl, setIsSettingTpsl] = useState(false);
+  const [currentTpsl, setCurrentTpsl] = useState<{
+    takeProfitPrice: string | null;
+    stopLossPrice: string | null;
+  } | null>(null);
+
+  // 打开弹窗时获取当前 TP/SL
+  useEffect(() => {
+    if (!tpslModal) { setCurrentTpsl(null); setTpInput(""); setSlInput(""); return; }
+    fetch(`${MATCHING_ENGINE_URL}/api/position/${tpslModal.pairId}/tpsl`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.hasTPSL) {
+          setCurrentTpsl({
+            takeProfitPrice: data.takeProfitPrice,
+            stopLossPrice: data.stopLossPrice,
+          });
+          if (data.takeProfitPrice) setTpInput((Number(data.takeProfitPrice) / 1e18).toString());
+          if (data.stopLossPrice) setSlInput((Number(data.stopLossPrice) / 1e18).toString());
+        }
+      })
+      .catch(() => {});
+  }, [tpslModal?.pairId]);
+
+  // 提交 TP/SL
+  const handleSetTpsl = useCallback(async () => {
+    if (!tpslModal || !tradingWalletAddress) return;
+    if (!tpInput && !slInput) {
+      showToast(t("tpslRequired") || "Please set at least TP or SL", "error");
+      return;
+    }
+    setIsSettingTpsl(true);
+    try {
+      const { parseEther: toWei } = await import("viem");
+      const tpWei = tpInput ? toWei(tpInput).toString() : null;
+      const slWei = slInput ? toWei(slInput).toString() : null;
+
+      const sigMsg = `Set TPSL ${tpslModal.pairId} for ${tradingWalletAddress.toLowerCase()}`;
+      const keyData = exportKey?.();
+      if (!keyData?.privateKey) {
+        showToast(t("tradingWalletNotActive") || "Trading wallet not active", "error");
+        return;
+      }
+      const { privateKeyToAccount } = await import("viem/accounts");
+      const { createWalletClient, http } = await import("viem");
+      const { bscTestnet } = await import("viem/chains");
+      const signerAccount = privateKeyToAccount(keyData.privateKey);
+      const tempClient = createWalletClient({ account: signerAccount, chain: bscTestnet, transport: http() });
+      const signature = await tempClient.signMessage({ account: signerAccount, message: sigMsg });
+
+      const res = await fetch(`${MATCHING_ENGINE_URL}/api/position/${tpslModal.pairId}/tpsl`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          trader: tradingWalletAddress,
+          signature,
+          takeProfitPrice: tpWei,
+          stopLossPrice: slWei,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(t("tpslSet") || "TP/SL set successfully", "success");
+        setTpslModal(null);
+        refreshPositions();
+      } else {
+        showToast(data.error || (t("operationFailed") || "Operation failed"), "error");
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : (t("operationFailed") || "Operation failed"), "error");
+    } finally {
+      setIsSettingTpsl(false);
+    }
+  }, [tpslModal, tpInput, slInput, tradingWalletAddress, exportKey, showToast, t, refreshPositions]);
+
+  // 取消 TP/SL
+  const handleCancelTpsl = useCallback(async (cancelType: "tp" | "sl" | "both") => {
+    if (!tpslModal) return;
+    try {
+      const res = await fetch(`${MATCHING_ENGINE_URL}/api/position/${tpslModal.pairId}/tpsl`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cancelType }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(t("tpslCancelled") || "TP/SL cancelled", "success");
+        if (cancelType === "both") { setTpslModal(null); }
+        else if (cancelType === "tp") { setTpInput(""); setCurrentTpsl(prev => prev ? { ...prev, takeProfitPrice: null } : null); }
+        else { setSlInput(""); setCurrentTpsl(prev => prev ? { ...prev, stopLossPrice: null } : null); }
+        refreshPositions();
+      }
+    } catch {}
+  }, [tpslModal, showToast, t, refreshPositions]);
+
   // 加载订单历史和成交记录
   const loadHistoryData = useCallback(async () => {
     const effectiveAddress = tradingWalletAddress || address;
@@ -1102,7 +1206,10 @@ export function PerpetualTradingTerminal({
                                     {t("closePosition")}
                                   </button>
                                   <button
-                                    className="px-2 py-1 text-[10px] text-okx-text-tertiary border border-white/[0.06] hover:text-okx-text-secondary hover:border-white/[0.12] rounded transition-colors"
+                                    onClick={() => setTpslModal({
+                                      pairId: pos.pairId, isLong: pos.isLong, entryPrice, liqPrice,
+                                    })}
+                                    className="px-2 py-1 text-[10px] text-okx-text-tertiary border border-white/[0.06] hover:text-amber-400 hover:border-amber-500/30 rounded transition-colors"
                                     title={t("setTpSl")}
                                   >
                                     TP/SL
@@ -1216,7 +1323,12 @@ export function PerpetualTradingTerminal({
                                 }}
                                 className="flex-1 py-1.5 text-[10px] font-medium text-rose-400 border border-rose-500/30 rounded hover:bg-rose-500/10 transition-colors"
                               >{t("closePosition")}</button>
-                              <button className="py-1.5 px-2.5 text-[10px] text-okx-text-tertiary border border-okx-border-primary/50 rounded hover:bg-white/[0.04] transition-colors">
+                              <button
+                                onClick={() => setTpslModal({
+                                  pairId: pos.pairId, isLong: pos.isLong, entryPrice, liqPrice,
+                                })}
+                                className="py-1.5 px-2.5 text-[10px] text-okx-text-tertiary border border-okx-border-primary/50 rounded hover:text-amber-400 hover:border-amber-500/30 transition-colors"
+                              >
                                 TP/SL
                               </button>
                             </div>
@@ -2284,6 +2396,106 @@ export function PerpetualTradingTerminal({
                     : (t("removeMargin") || "Remove Margin")
                 }
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════
+          TP/SL Modal (止盈止损)
+          ═══════════════════════════════════════════════════════════════ */}
+      {tpslModal && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center" onClick={() => setTpslModal(null)}>
+          <div className="bg-[#1b1d28] rounded-xl w-[380px] max-w-[92vw] shadow-2xl border border-white/[0.06]" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/[0.06]">
+              <h3 className="text-sm font-medium text-okx-text-primary">{t("takeProfitStopLoss") || "TP/SL"}</h3>
+              <button onClick={() => setTpslModal(null)} className="text-okx-text-tertiary hover:text-okx-text-primary text-lg">×</button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Take Profit */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs text-emerald-400 font-medium">{t("takeProfit") || "Take Profit"}</span>
+                  {currentTpsl?.takeProfitPrice && (
+                    <button onClick={() => handleCancelTpsl("tp")} className="text-[10px] text-okx-text-tertiary hover:text-rose-400 transition-colors">
+                      {t("cancel") || "Cancel"}
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2.5 focus-within:border-emerald-500/40 transition-colors">
+                  <input
+                    type="number"
+                    value={tpInput}
+                    onChange={e => setTpInput(e.target.value)}
+                    placeholder={tpslModal.isLong ? `> ${formatSmallPrice(tpslModal.entryPrice)}` : `< ${formatSmallPrice(tpslModal.entryPrice)}`}
+                    step="any"
+                    className="flex-1 bg-transparent text-sm text-okx-text-primary outline-none placeholder-okx-text-tertiary/50"
+                  />
+                  <span className="text-[10px] text-okx-text-tertiary ml-2">BNB</span>
+                </div>
+                <div className="text-[10px] text-okx-text-tertiary mt-1 px-1">
+                  {tpslModal.isLong ? t("tpHintLong") || "Trigger when price rises above" : t("tpHintShort") || "Trigger when price falls below"}
+                </div>
+              </div>
+
+              {/* Stop Loss */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs text-rose-400 font-medium">{t("stopLoss") || "Stop Loss"}</span>
+                  {currentTpsl?.stopLossPrice && (
+                    <button onClick={() => handleCancelTpsl("sl")} className="text-[10px] text-okx-text-tertiary hover:text-rose-400 transition-colors">
+                      {t("cancel") || "Cancel"}
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2.5 focus-within:border-rose-500/40 transition-colors">
+                  <input
+                    type="number"
+                    value={slInput}
+                    onChange={e => setSlInput(e.target.value)}
+                    placeholder={tpslModal.isLong ? `< ${formatSmallPrice(tpslModal.entryPrice)}` : `> ${formatSmallPrice(tpslModal.entryPrice)}`}
+                    step="any"
+                    className="flex-1 bg-transparent text-sm text-okx-text-primary outline-none placeholder-okx-text-tertiary/50"
+                  />
+                  <span className="text-[10px] text-okx-text-tertiary ml-2">BNB</span>
+                </div>
+                <div className="text-[10px] text-okx-text-tertiary mt-1 px-1">
+                  {tpslModal.isLong ? t("slHintLong") || "Trigger when price falls below" : t("slHintShort") || "Trigger when price rises above"}
+                </div>
+              </div>
+
+              {/* Info */}
+              <div className="bg-white/[0.02] rounded-lg p-3 text-[10px] text-okx-text-tertiary space-y-1">
+                <div className="flex justify-between">
+                  <span>{t("entryAvg") || "Entry Price"}</span>
+                  <span className="text-okx-text-secondary font-mono">{formatSmallPrice(tpslModal.entryPrice)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>{t("liqPrice") || "Liq. Price"}</span>
+                  <span className="text-rose-400/70 font-mono">{formatSmallPrice(tpslModal.liqPrice)}</span>
+                </div>
+              </div>
+
+              {/* Buttons */}
+              <div className="flex gap-2">
+                {currentTpsl?.takeProfitPrice || currentTpsl?.stopLossPrice ? (
+                  <button
+                    onClick={() => handleCancelTpsl("both")}
+                    className="flex-1 py-2.5 text-sm font-medium rounded-lg border border-white/[0.08] text-okx-text-secondary hover:bg-white/[0.04] transition-colors"
+                  >
+                    {t("cancelAll") || "Cancel All"}
+                  </button>
+                ) : null}
+                <button
+                  onClick={handleSetTpsl}
+                  disabled={isSettingTpsl || (!tpInput && !slInput)}
+                  className="flex-1 py-2.5 text-sm font-medium rounded-lg bg-amber-500 hover:bg-amber-400 text-black transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {isSettingTpsl ? (t("processing") || "Processing...") : (t("confirm") || "Confirm")}
+                </button>
+              </div>
             </div>
           </div>
         </div>
