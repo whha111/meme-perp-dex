@@ -64,6 +64,8 @@ export interface InstrumentAssetData {
   uniqueTraders?: number;
   logo?: string;
   imageUrl?: string;
+  name?: string;
+  description?: string;
 }
 
 /** 交易对资产更新事件 */

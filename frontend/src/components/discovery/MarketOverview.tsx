@@ -75,7 +75,7 @@ function Column({ title, assets, noTokensText, ethPrice }: { title: string; asse
             <TokenCard
               key={instId}
               id={instId}
-              name={ticker}
+              name={asset.name || ticker}
               ticker={ticker}
               symbol={instId}
               logo={asset.logo || asset.imageUrl}
@@ -86,6 +86,7 @@ function Column({ title, assets, noTokensText, ethPrice }: { title: string; asse
               traders={asset.uniqueTraders || 0}
               progress={progressPercent}
               priceChange24h={asset.priceChange24h || 0}
+              description={asset.description}
             />
           );
         })}
@@ -240,7 +241,25 @@ export function MarketOverview() {
     };
   }, []);
 
-  // 解析 metadataURI 获取 logo
+  // 解析 metadataURI 获取完整元数据（logo + description）
+  const parseMetadataFull = (uri: string): { logo?: string; description?: string } => {
+    if (!uri) return {};
+    if (uri.startsWith('data:application/json;base64,')) {
+      try {
+        const base64Data = uri.replace('data:application/json;base64,', '');
+        const jsonStr = atob(base64Data);
+        const metadata = JSON.parse(jsonStr);
+        let imageUrl = metadata.image || metadata.logo;
+        if (imageUrl?.startsWith('ipfs://')) {
+          imageUrl = `https://gateway.pinata.cloud/ipfs/${imageUrl.replace('ipfs://', '')}`;
+        }
+        return { logo: imageUrl, description: metadata.description || '' };
+      } catch { return {}; }
+    }
+    return {};
+  };
+
+  // 解析 metadataURI 获取 logo（兼容旧调用）
   // metadataURI 格式可能是：
   // 1. ipfs://<hash> - 直接是图片的 IPFS 链接
   // 2. data:application/json;base64,... - base64 编码的 JSON，包含 image 字段
@@ -297,11 +316,13 @@ export function MarketOverview() {
       const priceFloat = parseFloat(token.price) || 0;
       const marketCapFloat = parseFloat(token.marketCap) || 0;
       const logoUrl = parseMetadataURI(token.metadataURI);
+      const metaFull = parseMetadataFull(token.metadataURI);
 
       return {
         instId: token.address,
         symbol: token.symbol,
         name: token.name,
+        description: metaFull.description || '',
         creatorAddress: token.creator,
         createdAt: token.createdAt * 1000, // Convert to milliseconds
         isGraduated: token.isGraduated,
@@ -312,8 +333,8 @@ export function MarketOverview() {
         volume24h: "0",
         priceChange24h: 0,
         uniqueTraders: 0,
-        logo: logoUrl,
-        imageUrl: logoUrl,
+        logo: logoUrl || metaFull.logo,
+        imageUrl: logoUrl || metaFull.logo,
       };
     });
   }, [onChainTokens]);

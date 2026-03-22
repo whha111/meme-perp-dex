@@ -70,7 +70,7 @@
       },
       "security": {
         "title": "オンチェーンセキュリティ",
-        "desc": "SettlementV2 コントラクトで資金保管、Merkle proof 出金、完全に検証可能。"
+        "desc": "資金は派生ウォレットに保管、証拠金は PerpVault コントラクトでオンチェーンロック、完全検証可能。"
       },
       "referral": {
         "title": "紹介リワード",
@@ -1521,9 +1521,9 @@
     "step2RealLabel": "WBNB ラッピング",
     "step2RealDesc": "BNBをWBNB(ERC-20)にラッピング",
     "step3RealLabel": "コントラクトに入金",
-    "step3RealDesc": "WBNBを承認しSettlementV2に入金",
+    "step3RealDesc": "BNBを取引ウォレットに直接転送",
     "depositBNBLabel": "コントラクトに入金",
-    "depositBNBDesc": "BNBを自動ラッピングしSettlementV2に入金",
+    "depositBNBDesc": "BNBを取引ウォレットに直接転送",
     "withdrawGasFunding": "出金用のガスを補充中...",
     "withdrawGasFundingDesc": "取引手数料のために少量のBNBを送金",
     "withdrawWalletTransfer": "取引ウォレットから転送中...",

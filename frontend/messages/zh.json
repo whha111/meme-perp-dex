@@ -70,7 +70,7 @@
       },
       "security": {
         "title": "链上安全",
-        "desc": "资金托管在 SettlementV2 合约，Merkle proof 提款，全程可验证。"
+        "desc": "资金存放在你的派生钱包中，保证金由 PerpVault 合约链上锁定，全程可验证。"
       },
       "referral": {
         "title": "推荐返佣",
@@ -1591,9 +1591,9 @@
     "step2RealLabel": "包装 WBNB",
     "step2RealDesc": "BNB 包装为 WBNB (ERC-20)",
     "step3RealLabel": "存入合约",
-    "step3RealDesc": "WBNB 授权并存入 SettlementV2 合约",
+    "step3RealDesc": "BNB 直接转入交易钱包",
     "depositBNBLabel": "存入合约",
-    "depositBNBDesc": "BNB 自动包装并存入 SettlementV2",
+    "depositBNBDesc": "BNB 直接转入交易钱包",
     "withdrawGasFunding": "为交易钱包补充 Gas...",
     "withdrawGasFundingDesc": "从主钱包发送少量 BNB 作为提款手续费",
     "withdrawWalletTransfer": "转出交易钱包余额...",

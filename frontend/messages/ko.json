@@ -70,7 +70,7 @@
       },
       "security": {
         "title": "온체인 보안",
-        "desc": "SettlementV2 컨트랙트에서 자금 보관, Merkle proof 출금, 완전히 검증 가능."
+        "desc": "자금은 파생 지갑에 보관, 증거금은 PerpVault 컨트랙트에서 온체인 잠금, 완전 검증 가능."
       },
       "referral": {
         "title": "추천 리워드",
@@ -1521,9 +1521,9 @@
     "step2RealLabel": "WBNB 래핑",
     "step2RealDesc": "BNB를 WBNB(ERC-20)로 래핑",
     "step3RealLabel": "컨트랙트에 입금",
-    "step3RealDesc": "WBNB 승인 후 SettlementV2에 입금",
+    "step3RealDesc": "BNB를 거래 지갑으로 직접 전송",
     "depositBNBLabel": "컨트랙트에 입금",
-    "depositBNBDesc": "BNB 자동 래핑 후 SettlementV2에 입금",
+    "depositBNBDesc": "BNB를 거래 지갑으로 직접 전송",
     "withdrawGasFunding": "출금용 가스 충전 중...",
     "withdrawGasFundingDesc": "거래 수수료를 위해 소량의 BNB 전송",
     "withdrawWalletTransfer": "거래 지갑에서 이체 중...",

@@ -356,13 +356,14 @@ export function usePerpetualV2(props?: UsePerpetualV2Props): UsePerpetualV2Retur
   }, [wsConnected, tradingWalletAddress, tradingWalletSignature]);
 
   // ── Balance: WS primary (via subscribe_trader), HTTP for initial load ──
+  // 余额查询用主钱包地址（引擎用主钱包地址→派生钱包映射查链上余额）
   const {
     data: httpBalance,
     isLoading: isBalanceLoading,
   } = useQuery({
-    queryKey: ["perpetual-balance", tradingWalletAddress],
-    queryFn: () => fetchBalance(tradingWalletAddress!),
-    enabled: !!tradingWalletAddress,
+    queryKey: ["perpetual-balance", mainWalletAddress],
+    queryFn: () => fetchBalance(mainWalletAddress!),
+    enabled: !!mainWalletAddress,
     retry: 2,
     staleTime: Infinity,           // No auto-refetch; WS handles real-time updates
     refetchOnWindowFocus: false,
@@ -601,13 +602,16 @@ export function usePerpetualV2(props?: UsePerpetualV2Props): UsePerpetualV2Retur
 
       try {
         // Sign cancel message: "Cancel order {orderId}"
+        // ★ Use the actual signing account address (not props tradingWalletAddress)
+        // to prevent mismatch when trading wallet session is rebuilt
+        const signerAddress = tradingWalletClient.account!.address as Address;
         const message = `Cancel order ${orderId}`;
         const signature = await tradingWalletClient.signMessage({
           account: tradingWalletClient.account!,
           message,
         });
 
-        const result = await apiCancelOrder(orderId, tradingWalletAddress, signature);
+        const result = await apiCancelOrder(orderId, signerAddress, signature);
 
         if (result.success) {
           refreshOrders();

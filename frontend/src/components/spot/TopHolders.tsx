@@ -22,17 +22,11 @@ export function TopHolders({ instId, creatorAddress, className }: TopHoldersProp
   const { data: holdersData, isLoading, isError } = useQuery({
     queryKey: ["topHolders", instId],
     queryFn: async (): Promise<TopHoldersResp> => {
-      try {
-        const wsServices = getWebSocketServices();
-        return await wsServices.getTopHolders({
-          inst_id: instId,
-          limit: 10,
-        });
-      } catch (error) {
-        console.warn("获取持仓数据失败，使用模拟数据:", error);
-        // 返回模拟数据用于开发
-        return generateMockData(instId, creatorAddress);
-      }
+      const wsServices = getWebSocketServices();
+      return await wsServices.getTopHolders({
+        inst_id: instId,
+        limit: 10,
+      });
     },
     enabled: !!instId,
     staleTime: 30000, // 30秒缓存

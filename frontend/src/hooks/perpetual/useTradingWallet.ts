@@ -37,12 +37,12 @@ import { NETWORK_CONFIG, CONTRACTS } from "@/lib/contracts";
 /**
  * 向后端注册交易钱包 session，使平台可以代替用户执行 approve+deposit
  */
-async function registerSessionWithBackend(signature: Hex, expiresInSeconds: number = 86400): Promise<void> {
+async function registerSessionWithBackend(signature: Hex, ownerAddress?: string, expiresInSeconds: number = 86400): Promise<void> {
   try {
     const res = await fetch(`${MATCHING_ENGINE_URL}/api/wallet/register-session`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ signature, expiresInSeconds }),
+      body: JSON.stringify({ signature, expiresInSeconds, ownerAddress }),
     });
     const data = await res.json();
     if (data.success) {
@@ -180,7 +180,7 @@ export function useTradingWallet(): UseTradingWalletReturn {
           error: null,
         });
         // 恢复时也向后端注册 session (服务器可能重启过, 不阻塞恢复流程)
-        registerSessionWithBackend(stored.signature).catch((err) =>
+        registerSessionWithBackend(stored.signature, mainWallet).catch((err) =>
           console.warn("[TradingWallet] Session register failed:", err)
         );
       } catch {
@@ -226,7 +226,7 @@ export function useTradingWallet(): UseTradingWalletReturn {
       signatureRef.current = signature as Hex;
 
       // 3.5 向后端注册 session (必须 await — 否则 autoDeposit 无法签名)
-      await registerSessionWithBackend(signature as Hex);
+      await registerSessionWithBackend(signature as Hex, mainWallet);
 
       // 4. 读取余额
       const balance = await publicClient

@@ -106,28 +106,65 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
   // 从 matching engine 获取代币名称和符号
   // ⚠️ 必须用 pureTokenAddress（纯地址），不能用 symbol（含 -USDT 后缀 → length≠42 → 查找失败）
   const tokenInfo = useTokenInfo(pureTokenAddress || symbol);
-  const displaySymbol = getTokenDisplayName(pureTokenAddress || symbol, tokenInfo);
+  // displaySymbol: 优先 tokenInfoMap，fallback 到 tokenMetadataInfo（从 metadataURI 解析）
+  const rawDisplaySymbol = getTokenDisplayName(pureTokenAddress || symbol, tokenInfo);
 
   // 获取实时 BNB 价格
   const { price: bnbPriceUsd } = useETHPrice();
   const poolData = usePoolState(isValidTokenAddress ? pureTokenAddress : undefined);
 
   // 获取代币元数据（描述、社交链接等）
+  // 先从 Redis metadata API 获取，如果没有则从 WSS allTokens 的 metadataURI 解析
+  const allTokens = useTradingDataStore((s) => s.allTokens);
   const { data: tokenMetadataInfo } = useQuery({
-    queryKey: ["tokenMetadata", pureTokenAddress],
+    queryKey: ["tokenMetadata", pureTokenAddress, allTokens.length],
     queryFn: async () => {
-      const res = await fetch(`${MATCHING_ENGINE_URL}/api/v1/token/metadata/all`);
-      if (!res.ok) return null;
-      const json = await res.json();
-      if (json.code !== "0" || !Array.isArray(json.data)) return null;
+      // 1. 尝试从 Redis metadata API 获取
+      try {
+        const res = await fetch(`${MATCHING_ENGINE_URL}/api/v1/token/metadata/all`);
+        if (res.ok) {
+          const json = await res.json();
+          if (json.code === "0" && Array.isArray(json.data)) {
+            const addr = pureTokenAddress?.toLowerCase();
+            const found = json.data.find(
+              (m: { tokenAddress?: string }) => m.tokenAddress?.toLowerCase() === addr
+            );
+            if (found) return found;
+          }
+        }
+      } catch {}
+
+      // 2. Fallback: 从 WSS allTokens 的 metadataURI base64 JSON 解析
       const addr = pureTokenAddress?.toLowerCase();
-      return json.data.find(
-        (m: { tokenAddress?: string }) => m.tokenAddress?.toLowerCase() === addr
-      ) ?? null;
+      const token = allTokens.find(t => t.address.toLowerCase() === addr);
+      if (token?.metadataURI?.startsWith("data:application/json;base64,")) {
+        try {
+          const base64 = token.metadataURI.replace("data:application/json;base64,", "");
+          const metadata = JSON.parse(atob(base64));
+          return {
+            name: token.name || metadata.name,
+            symbol: token.symbol || metadata.symbol,
+            description: metadata.description || "",
+            imageUrl: metadata.image || metadata.logo || "",
+            website: metadata.external_url || "",
+            twitter: (metadata.attributes || []).find((a: any) => a.trait_type === "twitter")?.value || "",
+            telegram: (metadata.attributes || []).find((a: any) => a.trait_type === "telegram")?.value || "",
+            discord: (metadata.attributes || []).find((a: any) => a.trait_type === "discord")?.value || "",
+            creatorAddress: token.creator,
+            tokenAddress: token.address,
+          };
+        } catch {}
+      }
+      return null;
     },
     enabled: !!pureTokenAddress,
-    staleTime: 60_000,
+    staleTime: 30_000,
   });
+
+  // displaySymbol 最终值：tokenInfoMap 没有就用 metadata 里的 symbol
+  const displaySymbol = rawDisplaySymbol.startsWith("0x") || rawDisplaySymbol.startsWith("0X") || rawDisplaySymbol === "..."
+    ? (tokenMetadataInfo?.symbol?.toUpperCase() || tokenMetadataInfo?.name || rawDisplaySymbol)
+    : rawDisplaySymbol;
 
   // 获取链上交易记录
   const {
@@ -608,27 +645,27 @@ export function TradingTerminal({ symbol, className, headerSlot }: TradingTermin
                              <h4 className="text-sm font-medium text-okx-text-secondary mb-2">{t('trading.socialLinks')}</h4>
                              <div className="flex flex-wrap gap-2">
                                {tokenMetadataInfo.website && (
-                                 <a href={tokenMetadataInfo.website} target="_blank" rel="noopener noreferrer"
+                                 <a href={tokenMetadataInfo.website.startsWith("http") ? tokenMetadataInfo.website : `https://${tokenMetadataInfo.website}`} target="_blank" rel="noopener noreferrer"
                                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-okx-bg-input text-xs text-okx-text-secondary hover:text-okx-brand transition-colors">
                                    🌐 Website
                                  </a>
                                )}
                                {tokenMetadataInfo.twitter && (
-                                 <a href={tokenMetadataInfo.twitter.startsWith("http") ? tokenMetadataInfo.twitter : `https://x.com/${tokenMetadataInfo.twitter.replace("@", "")}`}
+                                 <a href={tokenMetadataInfo.twitter.startsWith("http") ? tokenMetadataInfo.twitter : tokenMetadataInfo.twitter.includes(".") ? `https://${tokenMetadataInfo.twitter}` : `https://x.com/${tokenMetadataInfo.twitter.replace("@", "")}`}
                                    target="_blank" rel="noopener noreferrer"
                                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-okx-bg-input text-xs text-okx-text-secondary hover:text-okx-brand transition-colors">
                                    𝕏 Twitter
                                  </a>
                                )}
                                {tokenMetadataInfo.telegram && (
-                                 <a href={tokenMetadataInfo.telegram.startsWith("http") ? tokenMetadataInfo.telegram : `https://t.me/${tokenMetadataInfo.telegram}`}
+                                 <a href={tokenMetadataInfo.telegram.startsWith("http") ? tokenMetadataInfo.telegram : tokenMetadataInfo.telegram.includes(".") ? `https://${tokenMetadataInfo.telegram}` : `https://t.me/${tokenMetadataInfo.telegram}`}
                                    target="_blank" rel="noopener noreferrer"
                                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-okx-bg-input text-xs text-okx-text-secondary hover:text-okx-brand transition-colors">
                                    ✈️ Telegram
                                  </a>
                                )}
                                {tokenMetadataInfo.discord && (
-                                 <a href={tokenMetadataInfo.discord.startsWith("http") ? tokenMetadataInfo.discord : `https://discord.gg/${tokenMetadataInfo.discord}`}
+                                 <a href={tokenMetadataInfo.discord.startsWith("http") ? tokenMetadataInfo.discord : tokenMetadataInfo.discord.includes(".") ? `https://${tokenMetadataInfo.discord}` : `https://discord.gg/${tokenMetadataInfo.discord}`}
                                    target="_blank" rel="noopener noreferrer"
                                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-okx-bg-input text-xs text-okx-text-secondary hover:text-okx-brand transition-colors">
                                    💬 Discord

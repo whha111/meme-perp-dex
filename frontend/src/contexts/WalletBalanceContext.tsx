@@ -3,11 +3,15 @@
 /**
  * 全局钱包余额 Context (BNB 本位)
  *
- * 读取派生钱包的完整余额:
- * - WBNB 链上余额 (ERC20 balanceOf)
- * - Native BNB 余额 (用于显示未 wrap 的 BNB)
- * - Settlement 合约可用余额 (链上托管 + 链下盈亏调整)
- * 数据源: wagmi useReadContract/useBalance + backend balance API + WS "balance" 消息触发 refetch
+ * 派生钱包余额架构 (简化版):
+ * - 可用余额 = 派生钱包 Native BNB (直接链上读取)
+ * - 锁定保证金 = PerpVault.traderMargin (链上读取)
+ * - 总计 = 可用 + 锁定
+ *
+ * 不再需要:
+ * - WBNB 余额 (不再 wrap)
+ * - Settlement 合约余额 (已废弃)
+ * - Backend balance API 轮询 (余额即链上值)
  */
 
 import React, {
@@ -15,28 +19,24 @@ import React, {
   useContext,
   useMemo,
   useCallback,
-  useState,
   useEffect,
 } from "react";
 import { formatEther, parseEther, type Address } from "viem";
-import { useReadContract, useBalance } from "wagmi";
+import { useBalance, useReadContract } from "wagmi";
 import { useTradingWallet } from "@/hooks/perpetual/useTradingWallet";
 import { useTradingDataStore } from "@/lib/stores/tradingDataStore";
-import { MATCHING_ENGINE_URL } from "@/config/api";
+import { CONTRACTS } from "@/lib/contracts";
 
 // ============================================================
-// Constants (BNB 本位)
+// PerpVault ABI (traderMargin read)
 // ============================================================
 
-// BSC Mainnet WBNB address
-const WETH_ADDRESS = (process.env.NEXT_PUBLIC_WETH_ADDRESS || "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c") as Address;
-
-const ERC20_BALANCE_ABI = [
+const PERP_VAULT_MARGIN_ABI = [
   {
-    name: "balanceOf",
+    name: "getTraderMargin",
     type: "function",
     stateMutability: "view",
-    inputs: [{ name: "account", type: "address" }],
+    inputs: [{ name: "trader", type: "address" }],
     outputs: [{ type: "uint256" }],
   },
 ] as const;
@@ -47,21 +47,25 @@ const ERC20_BALANCE_ABI = [
 
 interface WalletBalanceContextType {
   tradingWallet: Address | null;
-  /** WETH balance on the trading wallet (already wrapped) */
-  wethBalance: bigint;
-  /** Native ETH balance on the trading wallet (not yet wrapped) */
+  /** Native BNB on the trading wallet (available for trading) */
   nativeEthBalance: bigint;
-  /** Settlement 合约可用余额 (链上托管 + 链下盈亏调整) */
-  settlementBalance: bigint;
-  /** Total usable balance: Settlement available + WETH + native ETH (minus gas reserve) */
+  /** Margin locked in PerpVault contract */
+  lockedMargin: bigint;
+  /** Total balance = native BNB + locked margin */
   totalBalance: bigint;
-  /** 仅钱包余额 (不含 Settlement)，用于充值 MAX 按钮 */
+  /** Available for deposit/new orders (= native BNB minus gas reserve) */
   walletOnlyBalance: bigint;
   /** Formatted total balance string */
   formattedWethBalance: string;
   refreshBalance: () => void;
   isLoading: boolean;
   lastUpdated: number;
+
+  // Legacy compatibility fields (kept for components that still reference them)
+  /** @deprecated Use nativeEthBalance instead */
+  wethBalance: bigint;
+  /** @deprecated Use lockedMargin instead */
+  settlementBalance: bigint;
 }
 
 // ============================================================
@@ -82,83 +86,53 @@ export function WalletBalanceProvider({
 }) {
   const { address: tradingWallet } = useTradingWallet();
 
-  // WETH balance (ERC20)
-  const {
-    data: wethRaw,
-    refetch: refetchWeth,
-    isLoading: isLoadingWeth,
-    dataUpdatedAt: wethUpdatedAt,
-  } = useReadContract({
-    address: WETH_ADDRESS,
-    abi: ERC20_BALANCE_ABI,
-    functionName: "balanceOf",
-    args: tradingWallet ? [tradingWallet] : undefined,
-    query: {
-      enabled: !!tradingWallet,
-    },
-  });
-
-  // Native ETH balance
+  // Native BNB balance on derived wallet
   const {
     data: nativeBalanceData,
     refetch: refetchNative,
     isLoading: isLoadingNative,
+    dataUpdatedAt,
   } = useBalance({
     address: tradingWallet ?? undefined,
   });
 
-  const wethBalance = (wethRaw as bigint) ?? 0n;
   const nativeEthBalance = nativeBalanceData?.value ?? 0n;
 
-  // Settlement balance from backend (includes mode2 PnL adjustments)
-  const [settlementBalance, setSettlementBalance] = useState(0n);
+  // Locked margin in PerpVault
+  const perpVaultAddress = (process.env.NEXT_PUBLIC_PERP_VAULT_ADDRESS || CONTRACTS.PERP_VAULT) as Address;
+  const {
+    data: lockedMarginRaw,
+    refetch: refetchMargin,
+    isLoading: isLoadingMargin,
+  } = useReadContract({
+    address: perpVaultAddress,
+    abi: PERP_VAULT_MARGIN_ABI,
+    functionName: "getTraderMargin",
+    args: tradingWallet ? [tradingWallet] : undefined,
+    query: {
+      enabled: !!tradingWallet && !!perpVaultAddress,
+    },
+  });
 
-  const fetchSettlementBalance = useCallback(async () => {
-    if (!tradingWallet) return;
-    try {
-      const res = await fetch(
-        `${MATCHING_ENGINE_URL}/api/user/${tradingWallet}/balance`
-      );
-      if (res.ok) {
-        const data = await res.json();
-        // Use settlementAvailable (pure on-chain: deposits - withdrawals) for display,
-        // NOT availableBalance which includes mode2Adj (stale fake deposit balances)
-        setSettlementBalance(BigInt(data.settlementAvailable || data.availableBalance || "0"));
-      }
-    } catch {
-      // Ignore fetch errors
-    }
-  }, [tradingWallet]);
+  const lockedMargin = (lockedMarginRaw as bigint) ?? 0n;
 
-  // Fetch Settlement balance on mount and periodically
-  useEffect(() => {
-    fetchSettlementBalance();
-    const interval = setInterval(fetchSettlementBalance, 60_000);
-    return () => clearInterval(interval);
-  }, [fetchSettlementBalance]);
-
-  // Wallet-only balance: WETH + (native ETH - gas reserve)
+  // Wallet-only balance: native BNB minus gas reserve
   const walletOnlyBalance = useMemo(() => {
-    const usableNative = nativeEthBalance > GAS_RESERVE ? nativeEthBalance - GAS_RESERVE : 0n;
-    return wethBalance + usableNative;
-  }, [wethBalance, nativeEthBalance]);
+    return nativeEthBalance > GAS_RESERVE ? nativeEthBalance - GAS_RESERVE : 0n;
+  }, [nativeEthBalance]);
 
-  // Total usable balance: Settlement available + wallet (for display as "交易账户余额")
-  // Note: wallet balance is EXCLUDED from settlementBalance (backend separates them),
-  // so we add them together here to get the full picture
+  // Total balance = available + locked
   const totalBalance = useMemo(() => {
-    return settlementBalance + walletOnlyBalance;
-  }, [settlementBalance, walletOnlyBalance]);
+    return walletOnlyBalance + lockedMargin;
+  }, [walletOnlyBalance, lockedMargin]);
 
   // Refresh all balances
   const refreshBalance = useCallback(() => {
-    refetchWeth();
     refetchNative();
-    fetchSettlementBalance();
-  }, [refetchWeth, refetchNative, fetchSettlementBalance]);
+    refetchMargin();
+  }, [refetchNative, refetchMargin]);
 
-  // System B (WebSocketManager) pushes balance → tradingDataStore
-  // When store balance changes, refetch on-chain wallet balances
+  // WS balance updates trigger refresh
   const storeBalance = useTradingDataStore(state => state.balance);
   useEffect(() => {
     if (storeBalance) {
@@ -181,19 +155,21 @@ export function WalletBalanceProvider({
     });
   }, [totalBalance]);
 
-  const lastUpdated = wethUpdatedAt || 0;
+  const lastUpdated = dataUpdatedAt || 0;
 
   const value: WalletBalanceContextType = {
     tradingWallet: tradingWallet ?? null,
-    wethBalance,
     nativeEthBalance,
-    settlementBalance,
+    lockedMargin,
     totalBalance,
     walletOnlyBalance,
     formattedWethBalance,
     refreshBalance,
-    isLoading: isLoadingWeth || isLoadingNative,
+    isLoading: isLoadingNative || isLoadingMargin,
     lastUpdated,
+    // Legacy compatibility
+    wethBalance: 0n,
+    settlementBalance: lockedMargin,
   };
 
   return (

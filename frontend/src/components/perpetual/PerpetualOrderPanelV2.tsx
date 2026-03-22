@@ -437,7 +437,7 @@ export function PerpetualOrderPanelV2({
             </button>
           </div>
         ) : (
-          // 已激活 - 显示 ETH 余额
+          // 已激活 - 显示 BNB 余额 + 充值按钮
           <div>
             <div className="flex items-center justify-between">
               <span className="text-okx-text-secondary text-xs">{tw("account")}</span>
@@ -445,6 +445,12 @@ export function PerpetualOrderPanelV2({
                 <span className="text-okx-text-primary text-sm font-semibold">
                   BNB {availableBalanceETH.toFixed(4)}
                 </span>
+                <button
+                  onClick={() => setShowDepositModal(true)}
+                  className="px-2.5 py-0.5 text-xs font-medium text-okx-brand border border-okx-brand rounded hover:bg-okx-brand hover:text-white transition-colors"
+                >
+                  {tw("deposit")}
+                </button>
               </div>
             </div>
           </div>

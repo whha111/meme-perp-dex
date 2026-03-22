@@ -17,6 +17,7 @@ interface TokenCardProps {
   traders: number; // 交易人数（唯一地址数）
   progress: number; // 0-100 的进度百分比
   priceChange24h?: number; // 24h涨跌幅
+  description?: string; // 代币描述
   onClick?: () => void;
 }
 
@@ -37,6 +38,7 @@ export function TokenCard({
   traders,
   progress,
   priceChange24h = 0,
+  description,
   onClick,
 }: TokenCardProps) {
   const router = useRouter();
@@ -70,11 +72,15 @@ export function TokenCard({
             <span className="text-okx-text-primary font-bold text-sm truncate">{name}</span>
             <span className="text-okx-text-tertiary text-xs">{ticker}</span>
           </div>
-          <div className="flex items-center gap-2 mt-0.5">
-            <span className="text-okx-text-tertiary text-xs">{timeAgo}</span>
-            <span className="text-okx-border-secondary">|</span>
-            <span className="text-okx-text-tertiary text-xs font-mono">{address}</span>
-          </div>
+          {description ? (
+            <p className="text-okx-text-tertiary text-xs truncate mt-0.5 max-w-[200px]">{description}</p>
+          ) : (
+            <div className="flex items-center gap-2 mt-0.5">
+              <span className="text-okx-text-tertiary text-xs">{timeAgo}</span>
+              <span className="text-okx-border-secondary">|</span>
+              <span className="text-okx-text-tertiary text-xs font-mono">{address}</span>
+            </div>
+          )}
         </div>
 
         {/* 市值和涨跌 */}

@@ -207,7 +207,7 @@ export function Navbar() {
               {chain && (
                 <>
                   {(() => {
-                    const targetChainId = parseInt(process.env.NEXT_PUBLIC_TARGET_CHAIN_ID || '56');
+                    const targetChainId = parseInt(process.env.NEXT_PUBLIC_CHAIN_ID || '97');
                     if (chain.id !== targetChainId) {
                       return (
                         <button

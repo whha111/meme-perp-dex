@@ -70,7 +70,7 @@
       },
       "security": {
         "title": "On-chain Security",
-        "desc": "Funds custodied in SettlementV2 contract, Merkle proof withdrawals, fully verifiable."
+        "desc": "Funds held in your derived wallet, margin locked in PerpVault contract on-chain, fully verifiable."
       },
       "referral": {
         "title": "Referral Rewards",
@@ -1591,9 +1591,9 @@
     "step2RealLabel": "Wrap WBNB",
     "step2RealDesc": "Wrap BNB to WBNB (ERC-20)",
     "step3RealLabel": "Deposit to Contract",
-    "step3RealDesc": "Approve and deposit WBNB to SettlementV2",
+    "step3RealDesc": "Transfer BNB directly to trading wallet",
     "depositBNBLabel": "Deposit to Contract",
-    "depositBNBDesc": "Auto-wrap BNB and deposit to SettlementV2",
+    "depositBNBDesc": "Transfer BNB directly to trading wallet",
     "withdrawGasFunding": "Funding gas for withdrawal...",
     "withdrawGasFundingDesc": "Sending a small amount of BNB for transaction fees",
     "withdrawWalletTransfer": "Transferring from trading wallet...",
