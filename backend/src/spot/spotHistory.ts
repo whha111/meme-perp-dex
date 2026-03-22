@@ -601,7 +601,7 @@ export async function backfillHistoricalTrades(
   console.log(`[Backfill] Backfilling trades for ${normalizedToken} from block ${fromBlock} to ${toBlock}`);
 
   let processedCount = 0;
-  const BATCH_SIZE = 5000n; // publicnode.com 限制
+  const BATCH_SIZE = 500n; // BSC Testnet public RPC limits getLogs range
 
   for (let start = fromBlock; start <= toBlock; start += BATCH_SIZE) {
     const end = start + BATCH_SIZE > toBlock ? toBlock : start + BATCH_SIZE;

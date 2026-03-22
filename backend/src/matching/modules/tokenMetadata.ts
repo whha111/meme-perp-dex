@@ -96,48 +96,11 @@ function sanitizeString(str: string): string {
 }
 
 /**
- * Validate token metadata
+ * Validate token metadata — 只检查必填字段，其他用户随便填
  */
 function validateMetadata(data: CreateTokenMetadataRequest): { valid: boolean; error?: string } {
-  // Required fields
   if (!data.instId || !data.tokenAddress || !data.name || !data.symbol || !data.creatorAddress) {
-    return { valid: false, error: "Missing required fields: instId, tokenAddress, name, symbol, creatorAddress" };
-  }
-
-  // Validate addresses
-  if (!isValidAddress(data.tokenAddress)) {
-    return { valid: false, error: "Invalid tokenAddress format" };
-  }
-
-  if (!isValidAddress(data.creatorAddress)) {
-    return { valid: false, error: "Invalid creatorAddress format" };
-  }
-
-  // Validate URLs (if provided)
-  if (data.logoUrl && !isValidUrl(data.logoUrl)) {
-    return { valid: false, error: "Invalid logoUrl format" };
-  }
-
-  if (data.imageUrl && !isValidUrl(data.imageUrl)) {
-    return { valid: false, error: "Invalid imageUrl format" };
-  }
-
-  if (data.website && !isValidUrl(data.website)) {
-    return { valid: false, error: "Invalid website format" };
-  }
-
-  // Validate twitter handle (if provided)
-  if (data.twitter && !/^@?[\w]{1,15}$/.test(data.twitter)) {
-    return { valid: false, error: "Invalid twitter handle" };
-  }
-
-  // Validate name and symbol length
-  if (data.name.length > 100) {
-    return { valid: false, error: "Name too long (max 100 characters)" };
-  }
-
-  if (data.symbol.length > 20) {
-    return { valid: false, error: "Symbol too long (max 20 characters)" };
+    return { valid: false, error: "Missing required fields" };
   }
 
   return { valid: true };

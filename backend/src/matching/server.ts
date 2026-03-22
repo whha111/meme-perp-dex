@@ -42,8 +42,19 @@ import { getTokenHolders } from "./modules/tokenHolders";
 // ============================================================
 // Mode 2 Modules (Off-chain Execution + On-chain Attestation)
 // ============================================================
-import { initializeSnapshotModule, startSnapshotJob, stopSnapshotJob, getUserProof, getSnapshotJobStatus } from "./modules/snapshot";
-import { initializeWithdrawModule, syncNoncesFromChain, requestWithdrawal, generateFastWithdrawalSignature, getWithdrawModuleStatus, cleanupExpiredWithdrawals } from "./modules/withdraw";
+// [DEPRECATED] snapshot, withdraw modules removed — replaced by marginBatch.ts
+// Stub functions for backward compatibility (server.ts references)
+function initializeSnapshotModule(..._args: any[]) {}
+function startSnapshotJob(..._args: any[]) {}
+function stopSnapshotJob() {}
+function getUserProof(_user: any): any { return null; }
+function getSnapshotJobStatus(): any { return { running: false, deprecated: true }; }
+function initializeWithdrawModule(..._args: any[]) {}
+async function syncNoncesFromChain(..._args: any[]): Promise<number> { return 0; }
+async function requestWithdrawal(..._args: any[]): Promise<any> { return { success: false, reason: "DEPRECATED: use direct wallet transfer" }; }
+async function generateFastWithdrawalSignature(..._args: any[]): Promise<any> { return null; }
+function getWithdrawModuleStatus(): any { return { deprecated: true }; }
+function cleanupExpiredWithdrawals() {}
 import {
   initLendingLiquidation,
   detectLendingLiquidations,
@@ -70,6 +81,18 @@ import {
   collectTradingFee as vaultCollectFee,
   startOIFlush,
 } from "./modules/perpVault";
+import {
+  initMarginBatch,
+  queueMarginDeposit,
+  queueSettleClose,
+  queueMarginWithdraw,
+  startMarginFlush,
+  stopMarginFlush,
+  setOnDepositFailure,
+  getOnChainTraderMargin,
+  getMarginBatchMetrics,
+  type PendingMarginOp,
+} from "./modules/marginBatch";
 
 // ============================================================
 // Configuration
@@ -736,6 +759,9 @@ interface Position {
   isAdlCandidate: boolean;        // 是否为 ADL 候选 (盈利方)
 }
 const userPositions = new Map<Address, Position[]>();
+
+// 主钱包 → 派生钱包地址映射 (register-session 时填充)
+const traderToDerivedWallet = new Map<Address, Address>();
 
 // 用户交易历史 (强平、ADL、正常平仓等)
 const userTrades = new Map<Address, TradeRecord[]>();
@@ -2169,38 +2195,48 @@ async function processLiquidations(): Promise<void> {
         insuranceFundPayout = partialCoverage;
       }
     } else {
-      // ========== 正常强平处理 ==========
-      // 爆仓剩余保证金 100% 进保险基金，不退还交易者
-      // 这是平台收入来源之一，激励用户控制风险
-      liquidationPenalty = currentMargin;  // 100% 给保险基金
-      refundToTrader = 0n;  // 不退还
+      // ========== 正常强平处理 (Bybit/Binance 标准) ==========
+      // 清算罚金 = 仓位名义价值 × MMR（维持保证金率）
+      // 剩余保证金退还交易者，罚金进保险基金
+      const mmrBps = BigInt(pos.mmr || "200"); // 默认 2% = 200bp
+      const positionValue = size; // 已经是 ETH 名义价值
+      const liquidationFee = (positionValue * mmrBps) / 10000n;
 
-      // 注入保险基金
+      if (currentMargin >= liquidationFee) {
+        // 正常情况：剩余保证金足以支付罚金
+        liquidationPenalty = liquidationFee;
+        refundToTrader = currentMargin - liquidationFee;
+      } else {
+        // 边界情况：剩余保证金不足以支付罚金
+        liquidationPenalty = currentMargin;
+        refundToTrader = 0n;
+      }
+
+      // 罚金注入保险基金
       contributeToInsuranceFund(liquidationPenalty, normalizedToken);
-      console.log(`[Liquidation] All remaining margin to insurance: $${Number(liquidationPenalty) / 1e18}`);
+      console.log(`[Liquidation] Fee to insurance: Ξ${Number(liquidationPenalty) / 1e18}, refund to trader: Ξ${Number(refundToTrader) / 1e18}`);
     }
 
-    // ✅ PerpVault: 强平 — 减少 OI + 结算清算 (保证金流入池子)
+    // ✅ PerpVault: 强平 — 减少 OI + 释放保证金 + 扣除亏损
     if (isPerpVaultEnabled()) {
       const liqSizeETH = size; // 已经是 ETH 名义价值
       vaultDecreaseOI(normalizedToken, pos.isLong, liqSizeETH).catch(err =>
         console.error(`[PerpVault] decreaseOI failed (liquidation): ${err}`)
       );
-      // 清算结算: collateral 流入 PerpVault (保险基金角色)
-      if (liquidationPenalty > 0n) {
-        // settleLiquidation(collateralETH, liquidatorReward, liquidator)
-        // Engine-driven liquidation: no external liquidator, reward = 0
-        vaultSettleLiquidation(liquidationPenalty, 0n, normalizedTrader).catch(err =>
-          console.error(`[PerpVault] settleLiquidation failed: ${err}`)
-        );
-      }
+      // 强平结算: 通过 settleClose 释放保证金，PnL 为负数（亏损留在池子）
+      // pnl = -(collateral - refundToTrader) 即 trader 的实际亏损（含罚金）
+      // marginRelease = collateral（释放全部锁定保证金，扣除亏损后的 refund 由合约计算）
+      const liquidationPnl = -(collateral - refundToTrader); // 负值: 亏损
+      queueSettleClose(normalizedTrader, liquidationPnl, collateral, pos.pairId);
     }
 
     // ========== 关闭仓位 ==========
-    // Mode 2: 强平链下调整 = -(保证金) 即交易者损失全部保证金
-    // (保证金已经在开仓时从 chainAvailable 中扣除了，但仓位关闭后 positionMargin 减少
-    //  所以需要对应减少 adjustment，否则 effective 会虚高)
-    addMode2Adjustment(normalizedTrader, -collateral, "LIQUIDATION_LOSS");
+    // Mode 2: 强平链下调整
+    // 仓位关闭后 positionMargin 自动减少 collateral（因为仓位从列表移除）
+    // 所以 mode2Adj 需要减去 (collateral - refundToTrader) 来反映实际损失
+    // 退还部分 refundToTrader 留在 available 中（不需要额外调整）
+    const traderLoss = collateral - refundToTrader;
+    addMode2Adjustment(normalizedTrader, -traderLoss, "LIQUIDATION_LOSS");
 
     // 1. 从用户仓位列表中移除
     const positions = userPositions.get(normalizedTrader) || [];
@@ -2211,9 +2247,12 @@ async function processLiquidations(): Promise<void> {
     // 2. 移除相关的 TP/SL 订单
     tpslOrders.delete(pos.pairId);
 
-    // 3. 同步删除 Redis 中的仓位 (Bug fix: 强平后必须清理 Redis)
-    deletePositionFromRedis(pos.pairId, "LIQUIDATED", normalizedTrader).catch(e =>
-      console.error("[Redis] Failed to delete liquidated position:", e));
+    // 3. ★ 同步删除 Redis + PG 中的仓位
+    try {
+      await deletePositionFromRedis(pos.pairId, "LIQUIDATED", normalizedTrader);
+    } catch (e) {
+      console.error("[Position] CRITICAL: Failed to delete liquidated position from Redis:", e);
+    }
 
     // 4. 记录强平到交易历史
     const liquidationTrade: TradeRecord = {
@@ -2256,11 +2295,11 @@ async function processLiquidations(): Promise<void> {
     // FIX: 使用 computeSettlementBalance 替代硬编码值
     try {
       const liqEffectiveAfter = computeSettlementBalance(normalizedTrader);
-      const liqEffectiveBefore = liqEffectiveAfter + collateral; // undo the -collateral mode2 adjustment
+      const liqEffectiveBefore = liqEffectiveAfter + traderLoss; // undo the -traderLoss mode2 adjustment
       await RedisSettlementLogRepo.create({
         userAddress: normalizedTrader,
         type: "LIQUIDATION",
-        amount: pnl.toString(),
+        amount: (-traderLoss).toString(), // 负数表示用户损失
         balanceBefore: liqEffectiveBefore.toString(),
         balanceAfter: liqEffectiveAfter.toString(),
         onChainStatus: "ENGINE_SETTLED",
@@ -2268,6 +2307,7 @@ async function processLiquidations(): Promise<void> {
           token: pos.token, pairId: pos.pairId, isLong: pos.isLong,
           entryPrice: pos.entryPrice, liquidationPrice: currentPrice.toString(),
           size: pos.size, penalty: liquidationPenalty.toString(),
+          refund: refundToTrader.toString(), traderLoss: traderLoss.toString(),
         }),
         positionId: pos.pairId, orderId: liquidationTrade.orderId, txHash: null,
       });
@@ -3199,7 +3239,23 @@ async function processTPSLTriggerQueue(): Promise<void> {
       continue;
     }
 
+    const normalizedTraderForLock = position.trader.toLowerCase() as Address;
+
+    // ★ F-3 FIX: 加锁防止与 closePositionByMatch / handleClosePair 并发关闭同一仓位
     try {
+    await withLock(`position:${normalizedTraderForLock}`, 10000, async () => {
+
+      // Re-check: 仓位可能已被并发平仓
+      const currentPositions = userPositions.get(normalizedTraderForLock) || [];
+      const stillExists = currentPositions.find(p => p.pairId === order.pairId);
+      if (!stillExists) {
+        console.log(`[TP/SL] Position ${order.pairId} already closed (concurrent close), skipping`);
+        order.executionStatus = "failed";
+        return;
+      }
+      // 用最新的 position 引用
+      position = stillExists;
+
       order.executionStatus = "executing";
 
       // 执行全额平仓
@@ -3333,6 +3389,7 @@ async function processTPSLTriggerQueue(): Promise<void> {
 
       console.log(`[TP/SL] ✅ Executed ${triggerType.toUpperCase()}: ${order.pairId} PnL=$${Number(pnl) / 1e18}`);
 
+    }); // end withLock
     } catch (e) {
       console.error(`[TP/SL] Execution failed: ${order.pairId}`, e);
       order.executionStatus = "failed";
@@ -4504,6 +4561,13 @@ function withdraw(trader: Address, amount: bigint): boolean {
  * 调整用户余额 (用于强平退款、ADL 等)
  * @param amount 正数增加，负数减少
  * @param reason 调整原因 (用于日志)
+ *
+ * ★ 注意: 此函数只改内存余额 (即时更新给前端)。
+ *   持久化靠 addMode2Adjustment (Redis) — 两者必须配合使用。
+ *   下次 syncUserBalanceFromChain 时内存余额会从 chainAvailable + mode2Adj 重算，
+ *   所以 adjustUserBalance 的改动是临时的。
+ *   adjustUserBalance 传入 collateral+pnl-fee (含保证金退还)，
+ *   addMode2Adjustment 只传 pnl-fee (保证金退还由 positionMargin 减少隐式处理)。
  */
 function adjustUserBalance(trader: Address, amount: bigint, reason: string): void {
   const balance = getUserBalance(trader);
@@ -4622,20 +4686,21 @@ async function syncUserBalanceFromChain(trader: Address): Promise<void> {
     // 1. 读取派生钱包余额 (ETH 本位: native ETH + WETH)
     let walletEthBalance = 0n;
 
-    // 1a. 读取 native ETH 余额
+    // 1a. 读取派生钱包 native BNB 余额（不是主钱包）
+    const derivedWallet = traderToDerivedWallet.get(normalizedTrader);
+    const balanceTarget = derivedWallet || normalizedTrader;
     const nativeEthBalance = await publicClient.getBalance({
-      address: normalizedTrader,
+      address: balanceTarget,
     });
 
-    // 1b. 读取 WETH 余额
+    // 1b. 读取 WETH 余额 (use module-level WETH_ADDRESS from config.ts)
     let wethBalance = 0n;
-    const WETH_ADDRESS = process.env.WETH_ADDRESS as Address;
     if (WETH_ADDRESS) {
       wethBalance = await publicClient.readContract({
         address: WETH_ADDRESS,
         abi: ERC20_ABI,
         functionName: "balanceOf",
-        args: [normalizedTrader],
+        args: [balanceTarget],
       }) as bigint;
     }
 
@@ -4704,13 +4769,14 @@ async function syncUserBalanceFromChain(trader: Address): Promise<void> {
     balance.settlementLocked = 0n; // Mode 2: 链上锁仓由后端管理
     balance.usedMargin = positionMargin; // 从后端内存计算
 
-    // totalBalance = 所有资产 (钱包 + 有效可用(链上+链下调整) + 仓位保证金)
-    balance.totalBalance = walletEthBalance + effectiveAvailable + positionMargin;
+    // 新架构: 派生钱包余额就是可用余额（无需 Settlement 合约）
+    // totalBalance = 派生钱包余额 + 仓位保证金
+    balance.totalBalance = walletEthBalance + positionMargin;
 
-    // availableBalance = 有效可用(链上+链下调整) - 挂单预留 - 仓位保证金
-    // ★ 不再包含 walletBalance，因为钱包里的钱没有存入合约，用户可以随时转走
-    // ★ autoDepositIfNeeded 会在下单时自动将钱包 ETH 存入 Settlement
-    let available = effectiveAvailable - pendingLocked - positionMargin;
+    // availableBalance = 派生钱包余额 - 挂单预留
+    // ★ 新架构: 用户资金在派生钱包里，直接可用于交易
+    // ★ Settlement 合约余额作为兼容性补充（旧用户可能还有）
+    let available = walletEthBalance + effectiveAvailable - pendingLocked;
     if (available < 0n) available = 0n;
     balance.availableBalance = available;
 
@@ -5124,6 +5190,11 @@ function settleOrderMargin(trader: Address, orderId: string, filledSize: bigint,
   const actualFee = (filledSize * actualFeeRate) / 10000n;
 
   balance.usedMargin += settleMargin;
+
+  // Queue on-chain margin deposit (optimistic: already settled in memory, async to chain)
+  if (isPerpVaultEnabled() && settleMargin > 0n) {
+    queueMarginDeposit(trader, settleMargin + actualFee, orderId);
+  }
 
   // Mode 2: 开仓手续费是消耗品 — 从 chainAvailable 中"扣除"
   // 当 orderMarginInfos 删除后，pendingOrdersLocked 减少了 margin+fee，
@@ -5670,7 +5741,7 @@ async function syncPositionsFromChain(): Promise<void> {
 /**
  * 添加仓位到用户的仓位列表
  */
-function addPositionToUser(position: Position): void {
+async function addPositionToUser(position: Position): Promise<void> {
   const normalizedTrader = position.trader.toLowerCase() as Address;
   const positions = userPositions.get(normalizedTrader) || [];
 
@@ -5688,15 +5759,15 @@ function addPositionToUser(position: Position): void {
 
   userPositions.set(normalizedTrader, positions);
 
-  // 同步保存到 Redis (异步, 不阻塞)
-  savePositionToRedis(position).then((redisId) => {
+  // ★ 同步持久化到 Redis + PG（必须成功，否则重启丢仓位）
+  try {
+    const redisId = await savePositionToRedis(position);
     if (redisId && !position.pairId.includes("-")) {
-      // 如果是新建仓位，用 Redis ID 更新 pairId
       position.pairId = redisId;
     }
-  }).catch((err) => {
-    console.error("[Redis] Failed to sync position:", err);
-  });
+  } catch (err) {
+    console.error("[Position] CRITICAL: Failed to persist position to Redis:", err);
+  }
 }
 
 // ============================================================
@@ -5951,6 +6022,23 @@ async function startEventWatching(): Promise<void> {
         // 添加到支持的代币列表
         addSupportedToken(tokenAddress);
 
+        // ✅ FIX: 立即更新 TOKEN_INFO_CACHE（不等 multicall 重新同步）
+        const normalizedTokenAddr = tokenAddress.toLowerCase();
+        TOKEN_INFO_CACHE.set(normalizedTokenAddr, { name, symbol: symbol.toUpperCase() });
+        console.log(`[Events] TOKEN_INFO_CACHE updated: ${normalizedTokenAddr.slice(0, 10)} → ${symbol}`);
+
+        // ✅ FIX: 广播给所有已连接的前端客户端（实时更新 tokenInfoMap）
+        const tokenInfoUpdate = JSON.stringify({
+          type: "all_token_info",
+          data: Object.fromEntries(TOKEN_INFO_CACHE),
+          timestamp: Date.now(),
+        });
+        for (const [client] of wsClients.entries()) {
+          if (client.readyState === WebSocket.OPEN) {
+            try { client.send(tokenInfoUpdate); } catch {}
+          }
+        }
+
         // ✅ 自动创建 token metadata (不再依赖前端 POST)
         // 链上事件是唯一可靠来源 — 即使前端关闭、网络中断，元数据也不会丢失
         try {
@@ -6021,8 +6109,37 @@ async function startEventWatching(): Promise<void> {
           } else {
             console.log(`[Events] Metadata already exists for ${symbol}, skipping`);
           }
-        } catch (metaErr) {
-          console.warn(`[Events] Failed to auto-create metadata for ${symbol}:`, metaErr);
+        } catch (metaErr: any) {
+          const errMsg = metaErr instanceof Error ? metaErr.message : JSON.stringify(metaErr);
+          console.warn(`[Events] Failed to auto-create metadata for ${symbol}: ${errMsg}`);
+          // Retry once with direct Redis client from connected db
+          try {
+            const db = await import("./database");
+            const client = db.default.getClient();
+            const key = `token:metadata:${symbol.toUpperCase()}-USDT-SWAP`;
+            const metadata = {
+              instId: `${symbol.toUpperCase()}-USDT-SWAP`,
+              tokenAddress: tokenAddress,
+              name,
+              symbol: symbol.toUpperCase(),
+              description: description || "",
+              logoUrl: imageUrl || "",
+              imageUrl: imageUrl || "",
+              website: "",
+              twitter: "",
+              telegram: "",
+              discord: "",
+              creatorAddress: creator,
+              totalSupply: "1000000000",
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+            await client.set(key, JSON.stringify(metadata));
+            await client.sadd("token:metadata:list", metadata.instId);
+            console.log(`[Events] ✅ Retry saved metadata for ${symbol} via direct Redis`);
+          } catch (retryErr: any) {
+            console.error(`[Events] Retry also failed for ${symbol}:`, retryErr?.message || retryErr);
+          }
         }
 
         // ✅ 创建初始 K 线数据 (Pump.fun 模式)
@@ -6172,7 +6289,7 @@ async function startEventWatching(): Promise<void> {
   });
 
   // 监听 WETH ERC20 Transfer 事件 (用户转 WETH 到/从派生钱包)
-  const WETH_ADDRESS = process.env.WETH_ADDRESS as Address;
+  // Use module-level WETH_ADDRESS from config.ts (supports COLLATERAL_TOKEN_ADDRESS fallback)
   if (WETH_ADDRESS) {
     console.log("[Events] Starting WETH Transfer event watching:", WETH_ADDRESS);
     publicClient.watchContractEvent({
@@ -6255,9 +6372,10 @@ async function startTradeEventPoller(): Promise<void> {
   lastScannedBlock = currentBlock;
   console.log(`[TradePoller] Started at block ${currentBlock}, polling every ${TRADE_POLL_INTERVAL_MS / 1000}s`);
 
-  // 启动前先回填：扫描最近 1000 个区块以捕获启动期间遗漏的事件
+  // 启动前先回填：扫描最近 200 个区块以捕获启动期间遗漏的事件
+  // BSC Testnet 公共 RPC 限制区块范围，200 足够覆盖 ~10 分钟
   try {
-    const backfillFrom = currentBlock > 1000n ? currentBlock - 1000n : 0n;
+    const backfillFrom = currentBlock > 200n ? currentBlock - 200n : 0n;
     console.log(`[TradePoller] Backfilling from block ${backfillFrom} to ${currentBlock}...`);
     await pollTradeEvents(pollClient, TRADE_EVENT_ABI, backfillFrom, currentBlock);
   } catch (e: any) {
@@ -6291,7 +6409,7 @@ async function pollTradeEvents(
   fromBlock: bigint,
   toBlock: bigint
 ): Promise<void> {
-  const BATCH_SIZE = 2000n;
+  const BATCH_SIZE = 500n; // BSC Testnet public RPC limits getLogs range
   let totalProcessed = 0;
 
   for (let start = fromBlock; start <= toBlock; start += BATCH_SIZE) {
@@ -6597,7 +6715,7 @@ let globalLiquidationCount = 0;
 /**
  * 创建或更新持仓记录
  */
-function createOrUpdatePosition(
+async function createOrUpdatePosition(
   trader: Address,
   token: Address,
   isLong: boolean,
@@ -6766,11 +6884,13 @@ function createOrUpdatePosition(
     positions[existingIndex] = updatedPosition;
     userPositions.set(normalizedTrader, positions);
 
-    // 同步更新到 Redis
+    // ★ 同步持久化加仓后的仓位到 Redis + PG
     if (existing.pairId) {
-      savePositionToRedis(updatedPosition).catch((err) => {
-        console.error("[Redis] Failed to update position:", err);
-      });
+      try {
+        await savePositionToRedis(updatedPosition);
+      } catch (err) {
+        console.error("[Position] CRITICAL: Failed to persist merged position:", err);
+      }
     }
 
     console.log(`[Position] ${isLong ? "Long" : "Short"} increased: ${trader.slice(0, 10)} size=${newSize} liq=${newLiquidationPrice}`);
@@ -6786,8 +6906,8 @@ function createOrUpdatePosition(
     // ✅ 广播仓位更新到前端
     broadcastPositionUpdate(normalizedTrader, normalizedToken);
   } else {
-    // 新开仓位 - 使用 addPositionToUser 来同步保存到 Redis
-    addPositionToUser(position);
+    // 新开仓位 - 同步持久化到 Redis + PG
+    await addPositionToUser(position);
     console.log(`[Position] ${isLong ? "Long" : "Short"} opened: ${trader.slice(0, 10)} size=${size} liq=${liquidationPrice}`);
 
     // ✅ PerpVault: 新仓位增加 OI
@@ -6807,7 +6927,7 @@ function createOrUpdatePosition(
  * 平仓匹配: reduce-only 订单成交时调用，关闭或减少现有仓位
  * 计算 PnL 并退还剩余保证金
  */
-function closePositionByMatch(
+async function closePositionByMatch(
   trader: Address,
   token: Address,
   closingSide: boolean, // true = 关闭多头, false = 关闭空头
@@ -6817,6 +6937,11 @@ function closePositionByMatch(
 ): void {
   const normalizedTrader = trader.toLowerCase() as Address;
   const normalizedToken = token.toLowerCase() as Address;
+
+  // ★ 并发锁: 与强平/TP/SL/funding 共享 position:${trader} 锁
+  // 防止同一仓位被多个路径同时关闭导致双倍记账
+  await withLock(`position:${normalizedTrader}`, 10000, async () => {
+
   const positions = userPositions.get(normalizedTrader) || [];
 
   const posIdx = positions.findIndex(
@@ -6862,7 +6987,12 @@ function closePositionByMatch(
 
     positions.splice(posIdx, 1);
     userPositions.set(normalizedTrader, positions);
-    deletePositionFromRedis(pos.pairId, "CLOSED", normalizedTrader).catch(e => console.error("[Redis] Failed to delete closed position:", e));
+    // ★ 同步删除 Redis + PG 仓位记录
+    try {
+      await deletePositionFromRedis(pos.pairId, "CLOSED", normalizedTrader);
+    } catch (e) {
+      console.error("[Position] CRITICAL: Failed to delete closed position from Redis:", e);
+    }
     tpslOrders.delete(pos.pairId);
 
     console.log(`[CloseByMatch] Fully closed ${closingSide ? 'LONG' : 'SHORT'}: ${normalizedTrader.slice(0, 10)} PnL=$${Number(pnl) / 1e18}, fee=$${Number(closeFee) / 1e18}`);
@@ -6894,7 +7024,12 @@ function closePositionByMatch(
       updatedAt: Date.now(),
     };
     userPositions.set(normalizedTrader, positions);
-    savePositionToRedis(positions[posIdx]).catch(e => console.error("[Redis] Failed to update partial close:", e));
+    // ★ 同步持久化部分平仓后的仓位
+    try {
+      await savePositionToRedis(positions[posIdx]);
+    } catch (e) {
+      console.error("[Position] CRITICAL: Failed to persist partial close:", e);
+    }
 
     console.log(`[CloseByMatch] Partially closed ${closingSide ? 'LONG' : 'SHORT'}: ${normalizedTrader.slice(0, 10)} closed=${closeSize}, remaining=${newSize}`);
   }
@@ -6904,6 +7039,10 @@ function closePositionByMatch(
     vaultDecreaseOI(normalizedToken, closingSide, closeSize).catch(err =>
       console.error(`[PerpVault] decreaseOI failed (close): ${err}`)
     );
+
+    // Queue on-chain margin release + PnL settlement
+    const marginToRelease = closeSize >= posSize ? collateral : (collateral * ((closeSize * 10000n) / posSize)) / 10000n;
+    queueSettleClose(normalizedTrader, pnl - closeFee, marginToRelease, pos.pairId);
   }
 
   broadcastPositionUpdate(normalizedTrader, normalizedToken);
@@ -6913,6 +7052,8 @@ function closePositionByMatch(
   if (feeReceiver && closeFee > 0n) {
     addMode2Adjustment(feeReceiver, closeFee, "CLOSE_FEE");
   }
+
+  }, 3, 100); // withLock: position:${trader}
 }
 
 // ============================================================
@@ -6960,8 +7101,8 @@ async function verifyTraderSignature(
     });
     if (!isValid) return { valid: false, error: "Invalid signature" };
     return { valid: true };
-  } catch (err) {
-    console.error(`[Auth] Signature verification error for ${trader}:`, err);
+  } catch (err: any) {
+    console.error(`[Auth] Signature verification error for ${trader}: ${err?.message || err?.code || String(err)}`);
     return { valid: false, error: "Signature verification failed" };
   }
 }
@@ -7491,15 +7632,16 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
       broadcastTrade(trade);
 
       // 创建/更新持仓记录 (关联订单号便于排查)
+      // ★ 同步 await 确保仓位持久化后再继续
       // Reduce-only 订单: 平仓而不是开新仓
       if (match.longOrder.reduceOnly) {
         // 多头reduce-only = 关闭空头仓位
-        closePositionByMatch(
+        await closePositionByMatch(
           match.longOrder.trader, token as Address, false, // 关闭空头
           match.matchSize, match.matchPrice, match.longOrder.id
         );
       } else {
-        createOrUpdatePosition(
+        await createOrUpdatePosition(
           match.longOrder.trader,
           token as Address,
           true, // isLong
@@ -7512,12 +7654,12 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
       }
       if (match.shortOrder.reduceOnly) {
         // 空头reduce-only = 关闭多头仓位
-        closePositionByMatch(
+        await closePositionByMatch(
           match.shortOrder.trader, token as Address, true, // 关闭多头
           match.matchSize, match.matchPrice, match.shortOrder.id
         );
       } else {
-        createOrUpdatePosition(
+        await createOrUpdatePosition(
           match.shortOrder.trader,
           token as Address,
           false, // isShort
@@ -8479,12 +8621,15 @@ async function handleCancelOrder(req: Request, orderId: string): Promise<Respons
 
           // P3-P1: 验证取消签名 — 前端签名 "Cancel order {orderId}" (usePerpetualV2.ts L601)
           const cancelMessage = `Cancel order ${orderId}`;
+          console.log(`[Cancel] orderId=${orderId}, trader=${trader}, orderTrader=${currentOrder.trader}, message="${cancelMessage}"`);
           const cancelAuth = await verifyTraderSignature(trader, signature, cancelMessage);
           if (!cancelAuth.valid) {
+            console.log(`[Cancel] Signature verification FAILED: ${cancelAuth.error}`);
             return { success: false, refundTotal: 0n };
           }
           // 验证订单属于该 trader
           if (currentOrder.trader.toLowerCase() !== normalizedTrader) {
+            console.log(`[Cancel] Trader mismatch: order=${currentOrder.trader.toLowerCase()} vs request=${normalizedTrader}`);
             return { success: false, refundTotal: 0n };
           }
           const success = engine.cancelOrder(orderId, trader as Address);
@@ -8666,28 +8811,31 @@ async function handleGetUserBalance(trader: string): Promise<Response> {
   const userOrders = engine.getUserOrders(normalizedTrader);
   const isKnownTrader = chainAvailable > 0n || positions.length > 0 || userOrders.length > 0;
 
-  // 仅对已知平台用户查询钱包余额 (防止隐私泄漏 + 减少 RPC 调用)
+  // 查询派生钱包余额（不是主钱包）
+  const derivedWallet2 = traderToDerivedWallet.get(normalizedTrader);
+  const balanceTarget2 = derivedWallet2 || normalizedTrader;
+  const isKnownTraderOrHasDerived = isKnownTrader || !!derivedWallet2;
+
   let nativeEthBalance = 0n;
   let wethBalance = 0n;
-  if (isKnownTrader) {
+  if (isKnownTraderOrHasDerived) {
     try {
-      nativeEthBalance = await publicClient.getBalance({ address: normalizedTrader });
+      nativeEthBalance = await publicClient.getBalance({ address: balanceTarget2 });
     } catch (e) {
-      console.warn(`[Balance] Failed to fetch native ETH balance for ${normalizedTrader}:`, e);
+      console.warn(`[Balance] Failed to fetch native ETH balance for ${balanceTarget2}:`, e);
     }
 
     try {
-      const WETH_ADDRESS = process.env.WETH_ADDRESS as Address;
       if (WETH_ADDRESS) {
         wethBalance = await publicClient.readContract({
           address: WETH_ADDRESS,
           abi: ERC20_ABI,
           functionName: "balanceOf",
-          args: [normalizedTrader],
+          args: [balanceTarget2],
         }) as bigint;
       }
     } catch (e) {
-      console.warn(`[Balance] Failed to fetch wallet WETH balance for ${normalizedTrader}:`, e);
+      console.warn(`[Balance] Failed to fetch wallet WETH balance for ${balanceTarget2}:`, e);
     }
   }
 
@@ -8724,14 +8872,12 @@ async function handleGetUserBalance(trader: string): Promise<Response> {
   // Mode 2 平仓盈亏不上链，需要从内存补充
   const mode2Adj = getMode2Adjustment(normalizedTrader);
 
-  // 有效可用 = 链上 available + 链下盈亏调整 - 挂单锁定 - 仓位保证金
-  // ⚠️ 安全: 不含 walletBalance，钱包里的钱必须存入 Settlement 才能交易
-  // walletBalance 单独展示为"可存入金额"
+  // 新架构: 派生钱包余额就是可用余额 + Settlement 兼容
   const effectiveAvailable = chainAvailable + mode2Adj;
-  let availableBalance = effectiveAvailable - pendingOrdersLocked - positionMargin;
+  let availableBalance = walletEthBalance + effectiveAvailable - pendingOrdersLocked;
   if (availableBalance < 0n) availableBalance = 0n;
   let usedMargin = positionMargin;
-  let totalBalance = effectiveAvailable + walletEthBalance + positionMargin;
+  let totalBalance = walletEthBalance + positionMargin;
 
   // ========================================
   // 3. 后端计算未实现盈亏 (基于实时价格)
@@ -10421,6 +10567,11 @@ function addMarginToPosition(pairId: string, amount: bigint): AddMarginResult {
   traderBalance.usedMargin = (traderBalance.usedMargin || 0n) + amount;
   // totalBalance 不变: available↓ + usedMargin↑ = 0 net
 
+  // Queue on-chain margin deposit for the additional margin
+  if (isPerpVaultEnabled()) {
+    queueMarginDeposit(positionTrader! as Address, amount, undefined, position.token as Address);
+  }
+
   const oldCollateral = BigInt(position.collateral);
   const newCollateral = oldCollateral + amount;
 
@@ -10762,6 +10913,11 @@ async function handleRemoveMargin(req: Request, pairId: string): Promise<Respons
     balance.availableBalance += BigInt(amount);
     balance.usedMargin = (balance.usedMargin || 0n) - BigInt(amount);
     if (balance.usedMargin < 0n) balance.usedMargin = 0n;
+
+    // Queue on-chain margin withdrawal: PerpVault → derived wallet
+    if (isPerpVaultEnabled()) {
+      queueMarginWithdraw(normalizedTrader, BigInt(amount));
+    }
 
     return jsonResponse({
       success: true,
@@ -11668,9 +11824,10 @@ async function handleRequest(req: Request): Promise<Response> {
       // SettlementV2 Merkle Proof Withdrawal
       // Returns authorization params for frontend to call SettlementV2.withdraw()
       // H-6: withLock prevents concurrent withdrawal requests from double-spending
+      // ★ F-9 FIX: 使用 balance: 锁 (与下单/平仓共享) 防止 TOCTOU 超支
       // ═══════════════════════════════════════════════════════════
       if (SETTLEMENT_V2_ADDRESS) {
-        return withLock(`v2:withdraw:${normalizedTrader}`, 15000, async () => {
+        return withLock(`balance:${normalizedTrader}`, 15000, async () => {
           // 1. Check pending orders locked margin
           let pendingOrdersLocked = 0n;
           const userOrders = engine.getUserOrders(normalizedTrader);
@@ -11779,7 +11936,7 @@ async function handleRequest(req: Request): Promise<Response> {
       // ═══════════════════════════════════════════════════════════
       // V1 Path: Legacy Settlement contract withdrawal (fallback)
       // ═══════════════════════════════════════════════════════════
-      const tokenAddr = (token || process.env.WETH_ADDRESS) as Address;
+      const tokenAddr = (token || WETH_ADDRESS) as Address;
       if (!tokenAddr) return errorResponse("Token address not configured");
 
       // 检查挂单锁定金额，确保不提取被挂单占用的资金
@@ -11905,11 +12062,20 @@ async function handleRequest(req: Request): Promise<Response> {
   if (path === "/api/wallet/register-session" && method === "POST") {
     try {
       const body = await req.json();
-      const { signature, expiresInSeconds } = body;
+      const { signature, expiresInSeconds, ownerAddress } = body;
       if (!signature) {
         return errorResponse("Missing signature");
       }
       const result = await registerTradingSession(signature, expiresInSeconds || 86400);
+
+      // 保存主钱包→派生钱包映射，余额查询用
+      if (ownerAddress) {
+        const normalizedOwner = (ownerAddress as string).toLowerCase() as Address;
+        const derivedAddr = result.tradingWalletAddress.toLowerCase() as Address;
+        traderToDerivedWallet.set(normalizedOwner, derivedAddr);
+        console.log(`[Wallet] Mapped ${normalizedOwner.slice(0, 10)} → derived ${derivedAddr.slice(0, 10)}`);
+      }
+
       return jsonResponse({ success: true, data: result });
     } catch (e: any) {
       return errorResponse(e.message || "Failed to register session");
@@ -12143,6 +12309,7 @@ async function handleRequest(req: Request): Promise<Response> {
       entryPrice: string;
       leverage: string;
       liquidationPrice: string;
+      markPrice: string;
       unrealizedPnl: string;
       timestamp: number;
     }> = [];
@@ -12159,6 +12326,7 @@ async function handleRequest(req: Request): Promise<Response> {
           entryPrice: pos.entryPrice,
           leverage: pos.leverage || "1",
           liquidationPrice: pos.liquidationPrice || "0",
+          markPrice: pos.markPrice || "0",
           unrealizedPnl: pos.unrealizedPnL || "0",
           timestamp: pos.timestamp || Date.now(),
         });
@@ -14029,7 +14197,38 @@ async function startServer(): Promise<void> {
     );
     startBatchSettlement();
     startOIFlush();
-    console.log(`[Server] PerpVault module initialized + batch settlement + OI flush started (PerpVault: ${PERP_VAULT_ADDRESS_LOCAL})`);
+
+    // Initialize margin batch module (derived wallet ↔ PerpVault margin)
+    initMarginBatch(vaultPublicClient, vaultWalletClient);
+    setOnDepositFailure(async (op: PendingMarginOp) => {
+      // When margin deposit fails on-chain, force close the related position
+      console.error(`[MarginBatch] Deposit failed permanently for ${op.trader.slice(0, 10)}, rolling back...`);
+      if (op.orderId) {
+        // Find and close the position that was opened with this order
+        const positions = userPositions.get(op.trader.toLowerCase() as Address) || [];
+        const pos = positions.find(p => p.token?.toLowerCase() === op.token?.toLowerCase());
+        if (pos) {
+          const currentPrice = BigInt(pos.markPrice || pos.entryPrice);
+          await closePositionByMatch(
+            op.trader,
+            pos.token as Address,
+            pos.isLong,
+            BigInt(pos.size),
+            currentPrice,
+            `rollback_${op.orderId}`
+          );
+          console.log(`[MarginBatch] Position rolled back for ${op.trader.slice(0, 10)}`);
+        }
+      }
+      // Refund the soft-locked amount
+      const balance = getUserBalance(op.trader);
+      balance.availableBalance += op.amount;
+      balance.usedMargin -= op.amount;
+      if (balance.usedMargin < 0n) balance.usedMargin = 0n;
+      broadcastBalanceUpdate(op.trader);
+    });
+    startMarginFlush();
+    console.log(`[Server] PerpVault module initialized + batch settlement + OI flush + margin flush started (PerpVault: ${PERP_VAULT_ADDRESS_LOCAL})`);
   } else {
     console.log("[Server] PerpVault: No PERP_VAULT_ADDRESS set, vault mode disabled");
   }
@@ -14572,7 +14771,8 @@ async function startServer(): Promise<void> {
         transport: http(RPC_URL),
       });
       const currentBlock = await backfillClient.getBlockNumber();
-      const backfillFrom = currentBlock > 50000n ? currentBlock - 50000n : 0n;
+      // BSC Testnet public RPC has strict getLogs limits, use smaller range
+      const backfillFrom = currentBlock > 5000n ? currentBlock - 5000n : 0n;
       console.log(`[Startup] Backfilling spot trades from block ${backfillFrom} to ${currentBlock} for all supported tokens...`);
       const { backfillHistoricalTrades } = await import("../spot/spotHistory");
       for (const token of SUPPORTED_TOKENS) {
@@ -14833,6 +15033,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
     stopRiskEngine();
     stopDynamicFundingEngine();
     stopSnapshotJob();
+    stopMarginFlush();
     // Local timers
     if (marketDataPushInterval) {
       clearInterval(marketDataPushInterval);

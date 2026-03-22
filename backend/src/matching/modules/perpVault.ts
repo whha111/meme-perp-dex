@@ -276,8 +276,15 @@ const OI_FLUSH_INTERVAL_MS = 10_000; // 10 seconds
 // ============================================================
 // Global tx lock — prevents OI flush and batch settlement from
 // sending on-chain txs simultaneously (nonce collision protection)
+// Shared as ref object so marginBatch.ts can also acquire the lock
 // ============================================================
 let globalTxLock = false;
+
+/** Shared lock ref for cross-module access (marginBatch.ts) */
+export const txLockRef = {
+  get locked() { return globalTxLock; },
+  set locked(v: boolean) { globalTxLock = v; },
+};
 
 // ============================================================
 // Batched OI Queue (prevents nonce conflicts from concurrent calls)

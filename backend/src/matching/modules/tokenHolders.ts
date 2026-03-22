@@ -26,7 +26,7 @@ const TRANSFER_EVENT = parseAbiItem(
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
 const CACHE_TTL_SECONDS = 60;
-const MAX_BLOCK_RANGE = 10000n; // Some RPCs limit range
+const MAX_BLOCK_RANGE = 2000n; // BSC Testnet public RPC limits ~5000, use 2000 for safety
 
 // ============================================================
 // Types

@@ -6,9 +6,9 @@ WORKDIR /app
 # Copy package files
 COPY matching/package.json ./matching/
 
-# Install dependencies
+# Install dependencies (clean cache first to avoid @noble/hashes resolution issues)
 WORKDIR /app/matching
-RUN bun install --frozen-lockfile || bun install
+RUN rm -rf node_modules .bun && bun install --frozen-lockfile || bun install
 
 # Copy source code (matching + spot directories, maintaining relative paths)
 WORKDIR /app
