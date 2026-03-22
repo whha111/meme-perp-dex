@@ -432,6 +432,7 @@ class WebSocketManager {
           break;
 
         case "liquidation":
+        case "liquidation_warning":
           store.addRiskAlert({
             type: "liquidation_warning",
             severity: "danger",
@@ -439,6 +440,10 @@ class WebSocketManager {
             message: `Position ${String(msg.pairId || "").slice(0, 8)} was liquidated`,
             timestamp: Date.now(),
           });
+          // 强平后立即移除仓位（不依赖 position_risks 消息）
+          if (msg.pairId) {
+            store.removePosition(msg.pairId as string);
+          }
           break;
 
         case "liquidation_map":

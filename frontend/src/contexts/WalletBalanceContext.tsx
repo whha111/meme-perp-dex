@@ -3,15 +3,15 @@
 /**
  * 全局钱包余额 Context (BNB 本位)
  *
- * 派生钱包余额架构 (简化版):
- * - 可用余额 = 派生钱包 Native BNB (直接链上读取)
- * - 锁定保证金 = PerpVault.traderMargin (链上读取)
- * - 总计 = 可用 + 锁定
+ * 混合数据源架构:
+ * - 主数据源: WS 推送的撮合引擎余额 (available + locked)
+ *   → 包含 mode2Adj 修正，平仓盈亏即时反映
+ * - 兜底数据源: 链上读取 (派生钱包 BNB + PerpVault.traderMargin)
+ *   → 覆盖 WS 未连接或首次加载的场景
  *
- * 不再需要:
- * - WBNB 余额 (不再 wrap)
- * - Settlement 合约余额 (已废弃)
- * - Backend balance API 轮询 (余额即链上值)
+ * 为什么不能只读链上?
+ *   链上结算是异步批量的 (10-30s flush)，平仓后 PerpVault 不会立即释放资金。
+ *   WS 推送的引擎余额已包含 mode2Adj 修正，是唯一即时正确的数据源。
  */
 
 import React, {
@@ -20,6 +20,7 @@ import React, {
   useMemo,
   useCallback,
   useEffect,
+  useRef,
 } from "react";
 import { formatEther, parseEther, type Address } from "viem";
 import { useBalance, useReadContract } from "wagmi";
@@ -87,6 +88,8 @@ export function WalletBalanceProvider({
   const { address: tradingWallet } = useTradingWallet();
 
   // Native BNB balance on derived wallet
+  // 30s 兜底轮询: 覆盖用户直接向派生钱包转 BNB 的场景 (WS 无法感知)
+  // WS balance 消息会额外触发 refreshBalance() 实现即时更新
   const {
     data: nativeBalanceData,
     refetch: refetchNative,
@@ -94,6 +97,9 @@ export function WalletBalanceProvider({
     dataUpdatedAt,
   } = useBalance({
     address: tradingWallet ?? undefined,
+    query: {
+      refetchInterval: 30_000,
+    },
   });
 
   const nativeEthBalance = nativeBalanceData?.value ?? 0n;
@@ -111,6 +117,7 @@ export function WalletBalanceProvider({
     args: tradingWallet ? [tradingWallet] : undefined,
     query: {
       enabled: !!tradingWallet && !!perpVaultAddress,
+      refetchInterval: 30_000,
     },
   });
 
@@ -121,10 +128,32 @@ export function WalletBalanceProvider({
     return nativeEthBalance > GAS_RESERVE ? nativeEthBalance - GAS_RESERVE : 0n;
   }, [nativeEthBalance]);
 
-  // Total balance = available + locked
+  // ── WS 引擎余额 (主数据源) ────────────────────────────
+  // 引擎余额包含 mode2Adj 修正，平仓盈亏即时反映
+  const storeBalance = useTradingDataStore(state => state.balance);
+
+  // 使用 ref 跟踪 WS 余额是否已接收 (避免闪烁)
+  const hasWsBalance = useRef(false);
+  useEffect(() => {
+    if (storeBalance && (storeBalance.available > 0n || storeBalance.locked > 0n)) {
+      hasWsBalance.current = true;
+    }
+  }, [storeBalance]);
+
+  // Total balance: 优先使用 WS 引擎余额，兜底用链上余额
   const totalBalance = useMemo(() => {
+    if (storeBalance && hasWsBalance.current) {
+      // WS 引擎余额: available(可用) + locked(已锁定保证金)
+      // 这是撮合引擎计算的真实余额，包含 mode2Adj 修正
+      const wsTotal = storeBalance.available + storeBalance.locked;
+      // 取 WS 余额和链上余额的较大值
+      // 因为链上结算有延迟，WS 值通常更大（包含未结算的盈利）
+      const onChainTotal = walletOnlyBalance + lockedMargin;
+      return wsTotal > onChainTotal ? wsTotal : onChainTotal;
+    }
+    // 兜底: WS 未连接时用链上余额
     return walletOnlyBalance + lockedMargin;
-  }, [walletOnlyBalance, lockedMargin]);
+  }, [storeBalance, walletOnlyBalance, lockedMargin]);
 
   // Refresh all balances
   const refreshBalance = useCallback(() => {
@@ -132,11 +161,14 @@ export function WalletBalanceProvider({
     refetchMargin();
   }, [refetchNative, refetchMargin]);
 
-  // WS balance updates trigger refresh
-  const storeBalance = useTradingDataStore(state => state.balance);
+  // WS balance 更新时也触发链上刷新 (最终一致性)
   useEffect(() => {
     if (storeBalance) {
-      refreshBalance();
+      // 延迟刷新链上余额: 等链上批量结算完成后同步
+      const timer = setTimeout(() => {
+        refreshBalance();
+      }, 15_000); // 15 秒后链上应该已结算
+      return () => clearTimeout(timer);
     }
   }, [storeBalance, refreshBalance]);
 
@@ -157,19 +189,34 @@ export function WalletBalanceProvider({
 
   const lastUpdated = dataUpdatedAt || 0;
 
+  // 导出的可用余额和锁定保证金也优先使用 WS 数据
+  const effectiveAvailable = useMemo(() => {
+    if (storeBalance && hasWsBalance.current) {
+      return storeBalance.available > walletOnlyBalance ? storeBalance.available : walletOnlyBalance;
+    }
+    return walletOnlyBalance;
+  }, [storeBalance, walletOnlyBalance]);
+
+  const effectiveLockedMargin = useMemo(() => {
+    if (storeBalance && hasWsBalance.current) {
+      return storeBalance.locked > lockedMargin ? storeBalance.locked : lockedMargin;
+    }
+    return lockedMargin;
+  }, [storeBalance, lockedMargin]);
+
   const value: WalletBalanceContextType = {
     tradingWallet: tradingWallet ?? null,
-    nativeEthBalance,
-    lockedMargin,
+    nativeEthBalance: effectiveAvailable,
+    lockedMargin: effectiveLockedMargin,
     totalBalance,
-    walletOnlyBalance,
+    walletOnlyBalance: effectiveAvailable,
     formattedWethBalance,
     refreshBalance,
     isLoading: isLoadingNative || isLoadingMargin,
     lastUpdated,
     // Legacy compatibility
     wethBalance: 0n,
-    settlementBalance: lockedMargin,
+    settlementBalance: effectiveLockedMargin,
   };
 
   return (
