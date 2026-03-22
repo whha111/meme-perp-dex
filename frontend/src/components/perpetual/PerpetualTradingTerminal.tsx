@@ -70,6 +70,7 @@ export function PerpetualTradingTerminal({
     address: tradingWalletAddress,
     getSignature,
     isInitialized: isTradingWalletInitialized,
+    exportKey,
   } = useTradingWallet();
 
   // 获取交易钱包签名（用于派生私钥）
@@ -259,6 +260,126 @@ export function PerpetualTradingTerminal({
 
   // 错误处理
   const { withErrorHandling } = useApiError();
+
+  // ── 保证金调整 (Add/Remove Margin) ──────────────────
+  const [marginModal, setMarginModal] = useState<{
+    pairId: string;
+    action: "add" | "remove";
+    collateral: number;
+    size: number;
+    entryPrice: number;
+    isLong: boolean;
+    leverage: number;
+    mmr: number;
+  } | null>(null);
+  const [marginAmount, setMarginAmount] = useState("");
+  const [isAdjustingMargin, setIsAdjustingMargin] = useState(false);
+  const [marginInfo, setMarginInfo] = useState<{
+    maxRemovable: number;
+    minCollateral: number;
+  } | null>(null);
+
+  // 打开保证金调整弹窗时，获取最大可减额
+  useEffect(() => {
+    if (!marginModal) { setMarginInfo(null); return; }
+    if (marginModal.action !== "remove") { setMarginInfo(null); return; }
+    fetch(`${MATCHING_ENGINE_URL}/api/position/${marginModal.pairId}/margin`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          setMarginInfo({
+            maxRemovable: parseFloat(data.maxRemovable || "0") / 1e18,
+            minCollateral: parseFloat(data.minCollateral || "0") / 1e18,
+          });
+        }
+      })
+      .catch(() => {});
+  }, [marginModal?.pairId, marginModal?.action]);
+
+  // 预览调整后的杠杆和强平价
+  const marginPreview = useMemo(() => {
+    if (!marginModal || !marginAmount || parseFloat(marginAmount) <= 0) return null;
+    const amt = parseFloat(marginAmount);
+    const newCollateral = marginModal.action === "add"
+      ? marginModal.collateral + amt
+      : Math.max(0, marginModal.collateral - amt);
+    if (newCollateral <= 0) return null;
+    const newLeverage = marginModal.size / newCollateral;
+    const mmrDecimal = marginModal.mmr / 100;
+    // Bybit 标准强平价
+    const newLiqPrice = marginModal.isLong
+      ? marginModal.entryPrice * (1 - 1/newLeverage + mmrDecimal/100)
+      : marginModal.entryPrice * (1 + 1/newLeverage - mmrDecimal/100);
+    return { newCollateral, newLeverage, newLiqPrice };
+  }, [marginModal, marginAmount]);
+
+  // 提交保证金调整
+  const handleAdjustMargin = useCallback(async () => {
+    if (!marginModal || !marginAmount || !tradingWalletAddress) return;
+    // 使用 parseEther 避免 parseFloat 精度问题 (FE-C02)
+    const { parseEther: toWei } = await import("viem");
+    let amountWei: string;
+    try {
+      amountWei = toWei(marginAmount).toString();
+    } catch {
+      showToast(t("invalidAmount") || "Invalid amount", "error");
+      return;
+    }
+    if (BigInt(amountWei) <= 0n) {
+      showToast(t("invalidAmount") || "Invalid amount", "error");
+      return;
+    }
+
+    setIsAdjustingMargin(true);
+    try {
+      const { pairId, action } = marginModal;
+      const sigMsg = action === "add"
+        ? `Add margin ${amountWei} to ${pairId} for ${tradingWalletAddress.toLowerCase()}`
+        : `Remove margin ${amountWei} from ${pairId} for ${tradingWalletAddress.toLowerCase()}`;
+
+      const keyData = exportKey?.();
+      if (!keyData?.privateKey) {
+        showToast(t("tradingWalletNotActive") || "Trading wallet not active", "error");
+        return;
+      }
+      const { privateKeyToAccount } = await import("viem/accounts");
+      const { createWalletClient, http } = await import("viem");
+      const { bscTestnet } = await import("viem/chains");
+      const signerAccount = privateKeyToAccount(keyData.privateKey);
+      const tempClient = createWalletClient({
+        account: signerAccount,
+        chain: bscTestnet,
+        transport: http(),
+      });
+      const signature = await tempClient.signMessage({ account: signerAccount, message: sigMsg });
+
+      const endpoint = action === "add" ? "margin/add" : "margin/remove";
+      const res = await fetch(`${MATCHING_ENGINE_URL}/api/position/${pairId}/${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: amountWei, trader: tradingWalletAddress, signature }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(
+          action === "add"
+            ? (t("marginAdded") || "Margin added successfully")
+            : (t("marginRemoved") || "Margin removed successfully"),
+          "success"
+        );
+        setMarginModal(null);
+        setMarginAmount("");
+        refreshPositions();
+        refreshBalance();
+      } else {
+        showToast(data.error || (t("operationFailed") || "Operation failed"), "error");
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : (t("operationFailed") || "Operation failed"), "error");
+    } finally {
+      setIsAdjustingMargin(false);
+    }
+  }, [marginModal, marginAmount, tradingWalletAddress, exportKey, showToast, t, refreshPositions, refreshBalance]);
 
   // 加载订单历史和成交记录
   const loadHistoryData = useCallback(async () => {
@@ -821,7 +942,7 @@ export function PerpetualTradingTerminal({
             <div className="flex-1 overflow-y-auto">
               {/* Positions - 使用 WebSocket 实时推送数据 (行业标准 UI - 参考 OKX/Binance) */}
               {activeBottomTab === "positions" && (
-                <div className="p-2">
+                <div className="px-0">
                   {!isConnected ? (
                     <div className="text-center text-okx-text-tertiary py-8">
                       {tc("connectWalletFirst")}
@@ -832,145 +953,137 @@ export function PerpetualTradingTerminal({
                     </div>
                   ) : (
                     <>
-                    {/* Desktop Table */}
+                    {/* ═══════════════════════════════════════════════════════════════
+                        Desktop Position Table (OKX/Bybit-grade professional layout)
+                        ═══════════════════════════════════════════════════════════════ */}
                     <div className="hidden md:block overflow-x-auto">
-                    <table className="w-full text-xs min-w-[1000px]">
+                    <table className="w-full text-[11px] min-w-[960px]">
                       <thead>
-                        <tr className="text-okx-text-tertiary border-b border-okx-border-primary">
-                          <th className="text-left py-2 px-2">{t("pair")}</th>
-                          <th className="text-center py-2 px-1">{t("direction")}</th>
-                          <th className="text-right py-2 px-1">{t("leverage")}</th>
-                          <th className="text-right py-2 px-1">{t("size")}</th>
-                          <th className="text-right py-2 px-1">{t("entryAvg")}</th>
-                          <th className="text-right py-2 px-1">{t("markPrice")}</th>
-                          <th className="text-right py-2 px-1">{t("liqPrice")}</th>
-                          <th className="text-right py-2 px-1">{t("margin")}</th>
-                          <th className="text-right py-2 px-1">{t("marginRatio")}</th>
-                          <th className="text-right py-2 px-1">{t("unrealizedPnl")}</th>
-                          <th className="text-right py-2 px-1">{t("roe")}%</th>
-                          <th className="text-center py-2 px-1">{t("tpSl")}</th>
-                          <th className="text-right py-2 px-2">{t("action")}</th>
+                        <tr className="text-okx-text-tertiary text-[10px] uppercase tracking-wider">
+                          <th className="text-left py-1.5 px-3 font-normal">{t("pair")}</th>
+                          <th className="text-right py-1.5 px-2 font-normal">{t("size")}</th>
+                          <th className="text-right py-1.5 px-2 font-normal">{t("entryAvg")}</th>
+                          <th className="text-right py-1.5 px-2 font-normal">{t("markPrice")}</th>
+                          <th className="text-right py-1.5 px-2 font-normal">{t("liqPrice")}</th>
+                          <th className="text-right py-1.5 px-2 font-normal">{t("margin")}</th>
+                          <th className="text-right py-1.5 px-2 font-normal">{t("unrealizedPnl")}</th>
+                          <th className="text-right py-1.5 px-3 font-normal">{t("action")}</th>
                         </tr>
                       </thead>
                       <tbody>
                         {currentPositionsForDisplay.map((pos) => {
-                          // ============================================================
-                          // 使用 chartPrice (WS 实时价格) 前端实时计算 PnL/保证金率/ROE
-                          // 后端仅在事件时推送更新，价格持续变动时 PnL 必须前端跟随
-                          // ============================================================
                           const sizeETH = parseFloat(String(pos.size)) / 1e18;
                           const entryPrice = parseFloat(String(pos.entryPrice)) / 1e18;
                           const serverMarkPrice = parseFloat(String(pos.markPrice || pos.entryPrice)) / 1e18;
-                          // 优先使用 WS 实时价格，fallback 到后端推送的标记价
                           const markPrice = chartPrice && chartPrice > 0 ? chartPrice : serverMarkPrice;
                           const liqPrice = parseFloat(String(pos.liquidationPrice || "0")) / 1e18;
                           const marginETH = parseFloat(String(pos.collateral)) / 1e18;
                           const leverage = parseFloat(String(pos.leverage));
                           const mmr = parseFloat(String(pos.mmr || "200")) / 100;
-                          // GMX 标准 PnL: delta = size * |currentPrice - avgPrice| / avgPrice
                           const pnlDelta = entryPrice > 0 ? sizeETH * Math.abs(markPrice - entryPrice) / entryPrice : 0;
                           const hasProfit = pos.isLong ? (markPrice > entryPrice) : (entryPrice > markPrice);
                           const unrealizedPnlETH = hasProfit ? pnlDelta : -pnlDelta;
-                          // 保证金率: maintenanceMargin / equity * 100
                           const equity = marginETH + unrealizedPnlETH;
                           const maintenanceMargin = sizeETH * (mmr / 100);
                           const marginRatio = equity > 0 ? (maintenanceMargin / equity) * 100 : 999;
-                          // ROE%: unrealizedPnL / collateral * 100
                           const roe = marginETH > 0 ? (unrealizedPnlETH / marginETH) * 100 : 0;
                           const tokenAmount = markPrice > 0 ? sizeETH / markPrice : 0;
-
-                          // 风险颜色基于实时保证金率
-                          const riskColor = marginRatio > 50 ? "text-red-500 animate-pulse" :
-                                           marginRatio > 30 ? "text-red-400" :
-                                           marginRatio > 15 ? "text-yellow-400" : "text-green-400";
+                          const riskLevel = marginRatio > 50 ? 3 : marginRatio > 30 ? 2 : marginRatio > 15 ? 1 : 0;
+                          const riskBarColor = riskLevel >= 3 ? "bg-red-500" : riskLevel >= 2 ? "bg-orange-500" : riskLevel >= 1 ? "bg-yellow-500" : "bg-green-500";
+                          const riskBarWidth = Math.min(marginRatio, 100);
 
                           return (
-                            <tr key={pos.pairId} className="border-b border-okx-border-primary hover:bg-okx-bg-hover">
-                              {/* 交易对 */}
-                              <td className="py-3 px-2">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-medium text-okx-text-primary">{instId}</span>
-                                  <span className="text-xs text-purple-400 bg-purple-900/30 px-1.5 py-0.5 rounded">
-                                    #{pos.pairId?.slice(0, 8) || "?"}
+                            <tr key={pos.pairId} className="border-b border-okx-border-primary/50 hover:bg-white/[0.02] transition-colors">
+                              {/* ── 交易对 + 方向 + 杠杆 (合并列) ── */}
+                              <td className="py-2.5 px-3">
+                                <div className="flex items-center gap-1.5">
+                                  <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                                    pos.isLong
+                                      ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20"
+                                      : "bg-rose-500/15 text-rose-400 border border-rose-500/20"
+                                  }`}>
+                                    {pos.isLong ? "▲" : "▼"} {pos.isLong ? t("long") : t("short")}
                                   </span>
+                                  <span className="text-okx-text-primary font-medium text-xs">{instId}</span>
+                                  <span className="text-[10px] text-amber-400/80 font-medium">{leverage}x</span>
                                 </div>
                               </td>
 
-                              {/* 方向 */}
-                              <td className="py-3 px-1 text-center">
-                                <span className={`px-2 py-1 rounded text-xs font-bold ${
-                                  pos.isLong
-                                    ? "bg-green-900/50 text-green-400"
-                                    : "bg-red-900/50 text-red-400"
-                                }`}>
-                                  {pos.isLong ? t("long") : t("short")}
-                                </span>
-                              </td>
-
-                              {/* 杠杆 */}
-                              <td className="py-3 px-1 text-right">
-                                <span className="text-yellow-400 font-medium">{leverage}x</span>
-                              </td>
-
-                              {/* 仓位大小 - BNB 名义价值 + 代币数量 */}
-                              <td className="py-3 px-1 text-right">
+                              {/* ── 数量 (BNB 名义值 + 代币数量) ── */}
+                              <td className="py-2.5 px-2 text-right">
                                 <div className="text-okx-text-primary font-medium">
-                                  BNB {sizeETH >= 1 ? sizeETH.toFixed(4) : sizeETH.toFixed(6)}
+                                  {sizeETH >= 1 ? sizeETH.toFixed(4) : sizeETH.toFixed(6)}
                                 </div>
-                                <div className="text-xs text-okx-text-tertiary">
-                                  {tokenAmount >= 1000000000 ? `${(tokenAmount/1000000000).toFixed(1)}B` :
-                                   tokenAmount >= 1000000 ? `${(tokenAmount/1000000).toFixed(1)}M` :
-                                   tokenAmount >= 1000 ? `${(tokenAmount/1000).toFixed(1)}K` :
+                                <div className="text-[10px] text-okx-text-tertiary">
+                                  {tokenAmount >= 1e9 ? `${(tokenAmount/1e9).toFixed(1)}B` :
+                                   tokenAmount >= 1e6 ? `${(tokenAmount/1e6).toFixed(1)}M` :
+                                   tokenAmount >= 1e3 ? `${(tokenAmount/1e3).toFixed(1)}K` :
                                    tokenAmount.toFixed(0)} tokens
                                 </div>
                               </td>
 
-                              {/* 开仓均价 - Token/BNB 比率 (使用下标格式) */}
-                              <td className="py-3 px-1 text-right font-mono text-okx-text-primary">
+                              {/* ── 开仓均价 ── */}
+                              <td className="py-2.5 px-2 text-right font-mono text-okx-text-primary text-[11px]">
                                 {formatSmallPrice(entryPrice)}
                               </td>
 
-                              {/* 标记价格 - Token/BNB 比率 (使用下标格式) */}
-                              <td className="py-3 px-1 text-right font-mono text-okx-text-secondary">
+                              {/* ── 标记价格 ── */}
+                              <td className="py-2.5 px-2 text-right font-mono text-okx-text-secondary text-[11px]">
                                 {formatSmallPrice(markPrice)}
                               </td>
 
-                              {/* 强平价格 - Token/BNB 比率 (使用下标格式) */}
-                              <td className={`py-3 px-1 text-right font-mono ${pos.isLong ? "text-red-400" : "text-green-400"}`}>
-                                {formatSmallPrice(liqPrice)}
+                              {/* ── 强平价格 ── */}
+                              <td className="py-2.5 px-2 text-right font-mono text-[11px]">
+                                <span className={pos.isLong ? "text-rose-400/80" : "text-emerald-400/80"}>
+                                  {formatSmallPrice(liqPrice)}
+                                </span>
                               </td>
 
-                              {/* 保证金 (BNB) */}
-                              <td className="py-3 px-1 text-right">
-                                <span className="text-okx-text-primary">BNB {marginETH >= 1 ? marginETH.toFixed(4) : marginETH.toFixed(6)}</span>
-                                <div className="text-xs text-okx-text-tertiary">{t("mmr")}: {mmr.toFixed(2)}%</div>
+                              {/* ── 保证金 + 铅笔图标 (行业标准入口) ── */}
+                              <td className="py-2.5 px-2 text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                  <div>
+                                    <div className="text-okx-text-primary text-[11px]">
+                                      {marginETH >= 1 ? marginETH.toFixed(4) : marginETH.toFixed(5)} BNB
+                                    </div>
+                                    <div className="flex items-center gap-1.5 justify-end mt-0.5">
+                                      <div className="w-12 h-1 bg-okx-bg-tertiary rounded-full overflow-hidden">
+                                        <div className={`h-full rounded-full transition-all ${riskBarColor}`} style={{ width: `${riskBarWidth}%` }} />
+                                      </div>
+                                      <span className={`text-[9px] font-medium ${riskLevel >= 2 ? "text-orange-400" : "text-okx-text-tertiary"}`}>
+                                        {marginRatio.toFixed(1)}%
+                                      </span>
+                                    </div>
+                                  </div>
+                                  {/* ✏️ 铅笔图标 — 点击打开保证金调整弹窗 (OKX/Bybit/Binance 统一交互) */}
+                                  <button
+                                    onClick={() => setMarginModal({
+                                      pairId: pos.pairId, action: "add", collateral: marginETH,
+                                      size: sizeETH, entryPrice, isLong: pos.isLong, leverage, mmr,
+                                    })}
+                                    className="p-1 rounded hover:bg-white/[0.06] transition-colors group"
+                                    title={t("adjustMargin") || "Adjust Margin"}
+                                  >
+                                    <svg className="w-3 h-3 text-okx-text-tertiary group-hover:text-okx-brand-primary transition-colors" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" />
+                                    </svg>
+                                  </button>
+                                </div>
                               </td>
 
-                              {/* 保证金率 - 后端实时推送 */}
-                              <td className={`py-3 px-1 text-right font-medium ${riskColor}`}>
-                                {marginRatio.toFixed(2)}%
+                              {/* ── 未实现盈亏 + ROE% (重点突出) ── */}
+                              <td className="py-2.5 px-2 text-right">
+                                <div className={`text-xs font-semibold ${unrealizedPnlETH >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                                  {unrealizedPnlETH >= 0 ? "+" : ""}{Math.abs(unrealizedPnlETH) >= 1 ? Math.abs(unrealizedPnlETH).toFixed(4) : Math.abs(unrealizedPnlETH).toFixed(6)} BNB
+                                </div>
+                                <div className={`text-[10px] font-medium ${roe >= 0 ? "text-emerald-400/70" : "text-rose-400/70"}`}>
+                                  {roe >= 0 ? "+" : ""}{roe.toFixed(2)}%
+                                </div>
                               </td>
 
-                              {/* 未实现盈亏 - 后端实时推送 (BNB) */}
-                              <td className={`py-3 px-1 text-right font-bold ${unrealizedPnlETH >= 0 ? "text-green-400" : "text-red-400"}`}>
-                                {unrealizedPnlETH >= 0 ? "+" : ""}BNB {Math.abs(unrealizedPnlETH) >= 1 ? Math.abs(unrealizedPnlETH).toFixed(4) : Math.abs(unrealizedPnlETH).toFixed(6)}
-                              </td>
-
-                              {/* ROE% - 后端实时推送 */}
-                              <td className={`py-3 px-1 text-right font-bold ${roe >= 0 ? "text-green-400" : "text-red-400"}`}>
-                                {roe >= 0 ? "+" : ""}{roe.toFixed(2)}%
-                              </td>
-
-                              {/* TP/SL */}
-                              <td className="py-3 px-1 text-center">
-                                <button className="text-xs text-okx-text-tertiary hover:text-okx-brand-primary">
-                                  {t("setTpSl")}
-                                </button>
-                              </td>
-
-                              {/* Action */}
-                              <td className="py-3 px-2 text-right">
-                                <div className="flex items-center justify-end gap-2">
+                              {/* ── 操作按钮 ── */}
+                              <td className="py-2.5 px-3 text-right">
+                                <div className="flex items-center justify-end gap-1.5">
                                   <button
                                     onClick={async () => {
                                       showToast(t("closingPosition") || "Closing position...", "info");
@@ -978,19 +1091,21 @@ export function PerpetualTradingTerminal({
                                       if (result.success) {
                                         showToast("Position closed!", "success");
                                         refreshPositions();
-                                        // ✅ 刷新历史委托 + 成交记录 + 账单
                                         loadHistoryData();
                                         fetchBills();
                                       } else {
                                         showToast(result.error || "Failed to close", "error");
                                       }
                                     }}
-                                    className="px-2 py-1 bg-red-900/50 text-red-400 text-xs font-medium rounded hover:bg-red-800"
+                                    className="px-2.5 py-1 text-[10px] font-medium text-rose-400 border border-rose-500/25 hover:bg-rose-500/10 rounded transition-colors"
                                   >
                                     {t("closePosition")}
                                   </button>
-                                  <button className="px-2 py-1 bg-okx-bg-tertiary text-okx-text-secondary text-xs rounded hover:bg-okx-bg-hover">
-                                    {t("adjustMargin")}
+                                  <button
+                                    className="px-2 py-1 text-[10px] text-okx-text-tertiary border border-white/[0.06] hover:text-okx-text-secondary hover:border-white/[0.12] rounded transition-colors"
+                                    title={t("setTpSl")}
+                                  >
+                                    TP/SL
                                   </button>
                                 </div>
                               </td>
@@ -1000,8 +1115,11 @@ export function PerpetualTradingTerminal({
                       </tbody>
                     </table>
                     </div>
-                    {/* Mobile Position Cards */}
-                    <div className="md:hidden space-y-2">
+
+                    {/* ═══════════════════════════════════════════════════════════════
+                        Mobile Position Cards
+                        ═══════════════════════════════════════════════════════════════ */}
+                    <div className="md:hidden space-y-2 p-2">
                       {currentPositionsForDisplay.map((pos) => {
                         const sizeETH = parseFloat(String(pos.size)) / 1e18;
                         const entryPrice = parseFloat(String(pos.entryPrice)) / 1e18;
@@ -1011,7 +1129,6 @@ export function PerpetualTradingTerminal({
                         const marginETH = parseFloat(String(pos.collateral)) / 1e18;
                         const leverage = parseFloat(String(pos.leverage));
                         const mmr = parseFloat(String(pos.mmr || "200")) / 100;
-                        // GMX PnL
                         const pnlDelta = entryPrice > 0 ? sizeETH * Math.abs(markPrice - entryPrice) / entryPrice : 0;
                         const hasProfit = pos.isLong ? (markPrice > entryPrice) : (entryPrice > markPrice);
                         const unrealizedPnlETH = hasProfit ? pnlDelta : -pnlDelta;
@@ -1019,17 +1136,77 @@ export function PerpetualTradingTerminal({
                         const maintenanceMargin = sizeETH * (mmr / 100);
                         const marginRatio = equity > 0 ? (maintenanceMargin / equity) * 100 : 999;
                         const roe = marginETH > 0 ? (unrealizedPnlETH / marginETH) * 100 : 0;
+                        const riskLevel = marginRatio > 50 ? 3 : marginRatio > 30 ? 2 : marginRatio > 15 ? 1 : 0;
+                        const riskBarColor = riskLevel >= 3 ? "bg-red-500" : riskLevel >= 2 ? "bg-orange-500" : riskLevel >= 1 ? "bg-yellow-500" : "bg-green-500";
+
                         return (
-                          <div key={pos.pairId} className="bg-okx-bg-secondary rounded-lg p-3 border border-okx-border-primary">
-                            {/* Header: Direction + Symbol + Leverage + Close */}
-                            <div className="flex items-center justify-between mb-2">
-                              <div className="flex items-center gap-2">
-                                <span className={`px-2 py-0.5 rounded text-xs font-bold ${pos.isLong ? "bg-green-900/50 text-green-400" : "bg-red-900/50 text-red-400"}`}>
-                                  {pos.isLong ? t("long") : t("short")}
+                          <div key={pos.pairId} className="bg-okx-bg-secondary/50 rounded-lg p-3 border border-okx-border-primary/50">
+                            {/* Header: Direction + Symbol + Leverage */}
+                            <div className="flex items-center justify-between mb-2.5">
+                              <div className="flex items-center gap-1.5">
+                                <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                                  pos.isLong
+                                    ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20"
+                                    : "bg-rose-500/15 text-rose-400 border border-rose-500/20"
+                                }`}>
+                                  {pos.isLong ? "▲" : "▼"} {pos.isLong ? t("long") : t("short")}
                                 </span>
                                 <span className="text-okx-text-primary text-xs font-medium">{instId}</span>
-                                <span className="text-yellow-400 text-xs">{leverage}x</span>
+                                <span className="text-[10px] text-amber-400/80 font-medium">{leverage}x</span>
                               </div>
+                              {/* PnL badge */}
+                              <div className={`text-xs font-semibold ${unrealizedPnlETH >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                                {unrealizedPnlETH >= 0 ? "+" : ""}{Math.abs(unrealizedPnlETH).toFixed(6)} BNB
+                                <span className="text-[10px] ml-1 opacity-70">({roe >= 0 ? "+" : ""}{roe.toFixed(2)}%)</span>
+                              </div>
+                            </div>
+                            {/* Data Grid */}
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
+                              <div className="flex justify-between">
+                                <span className="text-okx-text-tertiary">{t("size")}</span>
+                                <span className="text-okx-text-primary font-medium">{sizeETH >= 1 ? sizeETH.toFixed(4) : sizeETH.toFixed(6)}</span>
+                              </div>
+                              <div className="flex justify-between items-center">
+                                <span className="text-okx-text-tertiary">{t("margin")}</span>
+                                <div className="flex items-center gap-1">
+                                  <span className="text-okx-text-primary">{marginETH >= 1 ? marginETH.toFixed(4) : marginETH.toFixed(5)}</span>
+                                  <button
+                                    onClick={() => setMarginModal({
+                                      pairId: pos.pairId, action: "add", collateral: marginETH, size: sizeETH,
+                                      entryPrice, isLong: pos.isLong, leverage, mmr,
+                                    })}
+                                    className="p-0.5 rounded hover:bg-white/[0.06] transition-colors"
+                                  >
+                                    <svg className="w-2.5 h-2.5 text-okx-text-tertiary hover:text-okx-brand-primary" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                      <path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z" />
+                                    </svg>
+                                  </button>
+                                </div>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-okx-text-tertiary">{t("entryAvg")}</span>
+                                <span className="text-okx-text-primary font-mono">{formatSmallPrice(entryPrice)}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-okx-text-tertiary">{t("markPrice")}</span>
+                                <span className="text-okx-text-secondary font-mono">{formatSmallPrice(markPrice)}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-okx-text-tertiary">{t("liqPrice")}</span>
+                                <span className={`font-mono ${pos.isLong ? "text-rose-400/80" : "text-emerald-400/80"}`}>{formatSmallPrice(liqPrice)}</span>
+                              </div>
+                              <div className="flex justify-between items-center">
+                                <span className="text-okx-text-tertiary">{t("marginRatio")}</span>
+                                <div className="flex items-center gap-1">
+                                  <div className="w-8 h-1 bg-okx-bg-tertiary rounded-full overflow-hidden">
+                                    <div className={`h-full rounded-full ${riskBarColor}`} style={{ width: `${Math.min(marginRatio, 100)}%` }} />
+                                  </div>
+                                  <span className="text-[10px] text-okx-text-secondary">{marginRatio.toFixed(1)}%</span>
+                                </div>
+                              </div>
+                            </div>
+                            {/* Action buttons */}
+                            <div className="flex items-center gap-2 mt-2.5 pt-2 border-t border-okx-border-primary/30">
                               <button
                                 onClick={async () => {
                                   showToast(t("closingPosition") || "Closing position...", "info");
@@ -1037,29 +1214,11 @@ export function PerpetualTradingTerminal({
                                   if (result.success) { showToast("Position closed!", "success"); refreshPositions(); loadHistoryData(); fetchBills(); }
                                   else { showToast(result.error || "Failed to close", "error"); }
                                 }}
-                                className="px-2.5 py-1 bg-red-900/50 text-red-400 text-xs font-medium rounded"
+                                className="flex-1 py-1.5 text-[10px] font-medium text-rose-400 border border-rose-500/30 rounded hover:bg-rose-500/10 transition-colors"
                               >{t("closePosition")}</button>
-                            </div>
-                            {/* Data Grid */}
-                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs mb-2">
-                              <div className="flex justify-between"><span className="text-okx-text-tertiary">{t("size")}</span><span className="text-okx-text-primary">BNB {sizeETH >= 1 ? sizeETH.toFixed(4) : sizeETH.toFixed(6)}</span></div>
-                              <div className="flex justify-between"><span className="text-okx-text-tertiary">{t("margin")}</span><span className="text-okx-text-primary">BNB {marginETH >= 1 ? marginETH.toFixed(4) : marginETH.toFixed(6)}</span></div>
-                              <div className="flex justify-between"><span className="text-okx-text-tertiary">{t("entryAvg")}</span><span className="text-okx-text-primary font-mono">{formatSmallPrice(entryPrice)}</span></div>
-                              <div className="flex justify-between"><span className="text-okx-text-tertiary">{t("markPrice")}</span><span className="text-okx-text-secondary font-mono">{formatSmallPrice(markPrice)}</span></div>
-                              <div className="flex justify-between"><span className="text-okx-text-tertiary">{t("liqPrice")}</span><span className={`font-mono ${pos.isLong ? "text-red-400" : "text-green-400"}`}>{formatSmallPrice(liqPrice)}</span></div>
-                              <div className="flex justify-between"><span className="text-okx-text-tertiary">{t("marginRatio")}</span><span className={`font-medium ${marginRatio > 80 ? "text-green-400" : marginRatio > 50 ? "text-yellow-400" : "text-red-400"}`}>{marginRatio.toFixed(2)}%</span></div>
-                            </div>
-                            {/* PnL Footer — prominent display */}
-                            <div className="flex items-center justify-between pt-2 border-t border-okx-border-primary">
-                              <span className="text-okx-text-tertiary text-xs">{t("unrealizedPnl")}</span>
-                              <div className="text-right">
-                                <div className={`text-sm font-bold ${unrealizedPnlETH >= 0 ? "text-green-400" : "text-red-400"}`}>
-                                  {unrealizedPnlETH >= 0 ? "+" : ""}BNB {Math.abs(unrealizedPnlETH) >= 1 ? Math.abs(unrealizedPnlETH).toFixed(4) : Math.abs(unrealizedPnlETH).toFixed(6)}
-                                </div>
-                                <div className={`text-xs font-medium ${roe >= 0 ? "text-green-400/80" : "text-red-400/80"}`}>
-                                  {roe >= 0 ? "+" : ""}{roe.toFixed(2)}%
-                                </div>
-                              </div>
+                              <button className="py-1.5 px-2.5 text-[10px] text-okx-text-tertiary border border-okx-border-primary/50 rounded hover:bg-white/[0.04] transition-colors">
+                                TP/SL
+                              </button>
                             </div>
                           </div>
                         );
@@ -1979,6 +2138,153 @@ export function PerpetualTradingTerminal({
           {/* Modal */}
           <div className="relative z-10 w-full max-w-md mx-4">
             <AccountBalance onClose={() => setShowAccountPanel(false)} />
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════
+          Margin Adjustment Modal (Professional — OKX/Bybit style)
+          ═══════════════════════════════════════════════════════════════ */}
+      {marginModal && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center" onClick={() => { setMarginModal(null); setMarginAmount(""); }}>
+          <div className="bg-[#1b1d28] rounded-xl w-[380px] max-w-[92vw] shadow-2xl border border-white/[0.06]" onClick={e => e.stopPropagation()}>
+            {/* Header with tabs */}
+            <div className="flex border-b border-white/[0.06]">
+              <button
+                onClick={() => setMarginModal({ ...marginModal, action: "add" })}
+                className={`flex-1 py-3 text-sm font-medium transition-colors relative ${
+                  marginModal.action === "add"
+                    ? "text-emerald-400"
+                    : "text-okx-text-tertiary hover:text-okx-text-secondary"
+                }`}
+              >
+                {t("addMargin") || "Add Margin"}
+                {marginModal.action === "add" && <div className="absolute bottom-0 left-1/4 right-1/4 h-0.5 bg-emerald-400 rounded-full" />}
+              </button>
+              <button
+                onClick={() => setMarginModal({ ...marginModal, action: "remove" })}
+                className={`flex-1 py-3 text-sm font-medium transition-colors relative ${
+                  marginModal.action === "remove"
+                    ? "text-rose-400"
+                    : "text-okx-text-tertiary hover:text-okx-text-secondary"
+                }`}
+              >
+                {t("removeMargin") || "Remove Margin"}
+                {marginModal.action === "remove" && <div className="absolute bottom-0 left-1/4 right-1/4 h-0.5 bg-rose-400 rounded-full" />}
+              </button>
+            </div>
+
+            <div className="p-5">
+              {/* Current position info */}
+              <div className="grid grid-cols-3 gap-2 mb-4 text-xs">
+                <div className="bg-white/[0.03] rounded-lg p-2.5">
+                  <div className="text-okx-text-tertiary mb-0.5">{t("margin") || "Margin"}</div>
+                  <div className="text-okx-text-primary font-medium">{marginModal.collateral.toFixed(5)}</div>
+                </div>
+                <div className="bg-white/[0.03] rounded-lg p-2.5">
+                  <div className="text-okx-text-tertiary mb-0.5">{t("leverage") || "Leverage"}</div>
+                  <div className="text-okx-text-primary font-medium">{marginModal.leverage.toFixed(1)}x</div>
+                </div>
+                <div className="bg-white/[0.03] rounded-lg p-2.5">
+                  <div className="text-okx-text-tertiary mb-0.5">{t("available") || "Available"}</div>
+                  <div className="text-emerald-400 font-medium">{formattedAccountBalance}</div>
+                </div>
+              </div>
+
+              {/* Amount input */}
+              <div className="mb-3">
+                <div className="flex items-center bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2.5 focus-within:border-okx-brand/50 transition-colors">
+                  <input
+                    type="number"
+                    value={marginAmount}
+                    onChange={e => setMarginAmount(e.target.value)}
+                    placeholder={t("enterAmount") || "Enter amount"}
+                    step="0.001"
+                    min="0"
+                    className="flex-1 bg-transparent text-sm text-okx-text-primary outline-none placeholder-okx-text-tertiary"
+                  />
+                  <span className="text-xs text-okx-text-tertiary ml-2">BNB</span>
+                  {marginModal.action === "remove" && marginInfo && (
+                    <button
+                      onClick={() => setMarginAmount(marginInfo.maxRemovable.toFixed(6))}
+                      className="ml-2 text-[10px] text-okx-brand-primary hover:text-okx-brand-primary/80 font-medium"
+                    >
+                      MAX
+                    </button>
+                  )}
+                </div>
+                {marginModal.action === "remove" && marginInfo && (
+                  <div className="text-[10px] text-okx-text-tertiary mt-1.5 px-1">
+                    {t("maxRemovable") || "Max removable"}: {marginInfo.maxRemovable.toFixed(6)} BNB
+                  </div>
+                )}
+              </div>
+
+              {/* Quick amount buttons */}
+              <div className="flex gap-1.5 mb-4">
+                {[0.005, 0.01, 0.05, 0.1].map(v => (
+                  <button
+                    key={v}
+                    onClick={() => setMarginAmount(v.toString())}
+                    className={`flex-1 py-1.5 text-[10px] rounded border transition-colors ${
+                      marginAmount === v.toString()
+                        ? "border-okx-brand/50 text-okx-brand-primary bg-okx-brand/5"
+                        : "border-white/[0.06] text-okx-text-tertiary hover:border-white/[0.12] hover:text-okx-text-secondary"
+                    }`}
+                  >
+                    {v} BNB
+                  </button>
+                ))}
+              </div>
+
+              {/* Preview: new leverage + liq price */}
+              {marginPreview && (
+                <div className="bg-white/[0.02] rounded-lg p-3 mb-4 space-y-2 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-okx-text-tertiary">{t("leverage") || "Leverage"}</span>
+                    <span className="text-okx-text-secondary">
+                      {marginModal.leverage.toFixed(1)}x
+                      <span className="text-okx-text-tertiary mx-1">→</span>
+                      <span className={`font-medium ${marginPreview.newLeverage > marginModal.leverage ? "text-rose-400" : "text-emerald-400"}`}>
+                        {marginPreview.newLeverage.toFixed(1)}x
+                      </span>
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-okx-text-tertiary">{t("margin") || "Margin"}</span>
+                    <span className="text-okx-text-secondary">
+                      {marginModal.collateral.toFixed(5)}
+                      <span className="text-okx-text-tertiary mx-1">→</span>
+                      <span className="text-okx-text-primary font-medium">{marginPreview.newCollateral.toFixed(5)}</span>
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-okx-text-tertiary">{t("liqPrice") || "Liq. Price"}</span>
+                    <span className="text-okx-text-secondary font-mono">
+                      {formatSmallPrice(marginPreview.newLiqPrice)}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Action button */}
+              <button
+                onClick={handleAdjustMargin}
+                disabled={isAdjustingMargin || !marginAmount || parseFloat(marginAmount) <= 0}
+                className={`w-full py-2.5 text-sm font-medium rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                  marginModal.action === "add"
+                    ? "bg-emerald-500 hover:bg-emerald-400 text-white"
+                    : "bg-rose-500 hover:bg-rose-400 text-white"
+                }`}
+              >
+                {isAdjustingMargin
+                  ? (t("processing") || "Processing...")
+                  : marginModal.action === "add"
+                    ? (t("addMargin") || "Add Margin")
+                    : (t("removeMargin") || "Remove Margin")
+                }
+              </button>
+            </div>
           </div>
         </div>
       )}
