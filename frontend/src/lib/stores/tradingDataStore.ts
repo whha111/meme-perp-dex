@@ -775,7 +775,7 @@ export const useOrderForm = () =>
 // Leverage settings (从 perpetualStore 迁移)
 const DEFAULT_LEVERAGE_SETTINGS: LeverageSettings = {
   instId: "",
-  leverage: 10,
+  leverage: 2, // 内盘阶段默认 2x (最大 2.5x)
   marginMode: "cross" as MarginMode,
 };
 

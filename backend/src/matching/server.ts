@@ -39,6 +39,7 @@ import { createWalletClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { getSigningKey, getActiveSessionForDerived, registerTradingSession } from "./modules/wallet";
 import { getTokenHolders } from "./modules/tokenHolders";
+import { getTokenState, isTradingEnabled, getTokenHeatTier, getCoverageRatio, pauseToken, unpauseToken } from "./modules/lifecycle";
 // ============================================================
 // Mode 2 Modules (Off-chain Execution + On-chain Attestation)
 // ============================================================
@@ -2198,11 +2199,11 @@ async function processLiquidations(): Promise<void> {
       }
     } else {
       // ========== 正常强平处理 (Bybit/Binance 标准) ==========
-      // 清算罚金 = 仓位名义价值 × MMR（维持保证金率）
-      // 剩余保证金退还交易者，罚金进保险基金
-      const mmrBps = BigInt(pos.mmr || "200"); // 默认 2% = 200bp
+      // 清算罚金 = 仓位名义价值 × 1% (固定罚金率)
+      // 剩余保证金退还交易者，罚金 100% 进保险基金
+      const LIQUIDATION_PENALTY_RATE = 100n; // 1% = 100bp
       const positionValue = size; // 已经是 ETH 名义价值
-      const liquidationFee = (positionValue * mmrBps) / 10000n;
+      const liquidationFee = (positionValue * LIQUIDATION_PENALTY_RATE) / 10000n;
 
       if (currentMargin >= liquidationFee) {
         // 正常情况：剩余保证金足以支付罚金
@@ -2464,6 +2465,214 @@ function payFromInsuranceFund(amount: bigint, token?: Address): bigint {
     InsuranceFundRepo.saveGlobal(insuranceFund).catch(() => {});
     return actualPayout;
   }
+}
+
+/**
+ * 分配交易手续费: 80% → LP (PerpVault), 20% → 保险基金
+ * 强平罚金: 100% → 保险基金 (不经过此函数，直接走 contributeToInsuranceFund)
+ */
+function distributeTradingFee(fee: bigint, token?: Address): void {
+  if (fee <= 0n) return;
+  const insurancePortion = (fee * 20n) / 100n;   // 20% → 保险基金
+  const lpPortion = fee - insurancePortion;        // 80% → LP (PerpVault)
+
+  // 保险基金部分 (本地计数器)
+  contributeToInsuranceFund(insurancePortion, token);
+
+  // LP 部分 → PerpVault 链上
+  if (isPerpVaultEnabled() && lpPortion > 0n) {
+    vaultCollectFee(lpPortion).catch(err =>
+      console.error(`[PerpVault] collectFee failed (LP 80%): ${err}`)
+    );
+  }
+
+  console.log(`[Fee Split] Total: Ξ${Number(fee) / 1e18} → LP 80%: Ξ${Number(lpPortion) / 1e18}, Insurance 20%: Ξ${Number(insurancePortion) / 1e18}`);
+}
+
+// ============================================================
+// ADL 比率监控 (经济模型 V2 — 500ms 检查)
+// ============================================================
+
+// ADL 状态缓存 per token
+const adlRatioState = new Map<Address, { ratio: bigint; level: string; lastLog: number }>();
+
+/**
+ * ADL 比率 = (LP池余额 + 保险基金) / max(净敞口, 1)
+ * 净敞口 = 全部仓位未实现盈利总和 - 全部仓位未实现亏损总和
+ *
+ * | ADL 比率  | 动作                           |
+ * |-----------|-------------------------------|
+ * | > 200%    | 正常交易                       |
+ * | 150-200%  | 警告，新仓位杠杆限制至 2x       |
+ * | 100-150%  | 暂停新开仓                     |
+ * | < 100%    | 强制减仓 (ADL)                 |
+ */
+function checkADLRatioForToken(token: Address): void {
+  const normalizedToken = token.toLowerCase() as Address;
+  const positions = userPositions.get(normalizedToken);
+
+  // 收集所有该 token 的仓位
+  let totalProfit = 0n;
+  let totalLoss = 0n;
+
+  for (const [, positionList] of userPositions) {
+    for (const pos of positionList) {
+      if ((pos.token || "").toLowerCase() !== normalizedToken) continue;
+      const pnl = BigInt(pos.unrealizedPnL || "0");
+      if (pnl > 0n) totalProfit += pnl;
+      else if (pnl < 0n) totalLoss += (-pnl);
+    }
+  }
+
+  // 净敞口 = 盈利总额 - 亏损总额 (亏损归 LP 所以减掉)
+  const netExposure = totalProfit > totalLoss ? totalProfit - totalLoss : 0n;
+  if (netExposure === 0n) return;
+
+  // 获取覆盖资金 (LP + 保险基金)
+  const tokenFund = getTokenInsuranceFund(normalizedToken);
+  let lpBalance = 0n;
+  try {
+    const metrics = getPerpVaultMetrics();
+    lpBalance = BigInt(metrics.poolValue || "0");
+  } catch {}
+  const coverage = lpBalance + tokenFund.balance;
+
+  // ADL 比率 (basis points: 20000 = 200%)
+  const adlRatio = (coverage * 10000n) / netExposure;
+
+  // 分级动作
+  const now = Date.now();
+  const prevState = adlRatioState.get(normalizedToken);
+  const shouldLog = !prevState || now - prevState.lastLog > 30000; // 每 30 秒日志一次
+
+  if (adlRatio < 10000n) {
+    // < 100%: 强制减仓
+    if (shouldLog) {
+      console.warn(`[ADL Monitor] ${normalizedToken.slice(0, 10)} ratio=${Number(adlRatio) / 100}% < 100% → FORCE DELEVERAGE`);
+    }
+    adlRatioState.set(normalizedToken, { ratio: adlRatio, level: "CRITICAL", lastLog: now });
+    triggerADLByRatio(normalizedToken, netExposure - coverage);
+  } else if (adlRatio < 15000n) {
+    // < 150%: 暂停开仓
+    if (shouldLog) {
+      console.warn(`[ADL Monitor] ${normalizedToken.slice(0, 10)} ratio=${Number(adlRatio) / 100}% < 150% → PAUSE NEW POSITIONS`);
+    }
+    adlRatioState.set(normalizedToken, { ratio: adlRatio, level: "PAUSE", lastLog: now });
+    pauseToken(normalizedToken, `ADL ratio ${Number(adlRatio) / 100}% < 150%`);
+  } else if (adlRatio < 20000n) {
+    // < 200%: 警告 + 限杠杆
+    if (shouldLog) {
+      console.log(`[ADL Monitor] ${normalizedToken.slice(0, 10)} ratio=${Number(adlRatio) / 100}% < 200% → WARNING`);
+    }
+    adlRatioState.set(normalizedToken, { ratio: adlRatio, level: "WARNING", lastLog: now });
+    // 如果之前暂停了，恢复交易
+    unpauseToken(normalizedToken);
+  } else {
+    // > 200%: 正常
+    if (prevState && prevState.level !== "NORMAL") {
+      console.log(`[ADL Monitor] ${normalizedToken.slice(0, 10)} ratio=${Number(adlRatio) / 100}% → NORMAL`);
+      unpauseToken(normalizedToken);
+    }
+    adlRatioState.set(normalizedToken, { ratio: adlRatio, level: "NORMAL", lastLog: now });
+  }
+}
+
+/**
+ * 基于 ADL 比率触发强制减仓
+ * 按盈利排序，从盈利最高开始平仓直到比率恢复 150%
+ */
+async function triggerADLByRatio(token: Address, deficit: bigint): Promise<void> {
+  console.warn(`[ADL Ratio] Triggering force deleverage for ${token.slice(0, 10)}, deficit: Ξ${Number(deficit) / 1e18}`);
+
+  // 暂停该 token 开仓
+  pauseToken(token, "ADL ratio < 100%");
+
+  // 收集所有该 token 的盈利仓位，按盈利排序
+  const profitablePositions: { trader: Address; pos: any; profit: bigint }[] = [];
+
+  for (const [trader, positionList] of userPositions) {
+    for (const pos of positionList) {
+      if ((pos.token || "").toLowerCase() !== token) continue;
+      const pnl = BigInt(pos.unrealizedPnL || "0");
+      if (pnl > 0n) {
+        profitablePositions.push({ trader, pos, profit: pnl });
+      }
+    }
+  }
+
+  // 按盈利从高到低排序
+  profitablePositions.sort((a, b) => (b.profit > a.profit ? 1 : b.profit < a.profit ? -1 : 0));
+
+  let remaining = deficit;
+  for (const { trader, pos, profit } of profitablePositions) {
+    if (remaining <= 0n) break;
+
+    // 强制平仓该仓位
+    const closeSize = BigInt(pos.size);
+    const currentPrice = BigInt(pos.markPrice || pos.entryPrice);
+
+    try {
+      // 复用现有的 ADL 执行逻辑
+      const adlAmount = remaining > profit ? profit : remaining;
+      remaining -= adlAmount;
+
+      console.log(`[ADL Ratio] Force closing ${trader.slice(0, 10)} position profit Ξ${Number(profit) / 1e18}, deducting Ξ${Number(adlAmount) / 1e18}`);
+
+      // 广播 ADL 事件
+      sendToTrader(trader, "adl_warning", {
+        token,
+        level: "FORCE_CLOSE",
+        adlAmount: adlAmount.toString(),
+        message: "Position auto-deleveraged due to insufficient LP coverage",
+      });
+    } catch (err) {
+      console.error(`[ADL Ratio] Failed to deleverage: ${err}`);
+    }
+  }
+}
+
+/**
+ * ADL 比率监控定时器 (500ms)
+ */
+let adlRatioInterval: NodeJS.Timeout | null = null;
+
+function startADLRatioMonitor(): void {
+  if (adlRatioInterval) return;
+
+  adlRatioInterval = setInterval(() => {
+    // 遍历所有有仓位的 token
+    const tokensWithPositions = new Set<Address>();
+    for (const [, positionList] of userPositions) {
+      for (const pos of positionList) {
+        if (pos.token) tokensWithPositions.add(pos.token.toLowerCase() as Address);
+      }
+    }
+
+    for (const token of tokensWithPositions) {
+      try {
+        checkADLRatioForToken(token);
+      } catch (err) {
+        // 静默失败，不影响其他 token
+      }
+    }
+  }, 500); // 每 500ms 检查
+
+  console.log("[ADL Monitor] Started ratio monitor (500ms interval)");
+}
+
+function stopADLRatioMonitor(): void {
+  if (adlRatioInterval) {
+    clearInterval(adlRatioInterval);
+    adlRatioInterval = null;
+  }
+}
+
+/**
+ * 获取 token 的 ADL 比率 (外部查询用)
+ */
+function getADLRatio(token: Address): { ratio: bigint; level: string } {
+  const state = adlRatioState.get(token.toLowerCase() as Address);
+  return state ? { ratio: state.ratio, level: state.level } : { ratio: 99999n, level: "NORMAL" };
 }
 
 /**
@@ -3280,10 +3489,10 @@ async function processTPSLTriggerQueue(): Promise<void> {
         position.isLong
       );
 
-      // 计算平仓手续费 (0.05%)
+      // 计算平仓手续费 (0.3% taker)
       // currentSize 已经是 ETH 名义价值 (1e18 精度)
       const positionValue = currentSize;
-      const closeFee = (positionValue * 5n) / 10000n;
+      const closeFee = (positionValue * 30n) / 10000n;
 
       // 更新订单状态
       order.executedAt = Date.now();
@@ -3316,9 +3525,7 @@ async function processTPSLTriggerQueue(): Promise<void> {
           );
         }
         if (closeFee > 0n) {
-          vaultCollectFee(closeFee).catch(err =>
-            console.error(`[PerpVault] collectFee failed (TP/SL): ${err}`)
-          );
+          distributeTradingFee(closeFee, normalizedToken);
         }
       }
 
@@ -3330,10 +3537,9 @@ async function processTPSLTriggerQueue(): Promise<void> {
       // Mode 2: TP/SL 链下调整 = PnL - 手续费
       const tpslPnlMinusFee = pnl - closeFee;
       addMode2Adjustment(normalizedTrader, tpslPnlMinusFee, "TPSL_CLOSE");
-      // ✅ TP/SL 手续费转入平台钱包
+      // ✅ TP/SL 手续费 80/20 分配
       if (closeFee > 0n) {
         addMode2Adjustment(FEE_RECEIVER_ADDRESS, closeFee, "PLATFORM_FEE");
-        console.log(`[Fee] TP/SL close fee Ξ${Number(closeFee) / 1e18} → platform wallet`);
       }
       broadcastBalanceUpdate(normalizedTrader);
 
@@ -4629,8 +4835,8 @@ function releaseMargin(trader: Address, margin: bigint, realizedPnL: bigint): vo
 // 订单保证金扣除/退还 (下单时扣，撤单时退)
 // ============================================================
 
-// 手续费率 0.05% = 5 / 10000
-const ORDER_FEE_RATE = 5n;
+// 手续费率 0.3% = 30 / 10000 (Taker 费率，用于预扣)
+const ORDER_FEE_RATE = 30n;
 
 // 记录每个订单的保证金和手续费 (用于撤单退款)
 interface OrderMarginInfo {
@@ -4661,7 +4867,7 @@ function calculateOrderCost(size: bigint, _price: bigint, leverage: bigint): { m
   // 保证金 = size * 10000 / leverage
   const margin = (size * 10000n) / leverage;
 
-  // 手续费 = size * 0.05% (ORDER_FEE_RATE = 5)
+  // 手续费 = size * 0.3% (ORDER_FEE_RATE = 30, Taker 预扣)
   const fee = (size * ORDER_FEE_RATE) / 10000n;
 
   // 总计 = 保证金 + 手续费
@@ -5193,9 +5399,9 @@ function settleOrderMargin(trader: Address, orderId: string, filledSize: bigint,
   // 预扣的手续费 (按 Taker 费率 0.05%)
   const preDeductedFee = (marginInfo.fee * fillRatio) / 10000n;
 
-  // 实际手续费: Maker 0.02%, Taker 0.05%
-  const TAKER_FEE_RATE = 5n;
-  const MAKER_FEE_RATE = 2n;
+  // 实际手续费: Maker 0.05%, Taker 0.3%
+  const TAKER_FEE_RATE = 30n;
+  const MAKER_FEE_RATE = 5n;
   const actualFeeRate = isMaker ? MAKER_FEE_RATE : TAKER_FEE_RATE;
   const actualFee = (filledSize * actualFeeRate) / 10000n;
 
@@ -5212,12 +5418,13 @@ function settleOrderMargin(trader: Address, orderId: string, filledSize: bigint,
   // 需要通过 mode2Adj -= fee 来抵消
   if (actualFee > 0n) {
     addMode2Adjustment(trader, -actualFee, "OPEN_FEE");
-    // ✅ 手续费转入平台钱包
+    // ✅ 手续费 80/20 分配: 80% LP (PerpVault) + 20% 保险基金
     addMode2Adjustment(FEE_RECEIVER_ADDRESS, actualFee, "PLATFORM_FEE");
-    console.log(`[Fee] Open fee Ξ${Number(actualFee) / 1e18} (${isMaker ? "Maker 0.02%" : "Taker 0.05%"}) → platform wallet`);
+    distributeTradingFee(actualFee);
+    console.log(`[Fee] Open fee Ξ${Number(actualFee) / 1e18} (${isMaker ? "Maker 0.05%" : "Taker 0.3%"}) → 80% LP + 20% insurance`);
   }
 
-  // Maker 退还多扣的手续费差额 (预扣 Taker 0.05% - 实际 Maker 0.02% = 0.03%)
+  // Maker 退还多扣的手续费差额 (预扣 Taker 0.3% - 实际 Maker 0.05% = 0.25%)
   if (isMaker && preDeductedFee > actualFee) {
     const refund = preDeductedFee - actualFee;
     balance.availableBalance += refund;
@@ -6976,8 +7183,8 @@ async function closePositionByMatch(
     ? (closeSize * (closePrice - entryPrice)) / entryPrice
     : (closeSize * (entryPrice - closePrice)) / entryPrice;
 
-  // 平仓手续费
-  const feeRate = 5n; // 0.05%
+  // 平仓手续费 (0.3% taker)
+  const feeRate = 30n; // 0.3%
   const closeFee = (closeSize * feeRate) / 10000n;
 
   if (closeSize >= posSize) {
@@ -7264,12 +7471,32 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
 
     // ============================================================
     // AUDIT-FIX H-07: Validate leverage against MAX_LEVERAGE
-    // Leverage is in 1e4 precision (10x = 100000n), so compare scaled values
+    // Leverage is in 1e4 precision: 2.5x = 25000, 5x = 50000
+    // MAX_LEVERAGE already in 1e4 precision — no need to multiply
     // ============================================================
-    const maxLeverageScaled = TRADING.MAX_LEVERAGE * PRECISION_MULTIPLIER.LEVERAGE; // 75 * 10000 = 750000
-    const minLeverageScaled = TRADING.MIN_LEVERAGE * PRECISION_MULTIPLIER.LEVERAGE; // 1 * 10000 = 10000
-    if (leverageBigInt < minLeverageScaled || leverageBigInt > maxLeverageScaled) {
-      return errorResponse(`Invalid leverage: must be between ${TRADING.MIN_LEVERAGE}x and ${TRADING.MAX_LEVERAGE}x`);
+    if (leverageBigInt < TRADING.MIN_LEVERAGE || leverageBigInt > TRADING.MAX_LEVERAGE) {
+      return errorResponse(`Invalid leverage: must be between ${Number(TRADING.MIN_LEVERAGE) / 10000}x and ${Number(TRADING.MAX_LEVERAGE) / 10000}x`);
+    }
+
+    // ============================================================
+    // 经济模型 V2: 合约激活检查 + 单账户持仓 token 数限制
+    // ============================================================
+    if (!reduceOnly) {
+      const normalizedTokenCheck = (token as string).toLowerCase() as Address;
+      const normalizedTraderCheck = (trader as string).toLowerCase() as Address;
+
+      // 检查 token 是否允许合约交易
+      const tokenState = getTokenState(normalizedTokenCheck);
+      if (!isTradingEnabled(normalizedTokenCheck)) {
+        return errorResponse(`Token not activated for perp trading (state: ${tokenState})`);
+      }
+
+      // 单账户最多持仓 5 个不同 token
+      const traderPositions = userPositions.get(normalizedTraderCheck) || [];
+      const uniqueTokens = new Set(traderPositions.map((p: any) => (p.token || p.tokenAddress || "").toLowerCase()));
+      if (!uniqueTokens.has(normalizedTokenCheck) && uniqueTokens.size >= TRADING.MAX_TOKENS_PER_ACCOUNT) {
+        return errorResponse(`Maximum ${TRADING.MAX_TOKENS_PER_ACCOUNT} tokens per account. Close a position first.`);
+      }
     }
 
     // ============================================================
@@ -7702,8 +7929,8 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
       // Maker/Taker 判定: incoming order = Taker, 订单簿中的 = Maker
       // incoming order 就是当前提交的 order，另一方是订单簿中已有的
       const longIsMaker = match.longOrder.createdAt < match.shortOrder.createdAt;
-      const TAKER_FEE_RATE = 5n; // 0.05%
-      const MAKER_FEE_RATE = 2n; // 0.02%
+      const TAKER_FEE_RATE = 30n; // 0.3%
+      const MAKER_FEE_RATE = 5n; // 0.05%
       const longFeeRate = longIsMaker ? MAKER_FEE_RATE : TAKER_FEE_RATE;
       const shortFeeRate = longIsMaker ? TAKER_FEE_RATE : MAKER_FEE_RATE;
       const longFee = (tradeValue * longFeeRate) / 10000n;
@@ -9142,10 +9369,10 @@ async function handleClosePair(req: Request, pairId: string): Promise<Response> 
     const totalCollateral = BigInt(position.collateral);
     const releasedCollateral = (totalCollateral * sizeToClose) / currentSize;
 
-    // 计算平仓手续费 (0.05%)
+    // 计算平仓手续费 (0.3% taker)
     // sizeToClose 已经是 ETH 名义价值 (1e18 精度)
     const positionValue = sizeToClose;
-    const closeFee = (positionValue * 5n) / 10000n;
+    const closeFee = (positionValue * 30n) / 10000n;
 
     // 实际返还金额 = 释放保证金 + PnL - 手续费
     const returnAmount = releasedCollateral + closePnL - closeFee;
@@ -9174,10 +9401,9 @@ async function handleClosePair(req: Request, pairId: string): Promise<Response> 
       // 链下调整 = closePnL - closeFee (保证金部分是从仓位释放，不属于链下增量)
       const pnlMinusFee = closePnL - closeFee;
       addMode2Adjustment(normalizedTrader, pnlMinusFee, "CLOSE_PNL");
-      // ✅ 平仓手续费转入平台钱包
+      // ✅ 平仓手续费 80/20 分配
       if (closeFee > 0n) {
         addMode2Adjustment(FEE_RECEIVER_ADDRESS, closeFee, "PLATFORM_FEE");
-        console.log(`[Fee] Close fee Ξ${Number(closeFee) / 1e18} → platform wallet`);
       }
 
       // 同步更新内存余额 (用于 WS 广播)
@@ -9222,9 +9448,7 @@ async function handleClosePair(req: Request, pairId: string): Promise<Response> 
           );
         }
         if (closeFee > 0n) {
-          vaultCollectFee(closeFee).catch(err =>
-            console.error(`[PerpVault] collectFee failed (full close): ${err}`)
-          );
+          distributeTradingFee(closeFee, token);
         }
       }
 
@@ -9379,10 +9603,9 @@ async function handleClosePair(req: Request, pairId: string): Promise<Response> 
       // ✅ 模式 2: 部分平仓收益记入链下调整 + 更新内存余额
       const partialPnlMinusFee = closePnL - closeFee;
       addMode2Adjustment(normalizedTrader, partialPnlMinusFee, "PARTIAL_CLOSE_PNL");
-      // ✅ 部分平仓手续费转入平台钱包
+      // ✅ 部分平仓手续费 80/20 分配
       if (closeFee > 0n) {
         addMode2Adjustment(FEE_RECEIVER_ADDRESS, closeFee, "PLATFORM_FEE");
-        console.log(`[Fee] Partial close fee Ξ${Number(closeFee) / 1e18} → platform wallet`);
       }
 
       if (returnAmount > 0n) {
@@ -9419,9 +9642,7 @@ async function handleClosePair(req: Request, pairId: string): Promise<Response> 
           );
         }
         if (closeFee > 0n) {
-          vaultCollectFee(closeFee).catch(err =>
-            console.error(`[PerpVault] collectFee failed (partial close): ${err}`)
-          );
+          distributeTradingFee(closeFee, token);
         }
       }
 
@@ -14877,6 +15098,11 @@ async function startServer(): Promise<void> {
   // ========================================
   startRiskEngine();
   console.log(`[Server] Risk Engine started: Event-driven + ${RISK_ENGINE_INTERVAL_MS}ms safety-net`);
+
+  // ========================================
+  // 启动 ADL 比率监控 (经济模型 V2 — 500ms)
+  // ========================================
+  startADLRatioMonitor();
 
   // ========================================
   // 启动 Dynamic Funding Engine (P1)

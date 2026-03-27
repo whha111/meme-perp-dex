@@ -446,6 +446,20 @@ class WebSocketManager {
           }
           break;
 
+        // ── ADL Warning (经济模型 V2) ──────────────────────
+        case "adl_warning": {
+          const adlData = msg.data as { token?: string; level?: string; adlAmount?: string; message?: string } | undefined;
+          const level = adlData?.level || msg.level as string || "WARNING";
+          const adlMsg = adlData?.message || msg.message as string || "ADL warning";
+          store.addRiskAlert({
+            type: level === "FORCE_CLOSE" ? "liquidation_warning" : "margin_warning",
+            severity: level === "FORCE_CLOSE" ? "danger" : "warning",
+            message: adlMsg,
+            timestamp: Date.now(),
+          });
+          break;
+        }
+
         case "liquidation_map":
           // Handled separately by specific components
           break;

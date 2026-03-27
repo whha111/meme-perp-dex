@@ -41,7 +41,8 @@ import { MATCHING_ENGINE_URL } from "@/config/api";
 
 // AUDIT-FIX H-06: Leverage options must match engine MAX_LEVERAGE (10x).
 // Previously allowed up to 100x which caused confusing UX failures when engine rejected >10x.
-const LEVERAGE_OPTIONS = [1, 2, 3, 5, 10];
+// 内盘阶段最大 2.5x 杠杆
+const LEVERAGE_OPTIONS = [1, 1.5, 2, 2.5];
 
 interface PerpetualOrderPanelV2Props {
   symbol: string;
@@ -728,9 +729,10 @@ export function PerpetualOrderPanelV2({
             <input
               type="range"
               min="1"
-              max="10"
+              max="2.5"
+              step="0.5"
               value={leverage}
-              onChange={(e) => setLeverage(parseInt(e.target.value))}
+              onChange={(e) => setLeverage(parseFloat(e.target.value))}
               className="w-full h-1 bg-okx-bg-hover rounded-lg appearance-none cursor-pointer accent-[#A3E635]"
             />
             <div className="flex justify-between text-xs text-okx-text-tertiary">
@@ -971,11 +973,11 @@ export function PerpetualOrderPanelV2({
                 {requiredMarginDisplay}
               </span>
             </div>
-            {/* 手续费 (ETH 本位) */}
+            {/* 手续费 (ETH 本位) — Taker 0.3%, Maker 0.05% */}
             <div className="flex justify-between">
-              <span className="text-okx-text-tertiary">手续费 (0.1%)</span>
+              <span className="text-okx-text-tertiary">手续费 (Taker 0.3%)</span>
               <span className="text-okx-text-primary">
-                BNB {(positionValueETH * 0.001).toFixed(6)}
+                BNB {(positionValueETH * 0.003).toFixed(6)}
               </span>
             </div>
             {/* 合计所需 */}

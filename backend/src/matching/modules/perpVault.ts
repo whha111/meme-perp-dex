@@ -559,34 +559,74 @@ export async function getTokenOI(token: Address): Promise<{ longOI: bigint; shor
 }
 
 /**
- * Check if a new position would exceed OI limits
+ * 动态 OI 上限计算
+ *
+ * tokenOICap = (LP池余额 + 保险基金) × coverageRatio%
+ * 单仓上限 = tokenOICap × 10%
+ *
+ * coverageRatio 由 lifecycle.ts 的热度等级决定 (20%/35%/50%)
+ */
+export async function getDynamicOICap(
+  insuranceFundBalance: bigint,
+  coverageRatioPct: number
+): Promise<bigint> {
+  const lpBalance = await getPoolValue();
+  const total = lpBalance + insuranceFundBalance;
+  return (total * BigInt(coverageRatioPct)) / 100n;
+}
+
+/**
+ * 获取单仓最大保证金
+ */
+export async function getMaxPositionMargin(
+  insuranceFundBalance: bigint,
+  coverageRatioPct: number
+): Promise<bigint> {
+  const oiCap = await getDynamicOICap(insuranceFundBalance, coverageRatioPct);
+  return oiCap / 10n; // 单仓 = tokenOI × 10%
+}
+
+/**
+ * Check if a new position would exceed dynamic OI limits
+ *
+ * 优先使用动态 OI 上限，fallback 到链上 maxOI
  */
 export async function canIncreaseOI(
   token: Address,
   isLong: boolean,
-  sizeETH: bigint
+  sizeETH: bigint,
+  insuranceFundBalance: bigint = 0n,
+  coverageRatioPct: number = 0
 ): Promise<boolean> {
-  if (!isPerpVaultEnabled()) return true; // No PerpVault → no OI limit
+  if (!isPerpVaultEnabled()) return true;
 
   try {
-    const [totalOI, maxOI] = await Promise.all([
-      publicClient.readContract({
-        address: perpVaultAddress!,
-        abi: PERP_VAULT_ABI,
-        functionName: "getTotalOI",
-      }) as Promise<bigint>,
-      publicClient.readContract({
-        address: perpVaultAddress!,
-        abi: PERP_VAULT_ABI,
-        functionName: "getMaxOI",
-      }) as Promise<bigint>,
-    ]);
+    const totalOI = (await publicClient.readContract({
+      address: perpVaultAddress!,
+      abi: PERP_VAULT_ABI,
+      functionName: "getTotalOI",
+    })) as bigint;
 
-    if (maxOI === 0n) return true; // Empty pool
+    // 动态 OI 上限 (新经济模型)
+    if (coverageRatioPct > 0) {
+      const dynamicCap = await getDynamicOICap(insuranceFundBalance, coverageRatioPct);
+      if (dynamicCap > 0n) {
+        return totalOI + sizeETH <= dynamicCap;
+      }
+    }
+
+    // Fallback: 链上静态 maxOI
+    const maxOI = (await publicClient.readContract({
+      address: perpVaultAddress!,
+      abi: PERP_VAULT_ABI,
+      functionName: "getMaxOI",
+    })) as bigint;
+
+    if (maxOI === 0n) return true;
     return totalOI + sizeETH <= maxOI;
   } catch (error) {
     logger.error("PerpVault", "Failed to check OI limits:", error);
-    return true; // Allow on error
+    return true;
   }
 }
 

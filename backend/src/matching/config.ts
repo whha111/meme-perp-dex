@@ -113,14 +113,17 @@ export const PRECISION_MULTIPLIER = {
 // ============================================================
 
 export const TRADING = {
-  MIN_LEVERAGE: 1n,
-  MAX_LEVERAGE: 75n,   // 最大 75x — meme 币高波动需要适当杠杆 (链上合约支持 100x)
-  MIN_MARGIN: 1n * 10n ** 15n, // 最小保证金 0.001 ETH (约 $2.5)
-  MIN_POSITION_SIZE: 1n * 10n ** 15n, // 最小仓位 0.001 ETH (约 $2.5)
-  MAX_POSITION_SIZE: 500n * PRECISION_MULTIPLIER.ETH, // 最大仓位 500 BNB — 配合 75x 杠杆 (≈ 6.67 BNB 保证金 @ 75x)
-  TAKER_FEE_RATE: 5n,  // 0.05% = 5bp
-  MAKER_FEE_RATE: 2n,  // 0.02% = 2bp
-  BASE_MMR: 200n,      // 基础维持保证金率 2% = 200bp
+  MIN_LEVERAGE: 10000n,    // 1x in 1e4 precision
+  MAX_LEVERAGE: 25000n,    // 内盘最大 2.5x in 1e4 precision
+  MAX_LEVERAGE_GRADUATED: 50000n, // 毕业后最大 5x in 1e4 precision
+  MIN_MARGIN: 1n * 10n ** 16n, // 最小保证金 0.01 BNB
+  MIN_POSITION_SIZE: 1n * 10n ** 15n, // 最小仓位 0.001 BNB
+  MAX_POSITION_SIZE: 500n * PRECISION_MULTIPLIER.ETH, // fallback 上限 (动态 OI 优先)
+  TAKER_FEE_RATE: 30n,  // 0.3% = 30bp
+  MAKER_FEE_RATE: 5n,   // 0.05% = 5bp
+  BASE_MMR: 3000n,      // 维持保证金率 30% = 3000bp
+  INITIAL_MARGIN_RATE: 4000n, // 初始保证金率 40% = 4000bp
+  MAX_TOKENS_PER_ACCOUNT: 5, // 单账户最多持仓 5 个 token
 } as const;
 
 // ============================================================
