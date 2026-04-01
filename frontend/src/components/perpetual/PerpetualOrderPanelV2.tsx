@@ -44,6 +44,25 @@ import { MATCHING_ENGINE_URL } from "@/config/api";
 // 内盘阶段最大 2.5x 杠杆
 const LEVERAGE_OPTIONS = [1, 1.5, 2, 2.5];
 
+// Format small prices with subscript notation for very small values
+const formatSmallPrice = (price: number): string => {
+  if (price <= 0) return "0.00";
+  if (price >= 1000) return price.toLocaleString("en-US", { maximumFractionDigits: 1 });
+  if (price >= 0.01) return price.toFixed(4);
+  if (price >= 0.0001) return price.toFixed(6);
+  if (price >= 0.000001) return price.toFixed(8);
+  const priceStr = price.toFixed(18);
+  const match = priceStr.match(/^0\.(0*)([1-9]\d*)/);
+  if (match) {
+    const zeroCount = match[1].length;
+    const significantDigits = match[2].slice(0, 5);
+    const subscripts = ["₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉"];
+    const subscriptNum = zeroCount.toString().split("").map((d) => subscripts[parseInt(d)]).join("");
+    return `0.0${subscriptNum}${significantDigits}`;
+  }
+  return price.toFixed(10);
+};
+
 interface PerpetualOrderPanelV2Props {
   symbol: string;
   displaySymbol?: string;
@@ -108,6 +127,17 @@ export function PerpetualOrderPanelV2({
   const [marginModal, setMarginModal] = useState<{ pairId: string; action: "add" | "remove"; collateral: number } | null>(null);
   const [marginAmount, setMarginAmount] = useState("");
   const [isAdjustingMargin, setIsAdjustingMargin] = useState(false);
+
+  // TP/SL Modal 状态
+  const [tpslModal, setTpslModal] = useState<{
+    pairId: string; isLong: boolean; entryPrice: number; liqPrice: number;
+  } | null>(null);
+  const [tpInput, setTpInput] = useState("");
+  const [slInput, setSlInput] = useState("");
+  const [isSettingTpsl, setIsSettingTpsl] = useState(false);
+  const [currentTpsl, setCurrentTpsl] = useState<{
+    takeProfitPrice: string | null; stopLossPrice: string | null;
+  } | null>(null);
 
   // V2 Hook - 使用 Settlement 合约 + 撮合引擎
   // 传入交易钱包信息用于签名订单
@@ -463,6 +493,70 @@ export function PerpetualOrderPanelV2({
       setIsAdjustingMargin(false);
     }
   }, [marginModal, marginAmount, tradingWalletAddress, exportKey, showToast, refreshWalletBalance]);
+
+  // ── TP/SL: 打开弹窗时获取当前值 ──
+  useEffect(() => {
+    if (!tpslModal) { setCurrentTpsl(null); setTpInput(""); setSlInput(""); return; }
+    fetch(`${MATCHING_ENGINE_URL}/api/position/${tpslModal.pairId}/tpsl`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.hasTPSL) {
+          setCurrentTpsl({ takeProfitPrice: data.takeProfitPrice, stopLossPrice: data.stopLossPrice });
+          if (data.takeProfitPrice) setTpInput((Number(data.takeProfitPrice) / 1e18).toString());
+          if (data.stopLossPrice) setSlInput((Number(data.stopLossPrice) / 1e18).toString());
+        }
+      })
+      .catch(() => {});
+  }, [tpslModal?.pairId]);
+
+  // ── TP/SL: 提交 ──
+  const handleSetTpsl = useCallback(async () => {
+    if (!tpslModal || !tradingWalletAddress) return;
+    if (!tpInput && !slInput) { showToast(t("tpslRequired") || "Please set at least TP or SL", "error"); return; }
+    setIsSettingTpsl(true);
+    try {
+      const { parseEther: toWei } = await import("viem");
+      const tpWei = tpInput ? toWei(tpInput).toString() : null;
+      const slWei = slInput ? toWei(slInput).toString() : null;
+      const sigMsg = `Set TPSL ${tpslModal.pairId} for ${tradingWalletAddress.toLowerCase()}`;
+      const keyData = exportKey?.();
+      if (!keyData?.privateKey) { showToast(t("tradingWalletNotActive") || "Trading wallet not active", "error"); return; }
+      const signerAccount = privateKeyToAccount(keyData.privateKey);
+      const { createWalletClient, http } = await import("viem");
+      const { bscTestnet } = await import("viem/chains");
+      const tempClient = createWalletClient({ account: signerAccount, chain: bscTestnet, transport: http() });
+      const signature = await tempClient.signMessage({ account: signerAccount, message: sigMsg });
+      const res = await fetch(`${MATCHING_ENGINE_URL}/api/position/${tpslModal.pairId}/tpsl`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trader: tradingWalletAddress, signature, takeProfitPrice: tpWei, stopLossPrice: slWei }),
+      });
+      const data = await res.json();
+      if (data.success) { showToast(t("tpslSet") || "TP/SL set successfully", "success"); setTpslModal(null); }
+      else { showToast(data.error || (t("operationFailed") || "Operation failed"), "error"); }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : (t("operationFailed") || "Operation failed"), "error");
+    } finally { setIsSettingTpsl(false); }
+  }, [tpslModal, tpInput, slInput, tradingWalletAddress, exportKey, showToast, t]);
+
+  // ── TP/SL: 取消 ──
+  const handleCancelTpsl = useCallback(async (cancelType: "tp" | "sl" | "both") => {
+    if (!tpslModal) return;
+    try {
+      const res = await fetch(`${MATCHING_ENGINE_URL}/api/position/${tpslModal.pairId}/tpsl`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cancelType }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast(t("tpslCancelled") || "TP/SL cancelled", "success");
+        if (cancelType === "both") setTpslModal(null);
+        else if (cancelType === "tp") { setTpInput(""); setCurrentTpsl(prev => prev ? { ...prev, takeProfitPrice: null } : null); }
+        else { setSlInput(""); setCurrentTpsl(prev => prev ? { ...prev, stopLossPrice: null } : null); }
+      }
+    } catch {}
+  }, [tpslModal, showToast, t]);
 
   return (
     <div className={`bg-okx-bg-secondary rounded-lg ${className}`}>
@@ -1076,57 +1170,129 @@ export function PerpetualOrderPanelV2({
               const pnlDelta = entryPrice > 0 ? sizeETH * Math.abs(realtimePrice - entryPrice) / entryPrice : 0;
               const hasProfit = pos.isLong ? (realtimePrice > entryPrice) : (entryPrice > realtimePrice);
               const pnlETH = hasProfit ? pnlDelta : -pnlDelta;
+              // Extended position metrics
+              const liqPrice = Number(pos.liquidationPrice || "0") / 1e18;
+              const mmr = parseFloat(String(pos.mmr || "200")) / 100;
+              const equity = collateralETH + pnlETH;
+              const maintenanceMargin = sizeETH * (mmr / 100);
+              const marginRatio = equity > 0 ? (maintenanceMargin / equity) * 100 : 999;
+              const roe = collateralETH > 0 ? (pnlETH / collateralETH) * 100 : 0;
+              const fundingFeeETH = Number(pos.fundingFee || "0") / 1e18;
+              const tpPrice = pos.takeProfitPrice ? Number(pos.takeProfitPrice) / 1e18 : null;
+              const slPrice = pos.stopLossPrice ? Number(pos.stopLossPrice) / 1e18 : null;
+              const riskLevel = marginRatio > 50 ? 3 : marginRatio > 30 ? 2 : marginRatio > 15 ? 1 : 0;
+              const riskBarColor = riskLevel >= 3 ? "bg-red-500" : riskLevel >= 2 ? "bg-orange-500" : riskLevel >= 1 ? "bg-yellow-500" : "bg-green-500";
+              const riskBarWidth = Math.min(marginRatio, 100);
 
               return (
                 <div
                   key={pos.pairId}
-                  className="bg-okx-bg-hover rounded p-2 text-xs"
+                  className="bg-okx-bg-hover rounded-lg p-2.5 text-[11px]"
                 >
-                  <div className="flex justify-between items-center mb-1">
-                    <span className={pos.isLong ? "text-okx-up font-medium" : "text-okx-down font-medium"}>
-                      {pos.isLong ? "LONG" : "SHORT"} {leverage}x
-                    </span>
-                    <span className="text-okx-text-secondary">
-                      BNB {sizeETH.toFixed(4)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center mb-1">
-                    <span className="text-okx-text-tertiary">
-                      Entry: {formatTokenPrice(entryPrice)} BNB
-                    </span>
-                    <span className="text-okx-text-secondary">
-                      Value: BNB {sizeETH >= 1 ? sizeETH.toFixed(4) : sizeETH.toFixed(6)}
-                    </span>
-                  </div>
+                  {/* Header: Direction + PnL */}
                   <div className="flex justify-between items-center mb-2">
-                    <span className="text-okx-text-tertiary">
-                      Margin: BNB {collateralETH.toFixed(4)}
+                    <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                      pos.isLong
+                        ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20"
+                        : "bg-rose-500/15 text-rose-400 border border-rose-500/20"
+                    }`}>
+                      {pos.isLong ? "▲" : "▼"} {pos.isLong ? t("long") : t("short")} {leverage}x
                     </span>
-                    <span className={pnlETH >= 0 ? "text-okx-up" : "text-okx-down"}>
-                      PnL: {pnlETH >= 0 ? "+" : ""}BNB {pnlETH.toFixed(4)}
-                    </span>
+                    <div className="text-right">
+                      <span className={`font-semibold ${pnlETH >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                        {pnlETH >= 0 ? "+" : ""}{Math.abs(pnlETH) >= 1 ? pnlETH.toFixed(4) : pnlETH.toFixed(6)} BNB
+                      </span>
+                      <span className={`ml-1 text-[10px] ${roe >= 0 ? "text-emerald-400/70" : "text-rose-400/70"}`}>
+                        ({roe >= 0 ? "+" : ""}{roe.toFixed(2)}%)
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
+
+                  {/* 2-Column Data Grid */}
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 mb-2">
+                    <div className="flex justify-between">
+                      <span className="text-okx-text-tertiary">{t("size")}</span>
+                      <span className="text-okx-text-primary font-mono">{sizeETH >= 1 ? sizeETH.toFixed(4) : sizeETH.toFixed(6)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-okx-text-tertiary">{t("markPrice")}</span>
+                      <span className="text-okx-text-secondary font-mono">{formatSmallPrice(realtimePrice)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-okx-text-tertiary">{t("entryAvg") || "Entry"}</span>
+                      <span className="text-okx-text-primary font-mono">{formatSmallPrice(entryPrice)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-okx-text-tertiary">{t("liqPrice")}</span>
+                      <span className={`font-mono ${pos.isLong ? "text-rose-400/80" : "text-emerald-400/80"}`}>
+                        {liqPrice > 0 ? formatSmallPrice(liqPrice) : "—"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-okx-text-tertiary">{t("margin")}</span>
+                      <span className="text-okx-text-primary font-mono">{collateralETH >= 1 ? collateralETH.toFixed(4) : collateralETH.toFixed(5)}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-okx-text-tertiary">{t("marginRatio") || "Margin %"}</span>
+                      <div className="flex items-center gap-1">
+                        <div className="w-8 h-1 bg-okx-bg-tertiary rounded-full overflow-hidden">
+                          <div className={`h-full rounded-full ${riskBarColor}`} style={{ width: `${riskBarWidth}%` }} />
+                        </div>
+                        <span className={`font-mono text-[10px] ${riskLevel >= 2 ? "text-orange-400" : "text-okx-text-tertiary"}`}>
+                          {marginRatio.toFixed(1)}%
+                        </span>
+                      </div>
+                    </div>
+                    {fundingFeeETH !== 0 && (
+                      <>
+                        <div className="flex justify-between col-span-2">
+                          <span className="text-okx-text-tertiary">{t("fundingFee") || "Funding"}</span>
+                          <span className={`font-mono ${fundingFeeETH >= 0 ? "text-emerald-400/70" : "text-rose-400/70"}`}>
+                            {fundingFeeETH >= 0 ? "+" : ""}{fundingFeeETH.toFixed(6)} BNB
+                          </span>
+                        </div>
+                      </>
+                    )}
+                    {(tpPrice || slPrice) && (
+                      <div className="flex justify-between col-span-2">
+                        <span className="text-okx-text-tertiary">TP/SL</span>
+                        <span className="font-mono">
+                          {tpPrice ? <span className="text-emerald-400/70">{formatSmallPrice(tpPrice)}</span> : <span className="text-okx-text-tertiary">—</span>}
+                          <span className="text-okx-text-tertiary mx-0.5">/</span>
+                          {slPrice ? <span className="text-rose-400/70">{formatSmallPrice(slPrice)}</span> : <span className="text-okx-text-tertiary">—</span>}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex gap-1.5">
                     <button
                       onClick={() => setMarginModal({ pairId: pos.pairId, action: "add", collateral: collateralETH })}
                       className="py-1.5 px-2 text-xs bg-okx-bg-tertiary hover:bg-okx-up/20 text-okx-up border border-okx-up/30 rounded transition-colors"
-                      title="追加保证金"
+                      title={t("adjustMargin") || "Add Margin"}
                     >
                       <Plus size={12} />
                     </button>
                     <button
                       onClick={() => setMarginModal({ pairId: pos.pairId, action: "remove", collateral: collateralETH })}
                       className="py-1.5 px-2 text-xs bg-okx-bg-tertiary hover:bg-okx-down/20 text-okx-down border border-okx-down/30 rounded transition-colors"
-                      title="减少保证金"
+                      title={t("adjustMargin") || "Remove Margin"}
                     >
                       <Minus size={12} />
+                    </button>
+                    <button
+                      onClick={() => setTpslModal({ pairId: pos.pairId, isLong: pos.isLong, entryPrice, liqPrice })}
+                      className="py-1.5 px-2 text-[10px] text-okx-text-tertiary border border-white/[0.06] hover:text-amber-400 hover:border-amber-500/30 rounded transition-colors"
+                    >
+                      TP/SL
                     </button>
                     <button
                       onClick={() => handleClosePosition(pos.pairId)}
                       disabled={isSubmittingOrder || isPending}
                       className="flex-1 py-1.5 text-xs bg-okx-down/80 hover:bg-okx-down text-white rounded disabled:opacity-50 transition-colors"
                     >
-                      {t("marketClose") || "Market Close"}
+                      {t("marketClose") || "Close"}
                     </button>
                   </div>
                 </div>
@@ -1200,6 +1366,80 @@ export function PerpetualOrderPanelV2({
               >
                 {isAdjustingMargin ? "处理中..." : marginModal.action === "add" ? "追加" : "减少"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TP/SL Modal */}
+      {tpslModal && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center" onClick={() => setTpslModal(null)}>
+          <div className="bg-[#1b1d28] rounded-xl w-[380px] max-w-[92vw] shadow-2xl border border-white/[0.06]" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/[0.06]">
+              <h3 className="text-sm font-medium text-okx-text-primary">{t("takeProfitStopLoss") || "TP/SL"}</h3>
+              <button onClick={() => setTpslModal(null)} className="text-okx-text-tertiary hover:text-okx-text-primary text-lg">×</button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs text-emerald-400 font-medium">{t("takeProfit") || "Take Profit"}</span>
+                  {currentTpsl?.takeProfitPrice && (
+                    <button onClick={() => handleCancelTpsl("tp")} className="text-[10px] text-okx-text-tertiary hover:text-rose-400 transition-colors">
+                      {t("cancel") || "Cancel"}
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2.5 focus-within:border-emerald-500/40 transition-colors">
+                  <input type="number" value={tpInput} onChange={e => setTpInput(e.target.value)}
+                    placeholder={tpslModal.isLong ? `> ${formatSmallPrice(tpslModal.entryPrice)}` : `< ${formatSmallPrice(tpslModal.entryPrice)}`}
+                    step="any" className="flex-1 bg-transparent text-sm text-okx-text-primary outline-none placeholder-okx-text-tertiary/50" />
+                  <span className="text-[10px] text-okx-text-tertiary ml-2">BNB</span>
+                </div>
+                <div className="text-[10px] text-okx-text-tertiary mt-1 px-1">
+                  {tpslModal.isLong ? t("tpHintLong") || "Trigger when price rises above" : t("tpHintShort") || "Trigger when price falls below"}
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-xs text-rose-400 font-medium">{t("stopLoss") || "Stop Loss"}</span>
+                  {currentTpsl?.stopLossPrice && (
+                    <button onClick={() => handleCancelTpsl("sl")} className="text-[10px] text-okx-text-tertiary hover:text-rose-400 transition-colors">
+                      {t("cancel") || "Cancel"}
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center bg-white/[0.04] border border-white/[0.08] rounded-lg px-3 py-2.5 focus-within:border-rose-500/40 transition-colors">
+                  <input type="number" value={slInput} onChange={e => setSlInput(e.target.value)}
+                    placeholder={tpslModal.isLong ? `< ${formatSmallPrice(tpslModal.entryPrice)}` : `> ${formatSmallPrice(tpslModal.entryPrice)}`}
+                    step="any" className="flex-1 bg-transparent text-sm text-okx-text-primary outline-none placeholder-okx-text-tertiary/50" />
+                  <span className="text-[10px] text-okx-text-tertiary ml-2">BNB</span>
+                </div>
+                <div className="text-[10px] text-okx-text-tertiary mt-1 px-1">
+                  {tpslModal.isLong ? t("slHintLong") || "Trigger when price falls below" : t("slHintShort") || "Trigger when price rises above"}
+                </div>
+              </div>
+              <div className="bg-white/[0.02] rounded-lg p-3 text-[10px] text-okx-text-tertiary space-y-1">
+                <div className="flex justify-between">
+                  <span>{t("entryAvg") || "Entry Price"}</span>
+                  <span className="text-okx-text-secondary font-mono">{formatSmallPrice(tpslModal.entryPrice)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>{t("liqPrice") || "Liq. Price"}</span>
+                  <span className="text-rose-400/70 font-mono">{formatSmallPrice(tpslModal.liqPrice)}</span>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                {(currentTpsl?.takeProfitPrice || currentTpsl?.stopLossPrice) && (
+                  <button onClick={() => handleCancelTpsl("both")}
+                    className="flex-1 py-2.5 text-sm font-medium rounded-lg border border-white/[0.08] text-okx-text-secondary hover:bg-white/[0.04] transition-colors">
+                    {t("cancelAll") || "Cancel All"}
+                  </button>
+                )}
+                <button onClick={handleSetTpsl} disabled={isSettingTpsl || (!tpInput && !slInput)}
+                  className="flex-1 py-2.5 text-sm font-medium rounded-lg bg-amber-500 hover:bg-amber-400 text-black transition-all disabled:opacity-40 disabled:cursor-not-allowed">
+                  {isSettingTpsl ? (t("processing") || "Processing...") : (t("confirm") || "Confirm")}
+                </button>
+              </div>
             </div>
           </div>
         </div>

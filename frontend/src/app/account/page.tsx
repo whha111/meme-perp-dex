@@ -8,10 +8,11 @@ import { usePerpetualV2 } from "@/hooks/perpetual/usePerpetualV2";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { useTranslations } from "next-intl";
 import { useRouter } from "next/navigation";
-import { useTradingDataStore } from "@/lib/stores/tradingDataStore";
+import { useTradingDataStore, type PerpTradeRecord } from "@/lib/stores/tradingDataStore";
 import { useETHPrice } from "@/hooks/common/useETHPrice";
 import { AssetTrendChart } from "@/components/common/AssetTrendChart";
 import { BnbIcon } from "@/components/common/BnbIcon";
+import { getOrderHistory, getTradeHistory, type HistoricalOrder } from "@/utils/orderSigning";
 
 // ERC20 balanceOf ABI fragment
 const erc20BalanceOfAbi = [
@@ -25,7 +26,8 @@ const erc20BalanceOfAbi = [
 ] as const;
 
 // OKX-style tab definitions
-type AccountTab = "overview" | "trading" | "spot";
+type AccountTab = "overview" | "trading" | "spot" | "history";
+type HistorySubTab = "trades" | "orders";
 
 export default function AccountPage() {
   const { address, isConnected } = useAccount();
@@ -41,6 +43,12 @@ export default function AccountPage() {
   const { positions, hasPosition, balance } = usePerpetualV2();
   const tokens = useTradingDataStore((state) => state.allTokens);
   const { price: bnbPriceUsd } = useETHPrice();
+
+  // History tab state
+  const [historySubTab, setHistorySubTab] = useState<HistorySubTab>("trades");
+  const [tradeHistory, setTradeHistory] = useState<PerpTradeRecord[]>([]);
+  const [orderHistory, setOrderHistory] = useState<HistoricalOrder[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
 
   const availableBalance = balance?.available || 0n;
   const lockedMargin = balance?.locked || 0n;
@@ -113,6 +121,37 @@ export default function AccountPage() {
     setMounted(true);
   }, []);
 
+  // Fetch history data when History tab is active
+  // Derive trading wallet address from positions (the trader field), fall back to connected wallet
+  const tradingWalletAddr = useMemo(() => {
+    const posWithTrader = positions.find(p => p.trader);
+    return posWithTrader?.trader || null;
+  }, [positions]);
+
+  // Token address → symbol lookup (must be before conditional return)
+  const tokenSymbolMap = useMemo(() => {
+    const map = new Map<string, string>();
+    tokens.forEach(tk => map.set(tk.address.toLowerCase(), tk.symbol || tk.address.slice(0, 8)));
+    return map;
+  }, [tokens]);
+
+  useEffect(() => {
+    if (activeTab !== "history") return;
+    const trader = tradingWalletAddr || address;
+    if (!trader) return;
+    setIsLoadingHistory(true);
+    Promise.all([
+      getTradeHistory(trader as `0x${string}`),
+      getOrderHistory(trader as `0x${string}`),
+    ])
+      .then(([trades, orders]) => {
+        setTradeHistory(trades);
+        setOrderHistory(orders);
+      })
+      .catch(() => {})
+      .finally(() => setIsLoadingHistory(false));
+  }, [activeTab, tradingWalletAddr, address]);
+
   if (!mounted) {
     return (
       <main className="min-h-screen bg-okx-bg-primary text-okx-text-primary">
@@ -138,11 +177,11 @@ export default function AccountPage() {
   const tradingPct = totalCombinedUsd > 0 ? (vaultUsd / totalCombinedUsd * 100) : 0;
   const spotPct = totalCombinedUsd > 0 ? (spotUsd / totalCombinedUsd * 100) : 0;
 
-  // OKX tabs
   const tabs: { key: AccountTab; label: string }[] = [
     { key: "overview", label: t("tabOverview") },
     { key: "trading", label: t("tabTrading") },
     { key: "spot", label: t("tabSpot") },
+    { key: "history", label: t("tabHistory") || "History" },
   ];
 
   return (
@@ -534,6 +573,147 @@ export default function AccountPage() {
                 </div>
               </div>
             </>
+          )}
+
+          {/* ══════════════════════════════════════
+               TAB: 历史记录 (History)
+              ══════════════════════════════════════ */}
+          {activeTab === "history" && (
+            <div className="px-6 py-6">
+              {/* Sub-tab bar */}
+              <div className="flex items-center gap-4 mb-6 border-b border-okx-border-primary">
+                {(["trades", "orders"] as const).map((sub) => (
+                  <button
+                    key={sub}
+                    onClick={() => setHistorySubTab(sub)}
+                    className={`relative pb-2.5 text-sm font-medium transition-colors ${
+                      historySubTab === sub
+                        ? "text-okx-text-primary"
+                        : "text-okx-text-tertiary hover:text-okx-text-secondary"
+                    }`}
+                  >
+                    {sub === "trades" ? (t("tradeHistory") || "Trade History") : (t("orderHistory") || "Order History")}
+                    {historySubTab === sub && (
+                      <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-okx-text-primary" />
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              {isLoadingHistory ? (
+                <div className="flex items-center justify-center py-20">
+                  <div className="w-6 h-6 border-2 border-meme-lime border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : historySubTab === "trades" ? (
+                /* ── Trade History Table ── */
+                tradeHistory.length > 0 ? (
+                  <div>
+                    <div className="grid grid-cols-7 gap-2 py-2.5 border-b border-okx-border-primary">
+                      <span className="text-xs text-okx-text-tertiary">{t("time") || "Time"}</span>
+                      <span className="text-xs text-okx-text-tertiary">{t("pair") || "Pair"}</span>
+                      <span className="text-xs text-okx-text-tertiary">{t("direction") || "Direction"}</span>
+                      <span className="text-xs text-okx-text-tertiary text-right">{t("fillPrice") || "Fill Price"}</span>
+                      <span className="text-xs text-okx-text-tertiary text-right">{t("positionSize") || "Size"}</span>
+                      <span className="text-xs text-okx-text-tertiary text-right">{t("fee") || "Fee"}</span>
+                      <span className="text-xs text-okx-text-tertiary text-right">{t("realizedPnl") || "PnL"}</span>
+                    </div>
+                    {tradeHistory.map((trade) => {
+                      const sizeETH = Number(trade.size) / 1e18;
+                      const price = Number(trade.price) / 1e18;
+                      const fee = Number(trade.fee || "0") / 1e18;
+                      const pnl = Number(trade.realizedPnL || "0") / 1e18;
+                      const symbol = tokenSymbolMap.get(trade.token.toLowerCase()) || trade.token.slice(0, 8);
+                      const time = new Date(trade.timestamp).toLocaleString();
+                      return (
+                        <div key={trade.id} className="grid grid-cols-7 gap-2 py-3 border-b border-okx-border-primary/50 hover:bg-okx-bg-hover transition-colors text-sm">
+                          <span className="text-okx-text-tertiary text-xs self-center">{time}</span>
+                          <span className="font-mono text-okx-text-primary self-center">{symbol}/BNB</span>
+                          <span className="self-center">
+                            <span className={`inline-block text-xs font-semibold px-2 py-0.5 rounded ${
+                              trade.isLong ? "bg-emerald-500/15 text-emerald-400" : "bg-rose-500/15 text-rose-400"
+                            }`}>
+                              {trade.isLong ? t("long") || "Long" : t("short") || "Short"}
+                            </span>
+                          </span>
+                          <span className="font-mono text-okx-text-secondary text-right self-center">
+                            {price >= 0.01 ? price.toFixed(6) : price.toFixed(10)}
+                          </span>
+                          <span className="font-mono text-okx-text-secondary text-right self-center">
+                            {sizeETH >= 1 ? sizeETH.toFixed(4) : sizeETH.toFixed(6)} BNB
+                          </span>
+                          <span className="font-mono text-okx-text-tertiary text-right self-center">
+                            {fee > 0 ? fee.toFixed(6) : "—"}
+                          </span>
+                          <span className={`font-mono font-semibold text-right self-center ${
+                            pnl >= 0 ? "text-emerald-400" : "text-rose-400"
+                          }`}>
+                            {pnl !== 0 ? `${pnl >= 0 ? "+" : ""}${pnl.toFixed(6)}` : "—"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="py-20 text-center text-okx-text-tertiary text-sm">
+                    <svg className="w-12 h-12 mb-3 opacity-30 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    {t("noTransactions") || "No trade history"}
+                  </div>
+                )
+              ) : (
+                /* ── Order History Table ── */
+                orderHistory.length > 0 ? (
+                  <div>
+                    <div className="grid grid-cols-7 gap-2 py-2.5 border-b border-okx-border-primary">
+                      <span className="text-xs text-okx-text-tertiary">{t("time") || "Time"}</span>
+                      <span className="text-xs text-okx-text-tertiary">{t("pair") || "Pair"}</span>
+                      <span className="text-xs text-okx-text-tertiary">{t("direction") || "Direction"}</span>
+                      <span className="text-xs text-okx-text-tertiary">{t("orderType") || "Type"}</span>
+                      <span className="text-xs text-okx-text-tertiary text-right">{t("positionSize") || "Size"}</span>
+                      <span className="text-xs text-okx-text-tertiary text-right">{t("entryPrice") || "Price"}</span>
+                      <span className="text-xs text-okx-text-tertiary text-right">{t("status") || "Status"}</span>
+                    </div>
+                    {orderHistory.map((order) => {
+                      const sizeETH = Number(order.size) / 1e18;
+                      const price = Number(order.price) / 1e18;
+                      const symbol = tokenSymbolMap.get(order.token.toLowerCase()) || order.token.slice(0, 8);
+                      const statusColor = order.closeReason === "filled" ? "text-emerald-400" :
+                        order.closeReason === "cancelled" ? "text-okx-text-tertiary" :
+                        order.closeReason === "liquidated" ? "text-rose-400" : "text-amber-400";
+                      return (
+                        <div key={order.id} className="grid grid-cols-7 gap-2 py-3 border-b border-okx-border-primary/50 hover:bg-okx-bg-hover transition-colors text-sm">
+                          <span className="text-okx-text-tertiary text-xs self-center">
+                            {order.clientOrderId ? new Date(parseInt(order.clientOrderId)).toLocaleString() : "—"}
+                          </span>
+                          <span className="font-mono text-okx-text-primary self-center">{symbol}/BNB</span>
+                          <span className="self-center">
+                            <span className={`inline-block text-xs font-semibold px-2 py-0.5 rounded ${
+                              order.isLong ? "bg-emerald-500/15 text-emerald-400" : "bg-rose-500/15 text-rose-400"
+                            }`}>
+                              {order.isLong ? t("long") || "Long" : t("short") || "Short"}
+                            </span>
+                          </span>
+                          <span className="text-okx-text-secondary self-center text-xs">{order.orderType}</span>
+                          <span className="font-mono text-okx-text-secondary text-right self-center">
+                            {sizeETH >= 1 ? sizeETH.toFixed(4) : sizeETH.toFixed(6)} BNB
+                          </span>
+                          <span className="font-mono text-okx-text-secondary text-right self-center">
+                            {price >= 0.01 ? price.toFixed(6) : price.toFixed(10)}
+                          </span>
+                          <span className={`text-xs font-medium text-right self-center ${statusColor}`}>
+                            {order.closeReason || "—"}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="py-20 text-center text-okx-text-tertiary text-sm">
+                    <svg className="w-12 h-12 mb-3 opacity-30 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    {t("noTransactions") || "No order history"}
+                  </div>
+                )
+              )}
+            </div>
           )}
 
           {/* Bottom spacing */}

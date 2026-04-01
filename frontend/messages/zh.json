@@ -1075,6 +1075,7 @@
     "cancel": "取消",
     "available": "可用",
     "fundingRate": "资金费率",
+    "fundingFee": "资金费用",
     "nextFunding": "下次结算",
     "openInterest": "未平仓合约",
     "volume24h": "24h成交量",
@@ -1572,7 +1573,16 @@
     "tradeBtnLabel": "去交易",
     "recentRecords": "最近记录",
     "recentTrades": "最近交易",
-    "startTrading": "去交易赚取收益"
+    "startTrading": "去交易赚取收益",
+    "tabHistory": "历史记录",
+    "tradeHistory": "成交记录",
+    "orderHistory": "订单历史",
+    "fillPrice": "成交价格",
+    "realizedPnl": "已实现盈亏",
+    "fee": "手续费",
+    "time": "时间",
+    "orderType": "类型",
+    "status": "状态"
   },
   "leaderboard": {
     "title": "交易竞赛排行榜",

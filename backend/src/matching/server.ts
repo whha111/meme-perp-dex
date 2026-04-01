@@ -1060,8 +1060,14 @@ async function _doSavePositionToRedis(position: Position): Promise<string | null
 
 /**
  * 从 Redis 删除仓位
+ * closeData: 平仓信息 (价格/盈亏/手续费)，用于 PG 历史记录
  */
-async function deletePositionFromRedis(positionId: string, closeStatus: "CLOSED" | "LIQUIDATED" = "CLOSED", traderHint?: Address): Promise<boolean> {
+async function deletePositionFromRedis(
+  positionId: string,
+  closeStatus: "CLOSED" | "LIQUIDATED" = "CLOSED",
+  traderHint?: Address,
+  closeData?: { closePrice?: string; closingPnl?: string; closeFee?: string },
+): Promise<boolean> {
   if (!db.isConnected()) return false;
 
   try {
@@ -1083,9 +1089,9 @@ async function deletePositionFromRedis(positionId: string, closeStatus: "CLOSED"
       }
     }
 
-    // PostgreSQL 镜像: 软删除 (保留历史数据供审计)
+    // PostgreSQL 镜像: 软删除 + 记录平仓数据
     if (isPostgresConnected()) {
-      PositionMirrorRepo.markClosed(positionId, closeStatus)
+      PositionMirrorRepo.markClosed(positionId, closeStatus, closeData)
         .catch(e => console.error(`[PG] Position mirror markClosed failed for ${positionId}: ${e.message}`));
     }
 
@@ -1172,33 +1178,71 @@ function memoryPositionToDB(pos: Position): Omit<DBPosition, "id" | "createdAt" 
 
 /**
  * 转换: 内存 Position → PgPositionMirror (PostgreSQL 镜像)
+ * V2: 完整映射所有 Position 字段，与主流交易所仓位信息对齐
  */
 function memoryPositionToPgMirror(pos: Position, status: "OPEN" | "CLOSED" | "LIQUIDATED" = "OPEN"): PgPositionMirror {
   const now = Date.now();
+  const s = (v: any) => (v ?? "0").toString(); // bigint/string → string, null/undefined → "0"
   return {
+    // 基本标识
     id: pos.pairId,
     trader: pos.trader.toLowerCase(),
     token: pos.token.toLowerCase(),
     symbol: `${pos.token.toLowerCase()}-ETH`,
+    counterparty: (pos.counterparty || "").toLowerCase(),
+
+    // 仓位参数
     is_long: pos.isLong,
-    size: pos.size?.toString() || "0",
-    entry_price: (pos.entryPrice || pos.averageEntryPrice || "0").toString(),
+    size: s(pos.size),
+    entry_price: s(pos.entryPrice || pos.averageEntryPrice),
+    average_entry_price: s(pos.averageEntryPrice || pos.entryPrice),
     leverage: Number(pos.leverage) || 1,
-    collateral: (pos.collateral || "0").toString(),
-    maintenance_margin: (pos.maintenanceMargin || "0").toString(),
-    mark_price: (pos.markPrice || "0").toString(),
-    liquidation_price: (pos.liquidationPrice || "0").toString(),
-    unrealized_pnl: (pos.unrealizedPnL || "0").toString(),
-    margin_ratio: (pos.marginRatio || "10000").toString(),
-    funding_index: (pos.fundingIndex || "0").toString(),
-    funding_fee: (pos.fundingFee || "0").toString(),
-    is_liquidating: (pos as any).isLiquidating || false,
-    risk_level: pos.riskLevel || "low",
-    adl_score: (pos.adlScore || "0").toString(),
+    margin_mode: pos.marginMode ?? 0,
+
+    // 价格信息
+    mark_price: s(pos.markPrice),
+    liquidation_price: s(pos.liquidationPrice),
+    bankruptcy_price: s(pos.bankruptcyPrice),
+    break_even_price: s(pos.breakEvenPrice),
+
+    // 保证金信息
+    collateral: s(pos.collateral),
+    margin: s(pos.margin),
+    margin_ratio: s(pos.marginRatio || "10000"),
+    mmr: s(pos.mmr),
+    maintenance_margin: s(pos.maintenanceMargin),
+
+    // 盈亏信息
+    unrealized_pnl: s(pos.unrealizedPnL),
+    realized_pnl: s(pos.realizedPnL),
+    roe: s(pos.roe),
+    accumulated_funding: s((pos as any).fundingFee ?? pos.accumulatedFunding),
+
+    // 止盈止损
+    tp_price: pos.takeProfitPrice != null ? pos.takeProfitPrice.toString() : null,
+    sl_price: pos.stopLossPrice != null ? pos.stopLossPrice.toString() : null,
+
+    // 风险指标
     adl_ranking: pos.adlRanking || 1,
+    adl_score: s(pos.adlScore),
+    risk_level: pos.riskLevel || "low",
+    is_liquidatable: pos.isLiquidatable || false,
+    is_adl_candidate: pos.isAdlCandidate || false,
+
+    // 状态
     status,
+    funding_index: s(pos.fundingIndex),
+    is_liquidating: pos.isLiquidating || false,
+
+    // 时间戳
     created_at: pos.createdAt || now,
     updated_at: now,
+
+    // 平仓信息 (开仓时为 null)
+    close_price: null,
+    closing_pnl: null,
+    close_fee: null,
+    closed_at: null,
   };
 }
 
@@ -2252,7 +2296,10 @@ async function processLiquidations(): Promise<void> {
 
     // 3. ★ 同步删除 Redis + PG 中的仓位
     try {
-      await deletePositionFromRedis(pos.pairId, "LIQUIDATED", normalizedTrader);
+      await deletePositionFromRedis(pos.pairId, "LIQUIDATED", normalizedTrader, {
+        closePrice: pos.liquidationPrice?.toString(),
+        closingPnl: liquidationPnl.toString(),
+      });
     } catch (e) {
       console.error("[Position] CRITICAL: Failed to delete liquidated position from Redis:", e);
     }
@@ -3596,7 +3643,11 @@ async function processTPSLTriggerQueue(): Promise<void> {
       }).catch(e => console.error("[TP/SL] Failed to log settle PnL bill:", e));
 
       // 同步删除 Redis 中的仓位
-      deletePositionFromRedis(order.pairId, "CLOSED", normalizedTrader).catch(e =>
+      deletePositionFromRedis(order.pairId, "CLOSED", normalizedTrader, {
+        closePrice: currentPrice.toString(),
+        closingPnl: pnl.toString(),
+        closeFee: closeFee.toString(),
+      }).catch(e =>
         console.error("[Redis] Failed to delete TP/SL closed position:", e));
 
       // 广播执行事件
@@ -7209,7 +7260,11 @@ async function closePositionByMatch(
     userPositions.set(normalizedTrader, positions);
     // ★ 同步删除 Redis + PG 仓位记录
     try {
-      await deletePositionFromRedis(pos.pairId, "CLOSED", normalizedTrader);
+      await deletePositionFromRedis(pos.pairId, "CLOSED", normalizedTrader, {
+        closePrice: closePrice.toString(),
+        closingPnl: pnl.toString(),
+        closeFee: closeFee.toString(),
+      });
     } catch (e) {
       console.error("[Position] CRITICAL: Failed to delete closed position from Redis:", e);
     }
@@ -9392,7 +9447,11 @@ async function handleClosePair(req: Request, pairId: string): Promise<Response> 
       userPositions.set(normalizedTrader, updatedPositions);
 
       // 同步删除 Redis 中的仓位
-      deletePositionFromRedis(pairId, "CLOSED", normalizedTrader).catch((err) => {
+      deletePositionFromRedis(pairId, "CLOSED", normalizedTrader, {
+        closePrice: currentPrice.toString(),
+        closingPnl: closePnL.toString(),
+        closeFee: closeFee.toString(),
+      }).catch((err) => {
         console.error("[Redis] Failed to delete closed position:", err);
       });
 
@@ -14902,7 +14961,7 @@ async function startServer(): Promise<void> {
               continue; // 已存在, 不需要恢复
             }
 
-            // 内存中没有此仓位 → 从 PG 恢复
+            // 内存中没有此仓位 → 从 PG V2 恢复
             const memPos: Position = {
               pairId: pgPos.id,
               trader,
@@ -14910,35 +14969,35 @@ async function startServer(): Promise<void> {
               isLong: pgPos.is_long,
               size: pgPos.size,
               entryPrice: pgPos.entry_price,
-              averageEntryPrice: pgPos.entry_price,
+              averageEntryPrice: pgPos.average_entry_price || pgPos.entry_price,
               leverage: pgPos.leverage.toString(),
+              marginMode: pgPos.margin_mode ?? 0,
               collateral: pgPos.collateral,
-              margin: pgPos.collateral,
+              margin: pgPos.margin || pgPos.collateral,
               maintenanceMargin: pgPos.maintenance_margin || "0",
               markPrice: pgPos.mark_price || "0",
               liquidationPrice: pgPos.liquidation_price || "0",
-              bankruptcyPrice: "0",
-              breakEvenPrice: pgPos.entry_price,
+              bankruptcyPrice: pgPos.bankruptcy_price || "0",
+              breakEvenPrice: pgPos.break_even_price || pgPos.entry_price,
               unrealizedPnL: pgPos.unrealized_pnl || "0",
-              realizedPnL: "0",
+              realizedPnL: pgPos.realized_pnl || "0",
               marginRatio: pgPos.margin_ratio || "10000",
-              mmr: "200",
-              roe: "0",
-              fundingFee: pgPos.funding_fee || "0",
+              mmr: pgPos.mmr || "200",
+              roe: pgPos.roe || "0",
+              accumulatedFunding: pgPos.accumulated_funding || "0",
               fundingIndex: pgPos.funding_index || "0",
-              accFundingFee: pgPos.funding_fee || "0",
-              takeProfitPrice: null,
-              stopLossPrice: null,
+              takeProfitPrice: pgPos.tp_price || null,
+              stopLossPrice: pgPos.sl_price || null,
               orderId: "",
               orderIds: [],
-              counterparty: "0x0000000000000000000000000000000000000000" as Address,
+              counterparty: (pgPos.counterparty || "0x0000000000000000000000000000000000000000") as Address,
               createdAt: pgPos.created_at,
               updatedAt: pgPos.updated_at,
               adlRanking: pgPos.adl_ranking || 1,
               adlScore: pgPos.adl_score || "0",
               riskLevel: (pgPos.risk_level as Position["riskLevel"]) || "low",
-              isLiquidatable: false,
-              isAdlCandidate: false,
+              isLiquidatable: pgPos.is_liquidatable || false,
+              isAdlCandidate: pgPos.is_adl_candidate || false,
             };
 
             // 添加到内存

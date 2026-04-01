@@ -1032,6 +1032,7 @@
     "addMargin": "증거금 추가",
     "reduceMargin": "증거금 감소",
     "fundingRate": "펀딩 비율",
+    "fundingFee": "펀딩 수수료",
     "nextFunding": "다음 정산",
     "openInterest": "미결제 약정",
     "volume24h": "24h 거래량",
@@ -1482,7 +1483,16 @@
     "tradeBtnLabel": "거래하기",
     "recentRecords": "최근 기록",
     "recentTrades": "최근 거래",
-    "startTrading": "거래로 수익 창출"
+    "startTrading": "거래로 수익 창출",
+    "tabHistory": "거래 내역",
+    "tradeHistory": "체결 내역",
+    "orderHistory": "주문 내역",
+    "fillPrice": "체결 가격",
+    "realizedPnl": "실현 손익",
+    "fee": "수수료",
+    "time": "시간",
+    "orderType": "유형",
+    "status": "상태"
   },
   "leaderboard": {
     "title": "트레이딩 대회 리더보드",

@@ -1032,6 +1032,7 @@
     "addMargin": "証拠金追加",
     "reduceMargin": "証拠金減少",
     "fundingRate": "資金調達率",
+    "fundingFee": "資金調達手数料",
     "nextFunding": "次回決済",
     "openInterest": "未決済建玉",
     "volume24h": "24h出来高",
@@ -1482,7 +1483,16 @@
     "tradeBtnLabel": "取引する",
     "recentRecords": "最近の記録",
     "recentTrades": "最近の取引",
-    "startTrading": "取引して稼ぐ"
+    "startTrading": "取引して稼ぐ",
+    "tabHistory": "履歴",
+    "tradeHistory": "取引履歴",
+    "orderHistory": "注文履歴",
+    "fillPrice": "約定価格",
+    "realizedPnl": "実現損益",
+    "fee": "手数料",
+    "time": "時間",
+    "orderType": "種類",
+    "status": "ステータス"
   },
   "leaderboard": {
     "title": "トレーディングコンテスト",

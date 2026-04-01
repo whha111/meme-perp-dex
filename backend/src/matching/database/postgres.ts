@@ -72,31 +72,67 @@ export interface PgOrderMirror {
   updated_at: number;
 }
 
-/** PostgreSQL 中存储的仓位镜像 */
+/** PostgreSQL 中存储的仓位镜像 — 与 types.ts Position 接口完全对齐 */
 export interface PgPositionMirror {
+  // 基本标识
   id: string;                    // pairId (UUID)
   trader: string;                // 钱包地址 (lowercase)
   token: string;                 // token 合约地址 (lowercase)
   symbol: string;                // "0xabc...-ETH"
+  counterparty: string;          // 对手方地址
+
+  // 仓位参数
   is_long: boolean;
-  size: string;                  // 1e18 字符串
-  entry_price: string;
-  leverage: number;
-  collateral: string;            // 保证金 (1e18 ETH) — 用 collateral 不用 initialMargin 避免字段名歧义
-  maintenance_margin: string;
-  mark_price: string;
-  liquidation_price: string;
-  unrealized_pnl: string;
-  margin_ratio: string;
-  funding_index: string;
-  funding_fee: string;
-  is_liquidating: boolean;
-  risk_level: string;
-  adl_score: string;
-  adl_ranking: number;
+  size: string;                  // Token 数量 (1e18 字符串)
+  entry_price: string;           // 开仓价 (1e18)
+  average_entry_price: string;   // 加仓后平均价 (1e18)
+  leverage: number;              // 杠杆倍数
+  margin_mode: number;           // 0=逐仓, 1=全仓
+
+  // 价格信息
+  mark_price: string;            // 标记价格 (1e18)
+  liquidation_price: string;     // 强平价格 (1e18)
+  bankruptcy_price: string;      // 穿仓价格 (1e18)
+  break_even_price: string;      // 盈亏平衡价 (1e18)
+
+  // 保证金信息
+  collateral: string;            // 初始保证金 ETH (1e18)
+  margin: string;                // 当前保证金 = 初始 + UPNL (1e18)
+  margin_ratio: string;          // 保证金率 (基点, 10000=100%)
+  mmr: string;                   // 维持保证金率 (基点)
+  maintenance_margin: string;    // 维持保证金金额 ETH (1e18)
+
+  // 盈亏信息
+  unrealized_pnl: string;        // 未实现盈亏 ETH (1e18)
+  realized_pnl: string;          // 已实现盈亏 ETH (1e18)
+  roe: string;                   // 收益率 (基点)
+  accumulated_funding: string;   // 累计资金费 ETH (1e18)
+
+  // 止盈止损
+  tp_price: string | null;       // 止盈价 (1e18)
+  sl_price: string | null;       // 止损价 (1e18)
+
+  // 风险指标
+  adl_ranking: number;           // ADL排名 1-5
+  adl_score: string;             // ADL评分
+  risk_level: string;            // low/medium/high/critical
+  is_liquidatable: boolean;
+  is_adl_candidate: boolean;
+
+  // 状态
   status: string;                // "OPEN" | "CLOSED" | "LIQUIDATED"
+  funding_index: string;         // 开仓时的资金费索引
+  is_liquidating: boolean;
+
+  // 时间戳
   created_at: number;
   updated_at: number;
+
+  // 平仓信息 (仅平仓后填充)
+  close_price: string | null;    // 平仓成交价 (1e18)
+  closing_pnl: string | null;    // 平仓盈亏 (1e18)
+  close_fee: string | null;      // 平仓手续费 (1e18)
+  closed_at: number | null;      // 平仓时间戳
 }
 
 // ============================================================
@@ -203,44 +239,107 @@ async function ensureMirrorTable(): Promise<void> {
 
   logger.info("Postgres", "Mirror table ready: perp_order_mirror");
 
-  // ── Position mirror table ──
+  // ── Position mirror table (V2 — 完整对齐 Position 接口) ──
   await sql`
     CREATE TABLE IF NOT EXISTS perp_position_mirror (
       id VARCHAR(256) PRIMARY KEY,
+
+      -- 基本标识
       trader VARCHAR(42) NOT NULL,
-      token VARCHAR(42) NOT NULL,
+      token VARCHAR(128) NOT NULL,
       symbol VARCHAR(64) NOT NULL,
+      counterparty VARCHAR(42) NOT NULL DEFAULT '',
+
+      -- 仓位参数
       is_long BOOLEAN NOT NULL,
       size VARCHAR(78) NOT NULL,
       entry_price VARCHAR(78) NOT NULL,
+      average_entry_price VARCHAR(78) NOT NULL DEFAULT '0',
       leverage REAL NOT NULL,
-      collateral VARCHAR(78) NOT NULL DEFAULT '0',
-      maintenance_margin VARCHAR(78) NOT NULL DEFAULT '0',
+      margin_mode SMALLINT NOT NULL DEFAULT 0,
+
+      -- 价格信息
       mark_price VARCHAR(78) NOT NULL DEFAULT '0',
       liquidation_price VARCHAR(78) NOT NULL DEFAULT '0',
-      unrealized_pnl VARCHAR(78) NOT NULL DEFAULT '0',
+      bankruptcy_price VARCHAR(78) NOT NULL DEFAULT '0',
+      break_even_price VARCHAR(78) NOT NULL DEFAULT '0',
+
+      -- 保证金信息
+      collateral VARCHAR(78) NOT NULL DEFAULT '0',
+      margin VARCHAR(78) NOT NULL DEFAULT '0',
       margin_ratio VARCHAR(78) NOT NULL DEFAULT '10000',
-      funding_index VARCHAR(78) NOT NULL DEFAULT '0',
-      funding_fee VARCHAR(78) NOT NULL DEFAULT '0',
-      is_liquidating BOOLEAN NOT NULL DEFAULT FALSE,
-      risk_level VARCHAR(16) NOT NULL DEFAULT 'low',
-      adl_score VARCHAR(78) NOT NULL DEFAULT '0',
+      mmr VARCHAR(78) NOT NULL DEFAULT '0',
+      maintenance_margin VARCHAR(78) NOT NULL DEFAULT '0',
+
+      -- 盈亏信息
+      unrealized_pnl VARCHAR(78) NOT NULL DEFAULT '0',
+      realized_pnl VARCHAR(78) NOT NULL DEFAULT '0',
+      roe VARCHAR(78) NOT NULL DEFAULT '0',
+      accumulated_funding VARCHAR(78) NOT NULL DEFAULT '0',
+
+      -- 止盈止损
+      tp_price VARCHAR(78),
+      sl_price VARCHAR(78),
+
+      -- 风险指标
       adl_ranking INTEGER NOT NULL DEFAULT 1,
+      adl_score VARCHAR(78) NOT NULL DEFAULT '0',
+      risk_level VARCHAR(16) NOT NULL DEFAULT 'low',
+      is_liquidatable BOOLEAN NOT NULL DEFAULT FALSE,
+      is_adl_candidate BOOLEAN NOT NULL DEFAULT FALSE,
+
+      -- 状态
       status VARCHAR(20) NOT NULL DEFAULT 'OPEN',
+      funding_index VARCHAR(78) NOT NULL DEFAULT '0',
+      is_liquidating BOOLEAN NOT NULL DEFAULT FALSE,
+
+      -- 时间戳
       created_at BIGINT NOT NULL,
-      updated_at BIGINT NOT NULL
+      updated_at BIGINT NOT NULL,
+
+      -- 平仓信息 (仅平仓后填充)
+      close_price VARCHAR(78),
+      closing_pnl VARCHAR(78),
+      close_fee VARCHAR(78),
+      closed_at BIGINT
     )
   `;
 
-  // Migration: widen id column if existing table has varchar(64)
-  await sql`ALTER TABLE perp_position_mirror ALTER COLUMN id TYPE VARCHAR(256)`.catch(() => {});
+  // ── Migration: 从旧表结构升级到 V2 ──
+  // 每个 ALTER 独立 catch，已存在的列会静默跳过
+  const newColumns = [
+    `ALTER TABLE perp_position_mirror ALTER COLUMN id TYPE VARCHAR(256)`,
+    `ALTER TABLE perp_position_mirror ALTER COLUMN token TYPE VARCHAR(128)`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN counterparty VARCHAR(42) NOT NULL DEFAULT ''`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN average_entry_price VARCHAR(78) NOT NULL DEFAULT '0'`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN margin_mode SMALLINT NOT NULL DEFAULT 0`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN bankruptcy_price VARCHAR(78) NOT NULL DEFAULT '0'`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN break_even_price VARCHAR(78) NOT NULL DEFAULT '0'`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN margin VARCHAR(78) NOT NULL DEFAULT '0'`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN mmr VARCHAR(78) NOT NULL DEFAULT '0'`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN realized_pnl VARCHAR(78) NOT NULL DEFAULT '0'`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN roe VARCHAR(78) NOT NULL DEFAULT '0'`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN accumulated_funding VARCHAR(78) NOT NULL DEFAULT '0'`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN tp_price VARCHAR(78)`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN sl_price VARCHAR(78)`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN is_liquidatable BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN is_adl_candidate BOOLEAN NOT NULL DEFAULT FALSE`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN close_price VARCHAR(78)`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN closing_pnl VARCHAR(78)`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN close_fee VARCHAR(78)`,
+    `ALTER TABLE perp_position_mirror ADD COLUMN closed_at BIGINT`,
+  ];
+  for (const ddl of newColumns) {
+    await sql.unsafe(ddl).catch(() => {});
+  }
 
+  // ── 索引 ──
   await sql`CREATE INDEX IF NOT EXISTS idx_ppm_trader ON perp_position_mirror(trader)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_ppm_token ON perp_position_mirror(token)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_ppm_status ON perp_position_mirror(status)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_ppm_trader_token ON perp_position_mirror(trader, token, is_long) WHERE status = 'OPEN'`;
 
-  logger.info("Postgres", "Mirror table ready: perp_position_mirror");
+  logger.info("Postgres", "Mirror table ready: perp_position_mirror (V2)");
 }
 
 // ============================================================
@@ -384,7 +483,7 @@ export const OrderMirrorRepo = {
 
 export const PositionMirrorRepo = {
   /**
-   * 创建或更新仓位镜像 (Upsert)
+   * 创建或更新仓位镜像 (Upsert) — V2 完整字段
    * 每次 savePositionToRedis 成功后调用
    */
   async upsert(position: PgPositionMirror): Promise<void> {
@@ -393,36 +492,57 @@ export const PositionMirrorRepo = {
     try {
       await sql`
         INSERT INTO perp_position_mirror (
-          id, trader, token, symbol, is_long, size, entry_price, leverage,
-          collateral, maintenance_margin, mark_price, liquidation_price,
-          unrealized_pnl, margin_ratio, funding_index, funding_fee,
-          is_liquidating, risk_level, adl_score, adl_ranking,
-          status, created_at, updated_at
+          id, trader, token, symbol, counterparty,
+          is_long, size, entry_price, average_entry_price, leverage, margin_mode,
+          mark_price, liquidation_price, bankruptcy_price, break_even_price,
+          collateral, margin, margin_ratio, mmr, maintenance_margin,
+          unrealized_pnl, realized_pnl, roe, accumulated_funding,
+          tp_price, sl_price,
+          adl_ranking, adl_score, risk_level, is_liquidatable, is_adl_candidate,
+          status, funding_index, is_liquidating,
+          created_at, updated_at,
+          close_price, closing_pnl, close_fee, closed_at
         ) VALUES (
-          ${position.id}, ${position.trader}, ${position.token}, ${position.symbol},
-          ${position.is_long}, ${position.size}, ${position.entry_price}, ${position.leverage},
-          ${position.collateral}, ${position.maintenance_margin}, ${position.mark_price},
-          ${position.liquidation_price}, ${position.unrealized_pnl}, ${position.margin_ratio},
-          ${position.funding_index}, ${position.funding_fee}, ${position.is_liquidating},
-          ${position.risk_level}, ${position.adl_score}, ${position.adl_ranking},
-          ${position.status}, ${position.created_at}, ${position.updated_at}
+          ${position.id}, ${position.trader}, ${position.token}, ${position.symbol}, ${position.counterparty},
+          ${position.is_long}, ${position.size}, ${position.entry_price}, ${position.average_entry_price},
+          ${position.leverage}, ${position.margin_mode},
+          ${position.mark_price}, ${position.liquidation_price}, ${position.bankruptcy_price}, ${position.break_even_price},
+          ${position.collateral}, ${position.margin}, ${position.margin_ratio}, ${position.mmr}, ${position.maintenance_margin},
+          ${position.unrealized_pnl}, ${position.realized_pnl}, ${position.roe}, ${position.accumulated_funding},
+          ${position.tp_price}, ${position.sl_price},
+          ${position.adl_ranking}, ${position.adl_score}, ${position.risk_level}, ${position.is_liquidatable}, ${position.is_adl_candidate},
+          ${position.status}, ${position.funding_index}, ${position.is_liquidating},
+          ${position.created_at}, ${position.updated_at},
+          ${position.close_price}, ${position.closing_pnl}, ${position.close_fee}, ${position.closed_at}
         )
         ON CONFLICT (id) DO UPDATE SET
           size = EXCLUDED.size,
           entry_price = EXCLUDED.entry_price,
+          average_entry_price = EXCLUDED.average_entry_price,
           leverage = EXCLUDED.leverage,
-          collateral = EXCLUDED.collateral,
-          maintenance_margin = EXCLUDED.maintenance_margin,
+          margin_mode = EXCLUDED.margin_mode,
           mark_price = EXCLUDED.mark_price,
           liquidation_price = EXCLUDED.liquidation_price,
-          unrealized_pnl = EXCLUDED.unrealized_pnl,
+          bankruptcy_price = EXCLUDED.bankruptcy_price,
+          break_even_price = EXCLUDED.break_even_price,
+          collateral = EXCLUDED.collateral,
+          margin = EXCLUDED.margin,
           margin_ratio = EXCLUDED.margin_ratio,
-          funding_index = EXCLUDED.funding_index,
-          funding_fee = EXCLUDED.funding_fee,
-          is_liquidating = EXCLUDED.is_liquidating,
-          risk_level = EXCLUDED.risk_level,
-          adl_score = EXCLUDED.adl_score,
+          mmr = EXCLUDED.mmr,
+          maintenance_margin = EXCLUDED.maintenance_margin,
+          unrealized_pnl = EXCLUDED.unrealized_pnl,
+          realized_pnl = EXCLUDED.realized_pnl,
+          roe = EXCLUDED.roe,
+          accumulated_funding = EXCLUDED.accumulated_funding,
+          tp_price = EXCLUDED.tp_price,
+          sl_price = EXCLUDED.sl_price,
           adl_ranking = EXCLUDED.adl_ranking,
+          adl_score = EXCLUDED.adl_score,
+          risk_level = EXCLUDED.risk_level,
+          is_liquidatable = EXCLUDED.is_liquidatable,
+          is_adl_candidate = EXCLUDED.is_adl_candidate,
+          funding_index = EXCLUDED.funding_index,
+          is_liquidating = EXCLUDED.is_liquidating,
           status = EXCLUDED.status,
           updated_at = EXCLUDED.updated_at
       `;
@@ -433,17 +553,26 @@ export const PositionMirrorRepo = {
   },
 
   /**
-   * 标记仓位已关闭 (软删除，保留历史数据供审计)
+   * 标记仓位已关闭 — 记录平仓价格、盈亏、手续费
    * 每次 deletePositionFromRedis 后调用
    */
-  async markClosed(positionId: string, status: "CLOSED" | "LIQUIDATED" = "CLOSED"): Promise<void> {
+  async markClosed(
+    positionId: string,
+    status: "CLOSED" | "LIQUIDATED" = "CLOSED",
+    closeData?: { closePrice?: string; closingPnl?: string; closeFee?: string },
+  ): Promise<void> {
     if (!sql || !isConnected) return;
 
     try {
       const now = Date.now();
       await sql`
         UPDATE perp_position_mirror
-        SET status = ${status}, size = '0', updated_at = ${now}
+        SET status = ${status},
+            updated_at = ${now},
+            closed_at = ${now},
+            close_price = COALESCE(${closeData?.closePrice ?? null}, close_price),
+            closing_pnl = COALESCE(${closeData?.closingPnl ?? null}, closing_pnl),
+            close_fee = COALESCE(${closeData?.closeFee ?? null}, close_fee)
         WHERE id = ${positionId}
       `;
     } catch (error: any) {

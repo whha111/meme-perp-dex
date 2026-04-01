@@ -1075,6 +1075,7 @@
     "cancel": "Cancel",
     "available": "Available",
     "fundingRate": "Funding Rate",
+    "fundingFee": "Funding Fee",
     "nextFunding": "Next Funding",
     "openInterest": "Open Interest",
     "volume24h": "24h Volume",
@@ -1572,7 +1573,16 @@
     "tradeBtnLabel": "Trade",
     "recentRecords": "Recent Records",
     "recentTrades": "Recent Trades",
-    "startTrading": "Start trading to earn"
+    "startTrading": "Start trading to earn",
+    "tabHistory": "History",
+    "tradeHistory": "Trade History",
+    "orderHistory": "Order History",
+    "fillPrice": "Fill Price",
+    "realizedPnl": "Realized PnL",
+    "fee": "Fee",
+    "time": "Time",
+    "orderType": "Type",
+    "status": "Status"
   },
   "leaderboard": {
     "title": "Trading Competition Leaderboard",
