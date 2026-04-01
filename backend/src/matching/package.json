@@ -13,6 +13,7 @@
     "test:stress": "bun run stress-test.ts"
   },
   "dependencies": {
+    "@noble/hashes": "^2.0.1",
     "@types/ws": "^8.18.1",
     "dotenv": "^17.2.3",
     "ethers": "^6.13.0",

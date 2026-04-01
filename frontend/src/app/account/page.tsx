@@ -13,6 +13,23 @@ import { useETHPrice } from "@/hooks/common/useETHPrice";
 import { AssetTrendChart } from "@/components/common/AssetTrendChart";
 import { BnbIcon } from "@/components/common/BnbIcon";
 import { getOrderHistory, getTradeHistory, type HistoricalOrder } from "@/utils/orderSigning";
+import { MATCHING_ENGINE_URL } from "@/config/api";
+import { PositionRow } from "@/components/common/PositionRow";
+
+// Bill record from matching engine /api/user/:trader/bills
+interface BillRecord {
+  id: string;
+  txHash: string | null;
+  type: string;
+  amount: string;
+  balanceBefore: string;
+  balanceAfter: string;
+  onChainStatus: string;
+  proofData: string;
+  positionId?: string;
+  orderId?: string;
+  createdAt: number;
+}
 
 // ERC20 balanceOf ABI fragment
 const erc20BalanceOfAbi = [
@@ -27,7 +44,7 @@ const erc20BalanceOfAbi = [
 
 // OKX-style tab definitions
 type AccountTab = "overview" | "trading" | "spot" | "history";
-type HistorySubTab = "trades" | "orders";
+type HistorySubTab = "trades" | "orders" | "bills" | "funding";
 
 export default function AccountPage() {
   const { address, isConnected } = useAccount();
@@ -49,6 +66,8 @@ export default function AccountPage() {
   const [tradeHistory, setTradeHistory] = useState<PerpTradeRecord[]>([]);
   const [orderHistory, setOrderHistory] = useState<HistoricalOrder[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [bills, setBills] = useState<BillRecord[]>([]);
+  const [fundingBills, setFundingBills] = useState<BillRecord[]>([]);
 
   const availableBalance = balance?.available || 0n;
   const lockedMargin = balance?.locked || 0n;
@@ -143,10 +162,18 @@ export default function AccountPage() {
     Promise.all([
       getTradeHistory(trader as `0x${string}`),
       getOrderHistory(trader as `0x${string}`),
+      // P2-1: Fetch bills from matching engine
+      fetch(`${MATCHING_ENGINE_URL}/api/user/${trader}/bills?limit=100`)
+        .then(r => r.ok ? r.json() : []).catch(() => []),
+      // P2-3: Fetch funding fee bills
+      fetch(`${MATCHING_ENGINE_URL}/api/user/${trader}/bills?type=FUNDING_FEE&limit=100`)
+        .then(r => r.ok ? r.json() : []).catch(() => []),
     ])
-      .then(([trades, orders]) => {
+      .then(([trades, orders, allBills, fundingOnly]) => {
         setTradeHistory(trades);
         setOrderHistory(orders);
+        setBills(allBills as BillRecord[]);
+        setFundingBills(fundingOnly as BillRecord[]);
       })
       .catch(() => {})
       .finally(() => setIsLoadingHistory(false));
@@ -459,22 +486,15 @@ export default function AccountPage() {
                       <span className="text-xs text-okx-text-tertiary text-right">{t("liqPrice")}</span>
                       <span className="text-xs text-okx-text-tertiary text-right">{t("unrealizedPnl")}</span>
                     </div>
-                    {positions.map((pos) => {
-                      const pnl = BigInt(pos.unrealizedPnL || "0");
-                      const isProfit = pnl >= 0n;
-                      const pnlPct = ((Number(formatUnits(pnl, 18)) / Math.max(Number(formatUnits(BigInt(pos.collateral || "0"), 18)), 0.0001)) * 100).toFixed(1);
-                      return (
-                        <div key={pos.pairId} className="grid grid-cols-7 gap-2 py-3.5 border-b border-okx-border-primary hover:bg-okx-bg-hover transition-colors cursor-pointer" onClick={() => router.push(`/perp?symbol=${pos.token}`)}>
-                          <span className="font-mono text-sm font-medium text-okx-text-primary truncate">{pos.token.slice(0, 8)}...-PERP</span>
-                          <span><span className={`inline-block text-xs font-semibold px-2 py-0.5 rounded ${pos.isLong ? "bg-meme-lime/15 text-meme-lime" : "bg-okx-down/15 text-okx-down"}`}>{pos.isLong ? t("long") : t("short")} {parseFloat(pos.leverage)}x</span></span>
-                          <span className="font-mono text-sm text-okx-text-secondary text-right">{formatBal(pos.size)}</span>
-                          <span className="font-mono text-sm text-okx-text-secondary text-right">{formatBal(pos.collateral)}</span>
-                          <span className="font-mono text-sm text-okx-text-secondary text-right">{formatBal(pos.entryPrice)}</span>
-                          <span className="font-mono text-sm text-okx-down text-right">{formatBal(pos.liquidationPrice || "0")}</span>
-                          <span className={`font-mono text-sm font-semibold text-right ${isProfit ? "text-meme-lime" : "text-okx-down"}`}>{isProfit ? "+" : ""}{formatBal(pnl)} ({isProfit ? "+" : ""}{pnlPct}%)</span>
-                        </div>
-                      );
-                    })}
+                    {positions.map((pos) => (
+                      <PositionRow
+                        key={pos.pairId}
+                        position={pos}
+                        variant="grid-row"
+                        onClick={() => router.push(`/perp?symbol=${pos.token}`)}
+                        t={t}
+                      />
+                    ))}
                   </div>
                 ) : (
                   <div className="bg-okx-bg-secondary rounded-xl p-10 text-center text-okx-text-tertiary text-sm">{t("noPositions")}</div>
@@ -582,18 +602,23 @@ export default function AccountPage() {
             <div className="px-6 py-6">
               {/* Sub-tab bar */}
               <div className="flex items-center gap-4 mb-6 border-b border-okx-border-primary">
-                {(["trades", "orders"] as const).map((sub) => (
+                {([
+                  { key: "trades" as const, label: t("tradeHistory") || "Trade History" },
+                  { key: "orders" as const, label: t("orderHistory") || "Order History" },
+                  { key: "bills" as const, label: "Bills" },
+                  { key: "funding" as const, label: "Funding" },
+                ]).map((sub) => (
                   <button
-                    key={sub}
-                    onClick={() => setHistorySubTab(sub)}
+                    key={sub.key}
+                    onClick={() => setHistorySubTab(sub.key)}
                     className={`relative pb-2.5 text-sm font-medium transition-colors ${
-                      historySubTab === sub
+                      historySubTab === sub.key
                         ? "text-okx-text-primary"
                         : "text-okx-text-tertiary hover:text-okx-text-secondary"
                     }`}
                   >
-                    {sub === "trades" ? (t("tradeHistory") || "Trade History") : (t("orderHistory") || "Order History")}
-                    {historySubTab === sub && (
+                    {sub.label}
+                    {historySubTab === sub.key && (
                       <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-okx-text-primary" />
                     )}
                   </button>
@@ -642,12 +667,12 @@ export default function AccountPage() {
                             {sizeETH >= 1 ? sizeETH.toFixed(4) : sizeETH.toFixed(6)} BNB
                           </span>
                           <span className="font-mono text-okx-text-tertiary text-right self-center">
-                            {fee > 0 ? fee.toFixed(6) : "—"}
+                            {fee > 0 ? fee.toFixed(6) : "\u2014"}
                           </span>
                           <span className={`font-mono font-semibold text-right self-center ${
                             pnl >= 0 ? "text-emerald-400" : "text-rose-400"
                           }`}>
-                            {pnl !== 0 ? `${pnl >= 0 ? "+" : ""}${pnl.toFixed(6)}` : "—"}
+                            {pnl !== 0 ? `${pnl >= 0 ? "+" : ""}${pnl.toFixed(6)}` : "\u2014"}
                           </span>
                         </div>
                       );
@@ -659,7 +684,7 @@ export default function AccountPage() {
                     {t("noTransactions") || "No trade history"}
                   </div>
                 )
-              ) : (
+              ) : historySubTab === "orders" ? (
                 /* ── Order History Table ── */
                 orderHistory.length > 0 ? (
                   <div>
@@ -682,7 +707,7 @@ export default function AccountPage() {
                       return (
                         <div key={order.id} className="grid grid-cols-7 gap-2 py-3 border-b border-okx-border-primary/50 hover:bg-okx-bg-hover transition-colors text-sm">
                           <span className="text-okx-text-tertiary text-xs self-center">
-                            {order.clientOrderId ? new Date(parseInt(order.clientOrderId)).toLocaleString() : "—"}
+                            {order.clientOrderId ? new Date(parseInt(order.clientOrderId)).toLocaleString() : "\u2014"}
                           </span>
                           <span className="font-mono text-okx-text-primary self-center">{symbol}/BNB</span>
                           <span className="self-center">
@@ -700,7 +725,7 @@ export default function AccountPage() {
                             {price >= 0.01 ? price.toFixed(6) : price.toFixed(10)}
                           </span>
                           <span className={`text-xs font-medium text-right self-center ${statusColor}`}>
-                            {order.closeReason || "—"}
+                            {order.closeReason || "\u2014"}
                           </span>
                         </div>
                       );
@@ -712,7 +737,124 @@ export default function AccountPage() {
                     {t("noTransactions") || "No order history"}
                   </div>
                 )
-              )}
+              ) : historySubTab === "bills" ? (
+                /* ── P2-1: Bills / Ledger Table ── */
+                bills.length > 0 ? (
+                  <div>
+                    <div className="grid grid-cols-6 gap-2 py-2.5 border-b border-okx-border-primary">
+                      <span className="text-xs text-okx-text-tertiary">Time</span>
+                      <span className="text-xs text-okx-text-tertiary">Type</span>
+                      <span className="text-xs text-okx-text-tertiary text-right">Amount</span>
+                      <span className="text-xs text-okx-text-tertiary text-right">Before</span>
+                      <span className="text-xs text-okx-text-tertiary text-right">After</span>
+                      <span className="text-xs text-okx-text-tertiary text-right">Status</span>
+                    </div>
+                    {bills.map((bill) => {
+                      const amt = Number(bill.amount) / 1e18;
+                      const before = Number(bill.balanceBefore) / 1e18;
+                      const after = Number(bill.balanceAfter) / 1e18;
+                      const typeLabel: Record<string, string> = {
+                        DEPOSIT: "Deposit", WITHDRAW: "Withdraw",
+                        SETTLE_PNL: "PnL Settlement", FUNDING_FEE: "Funding Fee",
+                        LIQUIDATION: "Liquidation", MARGIN_ADD: "Add Margin",
+                        MARGIN_REMOVE: "Remove Margin",
+                      };
+                      const typeColor: Record<string, string> = {
+                        DEPOSIT: "text-emerald-400", WITHDRAW: "text-amber-400",
+                        SETTLE_PNL: amt >= 0 ? "text-emerald-400" : "text-rose-400",
+                        FUNDING_FEE: amt >= 0 ? "text-emerald-400" : "text-rose-400",
+                        LIQUIDATION: "text-rose-400",
+                      };
+                      return (
+                        <div key={bill.id} className="grid grid-cols-6 gap-2 py-3 border-b border-okx-border-primary/50 hover:bg-okx-bg-hover transition-colors text-sm">
+                          <span className="text-okx-text-tertiary text-xs self-center">
+                            {new Date(bill.createdAt).toLocaleString()}
+                          </span>
+                          <span className={`text-xs font-medium self-center ${typeColor[bill.type] || "text-okx-text-secondary"}`}>
+                            {typeLabel[bill.type] || bill.type}
+                          </span>
+                          <span className={`font-mono font-semibold text-right self-center ${
+                            amt >= 0 ? "text-emerald-400" : "text-rose-400"
+                          }`}>
+                            {amt >= 0 ? "+" : ""}{amt.toFixed(6)} BNB
+                          </span>
+                          <span className="font-mono text-okx-text-tertiary text-right self-center text-xs">
+                            {before.toFixed(4)}
+                          </span>
+                          <span className="font-mono text-okx-text-secondary text-right self-center text-xs">
+                            {after.toFixed(4)}
+                          </span>
+                          <span className="text-xs text-okx-text-tertiary text-right self-center">
+                            {bill.onChainStatus === "ENGINE_SETTLED" ? "Settled" : bill.onChainStatus}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="py-20 text-center text-okx-text-tertiary text-sm">
+                    <svg className="w-12 h-12 mb-3 opacity-30 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 18.75a60.07 60.07 0 0115.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 013 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 00-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 01-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 003 15h-.75M15 10.5a3 3 0 11-6 0 3 3 0 016 0zm3 0h.008v.008H18V10.5zm-12 0h.008v.008H6V10.5z" /></svg>
+                    No bills yet
+                  </div>
+                )
+              ) : historySubTab === "funding" ? (
+                /* ── P2-3: Funding Fee History Table ── */
+                fundingBills.length > 0 ? (
+                  <div>
+                    <div className="grid grid-cols-6 gap-2 py-2.5 border-b border-okx-border-primary">
+                      <span className="text-xs text-okx-text-tertiary">Time</span>
+                      <span className="text-xs text-okx-text-tertiary">Token</span>
+                      <span className="text-xs text-okx-text-tertiary">Direction</span>
+                      <span className="text-xs text-okx-text-tertiary text-right">Rate</span>
+                      <span className="text-xs text-okx-text-tertiary text-right">Amount</span>
+                      <span className="text-xs text-okx-text-tertiary text-right">Position Size</span>
+                    </div>
+                    {fundingBills.map((bill) => {
+                      const amt = Number(bill.amount) / 1e18;
+                      let proof: any = {};
+                      try { proof = JSON.parse(bill.proofData || "{}"); } catch {}
+                      const tokenAddr = (proof.token || "").toLowerCase();
+                      const symbol = tokenSymbolMap.get(tokenAddr) || (tokenAddr ? tokenAddr.slice(0, 8) : "\u2014");
+                      const isLong = proof.isLong;
+                      const rate = proof.appliedRate ? (Number(proof.appliedRate) / 1e18 * 100).toFixed(4) + "%" : "\u2014";
+                      const posSize = proof.positionSize ? (Number(proof.positionSize) / 1e18).toFixed(4) : "\u2014";
+                      return (
+                        <div key={bill.id} className="grid grid-cols-6 gap-2 py-3 border-b border-okx-border-primary/50 hover:bg-okx-bg-hover transition-colors text-sm">
+                          <span className="text-okx-text-tertiary text-xs self-center">
+                            {new Date(bill.createdAt).toLocaleString()}
+                          </span>
+                          <span className="font-mono text-okx-text-primary self-center">{symbol}/BNB</span>
+                          <span className="self-center">
+                            {isLong !== undefined ? (
+                              <span className={`inline-block text-xs font-semibold px-2 py-0.5 rounded ${
+                                isLong ? "bg-emerald-500/15 text-emerald-400" : "bg-rose-500/15 text-rose-400"
+                              }`}>
+                                {isLong ? "Long" : "Short"}
+                              </span>
+                            ) : "\u2014"}
+                          </span>
+                          <span className="font-mono text-okx-text-secondary text-right self-center text-xs">
+                            {rate}
+                          </span>
+                          <span className={`font-mono font-semibold text-right self-center ${
+                            amt >= 0 ? "text-emerald-400" : "text-rose-400"
+                          }`}>
+                            {amt >= 0 ? "+" : ""}{amt.toFixed(6)} BNB
+                          </span>
+                          <span className="font-mono text-okx-text-tertiary text-right self-center text-xs">
+                            {posSize} BNB
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="py-20 text-center text-okx-text-tertiary text-sm">
+                    <svg className="w-12 h-12 mb-3 opacity-30 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}><path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    No funding fee history
+                  </div>
+                )
+              ) : null}
             </div>
           )}
 

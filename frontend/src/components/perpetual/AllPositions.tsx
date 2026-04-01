@@ -20,6 +20,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useTranslations } from "next-intl";
 import { RiskProgressBarCompact } from "./RiskProgressBar";
+import { PositionRow, computePosition, formatAddress as fmtAddr, formatSmallPrice as fmtPrice, formatETHAmount, type PositionRowData } from "@/components/common/PositionRow";
 import { MATCHING_ENGINE_URL } from "@/config/api";
 
 interface PositionData {
@@ -93,27 +94,8 @@ export function AllPositions({ token, apiUrl = MATCHING_ENGINE_URL }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  // 格式化价格 (Token/ETH, 1e18 精度) — 使用下标格式显示极小数
-  const formatPrice = (price: string) => {
-    const p = Number(price) / 1e18;
-    if (p <= 0) return "0";
-    if (p >= 1000) return p.toLocaleString("en-US", { maximumFractionDigits: 2 });
-    if (p >= 1) return p.toFixed(4);
-    if (p >= 0.01) return p.toFixed(6);
-    if (p >= 0.0001) return p.toFixed(8);
-
-    // 极小数使用下标格式: 0.0₈2359
-    const priceStr = p.toFixed(18);
-    const match = priceStr.match(/^0\.(0*)([1-9]\d*)/);
-    if (match) {
-      const zeroCount = match[1].length;
-      const significantDigits = match[2].slice(0, 4);
-      const subscripts = ["₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉"];
-      const subscriptNum = zeroCount.toString().split("").map((d) => subscripts[parseInt(d)]).join("");
-      return `0.0${subscriptNum}${significantDigits}`;
-    }
-    return p.toFixed(10);
-  };
+  // 格式化价格 — 复用共享工具 (Token/ETH, 1e18 精度)
+  const formatPrice = (price: string) => fmtPrice(Number(price) / 1e18);
 
   // 格式化仓位大小 (1e18 精度)
   const formatSize = (size: string) => {
@@ -133,8 +115,8 @@ export function AllPositions({ token, apiUrl = MATCHING_ENGINE_URL }: Props) {
     return `${v.toFixed(6)} BNB `;
   };
 
-  // 格式化地址
-  const formatAddress = (addr: string) => `${addr.slice(0, 4)}...${addr.slice(-3)}`;
+  // 格式化地址 — 复用共享工具
+  const formatAddress = fmtAddr;
 
   // 格式化 PnL (ETH, 1e18 精度)
   const formatPnL = (pnl: string) => {

@@ -89,6 +89,8 @@ const TF_ABI = [
   { inputs: [{ name: "t", type: "address" }, { name: "m", type: "uint256" }], name: "buy", outputs: [], stateMutability: "payable", type: "function" },
   { inputs: [{ name: "t", type: "address" }, { name: "a", type: "uint256" }, { name: "m", type: "uint256" }], name: "sell", outputs: [], stateMutability: "nonpayable", type: "function" },
   { inputs: [{ name: "t", type: "address" }], name: "getCurrentPrice", outputs: [{ type: "uint256" }], stateMutability: "view", type: "function" },
+  { inputs: [], name: "getAllTokens", outputs: [{ type: "address[]" }], stateMutability: "view", type: "function" },
+  { inputs: [{ name: "t", type: "address" }], name: "tokenInfo", outputs: [{ name: "creator", type: "address" }, { name: "name", type: "string" }, { name: "symbol", type: "string" }, { name: "imageUri", type: "string" }, { name: "description", type: "string" }, { name: "isGraduated", type: "bool" }], stateMutability: "view", type: "function" },
 ] as const;
 
 const EIP712_DOMAIN = { name: "MemePerp" as const, version: "1" as const, chainId: CHAIN_ID, verifyingContract: SETTLEMENT };
@@ -327,6 +329,36 @@ async function submitOrder(w: W, p: { token: Address; isLong: boolean; size: big
 
 async function setup() {
   log("SETUP", "⚡", "═══ HIGH-FREQUENCY MARKET MAKER ═══");
+
+  // Load tokens from TokenFactory if not provided via MM_TOKENS env
+  if (TOKENS.length === 0) {
+    log("SETUP", "🔍", "Loading tokens from TokenFactory...");
+    try {
+      const allTokens = await pub.readContract({
+        address: TOKEN_FACTORY,
+        abi: TF_ABI,
+        functionName: "getAllTokens",
+      }) as Address[];
+      for (const addr of allTokens) {
+        try {
+          const info = await pub.readContract({
+            address: TOKEN_FACTORY,
+            abi: TF_ABI,
+            functionName: "tokenInfo",
+            args: [addr],
+          }) as [Address, string, string, string, string, boolean];
+          const symbol = info[2] || addr.slice(0, 10);
+          TOKENS.push([symbol, addr]);
+        } catch {
+          TOKENS.push([addr.slice(0, 10), addr]);
+        }
+      }
+      log("SETUP", "✅", `Loaded ${TOKENS.length} tokens: ${TOKENS.map(([n]) => n).join(", ")}`);
+    } catch (e: any) {
+      log("SETUP", "❌", `Failed to load tokens: ${e.message?.slice(0, 100)}`);
+      process.exit(1);
+    }
+  }
 
   // Load pre-funded wallets from main-wallets.json (no deployer needed)
   log("SETUP", "📂", `Loading wallets from main-wallets.json`);

@@ -218,6 +218,11 @@ class WebSocketManager {
           if (this.pendingAuthTrader) {
             this.authenticatedTrader = this.pendingAuthTrader;
             this.send({ type: "subscribe_trader", trader: this.pendingAuthTrader });
+            // P1-4: 重连后主动拉取最新状态 — 参考 Drift DriftClient 订阅模型
+            // 确保断线期间的仓位/余额/挂单变化不丢失
+            this.send({ type: "get_positions", trader: this.pendingAuthTrader });
+            this.send({ type: "get_balance", trader: this.pendingAuthTrader });
+            this.send({ type: "get_pending_orders", trader: this.pendingAuthTrader });
             this.pendingAuthTrader = null;
             this.pendingAuthSignFn = null;
           }

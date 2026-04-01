@@ -38,30 +38,14 @@ import { usePoolState } from "@/hooks/spot/usePoolState";
 import { useWalletBalance } from "@/contexts/WalletBalanceContext";
 import { Copy, Check, Key, RefreshCw, ExternalLink, Plus, Minus } from "lucide-react";
 import { MATCHING_ENGINE_URL } from "@/config/api";
+import { PositionRow, computePosition, formatSmallPrice, type PositionRowData } from "@/components/common/PositionRow";
 
 // AUDIT-FIX H-06: Leverage options must match engine MAX_LEVERAGE (10x).
 // Previously allowed up to 100x which caused confusing UX failures when engine rejected >10x.
 // 内盘阶段最大 2.5x 杠杆
 const LEVERAGE_OPTIONS = [1, 1.5, 2, 2.5];
 
-// Format small prices with subscript notation for very small values
-const formatSmallPrice = (price: number): string => {
-  if (price <= 0) return "0.00";
-  if (price >= 1000) return price.toLocaleString("en-US", { maximumFractionDigits: 1 });
-  if (price >= 0.01) return price.toFixed(4);
-  if (price >= 0.0001) return price.toFixed(6);
-  if (price >= 0.000001) return price.toFixed(8);
-  const priceStr = price.toFixed(18);
-  const match = priceStr.match(/^0\.(0*)([1-9]\d*)/);
-  if (match) {
-    const zeroCount = match[1].length;
-    const significantDigits = match[2].slice(0, 5);
-    const subscripts = ["₀", "₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉"];
-    const subscriptNum = zeroCount.toString().split("").map((d) => subscripts[parseInt(d)]).join("");
-    return `0.0${subscriptNum}${significantDigits}`;
-  }
-  return price.toFixed(10);
-};
+// formatSmallPrice imported from @/components/common/PositionRow
 
 interface PerpetualOrderPanelV2Props {
   symbol: string;
@@ -270,27 +254,36 @@ export function PerpetualOrderPanelV2({
   }, [requiredMarginETH]);
 
   // Check if balance is sufficient
-  // 优先使用 WS balance，fallback 到链上余额 (WalletBalanceContext)
+  // 数据源优先级：
+  //   1. 引擎 API balance (包含 settlement 存款 + mode2 调整 + 钱包余额)
+  //   2. 派生钱包链上 BNB (useTradingWallet.ethBalance，最可靠)
+  //   3. WalletBalanceContext (useWalletBalance，wagmi useBalance)
   const { hasSufficientBalance, availableBalanceETH } = useMemo(() => {
-    if (balance) {
-      // WS/HTTP balance available — use engine-reported values
-      const settlementBalanceETH = Number(balance.available) / 1e18;
-      const walletETH = balance.walletBalance ? Number(balance.walletBalance) / 1e18 : 0;
-      const gasReserve = 0.001;
-      const usableWalletETH = walletETH > gasReserve ? walletETH - gasReserve : 0;
-      const totalAvailable = settlementBalanceETH + usableWalletETH;
-      return {
-        hasSufficientBalance: totalAvailable >= requiredMarginETH,
-        availableBalanceETH: totalAvailable,
-      };
+    // 方案：取所有数据源的最大值，确保不会因单一数据源故障而显示 0
+    const gasReserve = 0.001;
+
+    // 数据源 1: 引擎 API (available 已包含 walletBalance，不要重复加)
+    let engineETH = 0;
+    if (balance && balance.available > 0n) {
+      engineETH = Number(balance.available) / 1e18;
     }
-    // Fallback: use on-chain balance from WalletBalanceContext
-    const onChainETH = Number(onChainBalance) / 1e18;
+
+    // 数据源 2: 派生钱包链上 BNB (useTradingWallet 直接读取，最可靠)
+    const directWalletETH = Number(tradingWalletBalance) / 1e18;
+    const usableDirectETH = directWalletETH > gasReserve ? directWalletETH - gasReserve : 0;
+
+    // 数据源 3: WalletBalanceContext (wagmi useBalance)
+    const contextETH = Number(onChainBalance) / 1e18;
+
+    // 取最大值：引擎余额通常最全（包含 settlement + mode2），但可能不可用
+    // 派生钱包 BNB 最可靠（直接读链上）
+    const bestAvailable = Math.max(engineETH, usableDirectETH, contextETH);
+
     return {
-      hasSufficientBalance: onChainETH >= requiredMarginETH,
-      availableBalanceETH: onChainETH,
+      hasSufficientBalance: bestAvailable >= requiredMarginETH,
+      availableBalanceETH: bestAvailable,
     };
-  }, [balance, onChainBalance, requiredMarginETH]);
+  }, [balance, tradingWalletBalance, onChainBalance, requiredMarginETH]);
 
   // Find positions for current token
   const currentTokenPositions = useMemo(() => {
@@ -1160,142 +1153,48 @@ export function PerpetualOrderPanelV2({
           </div>
           <div className="space-y-2">
             {currentTokenPositions.map((pos) => {
-              // ETH 本位精度转换 (全部 1e18)
-              const sizeETH = Number(pos.size) / 1e18;
-              const entryPrice = Number(pos.entryPrice) / 1e18;
-              const leverage = parseFloat(pos.leverage);
-              const collateralETH = Number(pos.collateral) / 1e18;
-              // 使用链上实时价格计算 PnL (GMX 标准)
-              const realtimePrice = spotPriceBigInt ? Number(spotPriceBigInt) / 1e18 : Number(pos.markPrice || pos.entryPrice) / 1e18;
-              const pnlDelta = entryPrice > 0 ? sizeETH * Math.abs(realtimePrice - entryPrice) / entryPrice : 0;
-              const hasProfit = pos.isLong ? (realtimePrice > entryPrice) : (entryPrice > realtimePrice);
-              const pnlETH = hasProfit ? pnlDelta : -pnlDelta;
-              // Extended position metrics
-              const liqPrice = Number(pos.liquidationPrice || "0") / 1e18;
-              const mmr = parseFloat(String(pos.mmr || "200")) / 100;
-              const equity = collateralETH + pnlETH;
-              const maintenanceMargin = sizeETH * (mmr / 100);
-              const marginRatio = equity > 0 ? (maintenanceMargin / equity) * 100 : 999;
-              const roe = collateralETH > 0 ? (pnlETH / collateralETH) * 100 : 0;
-              const fundingFeeETH = Number(pos.fundingFee || "0") / 1e18;
-              const tpPrice = pos.takeProfitPrice ? Number(pos.takeProfitPrice) / 1e18 : null;
-              const slPrice = pos.stopLossPrice ? Number(pos.stopLossPrice) / 1e18 : null;
-              const riskLevel = marginRatio > 50 ? 3 : marginRatio > 30 ? 2 : marginRatio > 15 ? 1 : 0;
-              const riskBarColor = riskLevel >= 3 ? "bg-red-500" : riskLevel >= 2 ? "bg-orange-500" : riskLevel >= 1 ? "bg-yellow-500" : "bg-green-500";
-              const riskBarWidth = Math.min(marginRatio, 100);
+              // Compute realtime price for live PnL (use spot feed if available)
+              const livePrice = spotPriceBigInt ? Number(spotPriceBigInt) / 1e18 : undefined;
 
               return (
-                <div
+                <PositionRow
                   key={pos.pairId}
-                  className="bg-okx-bg-hover rounded-lg p-2.5 text-[11px]"
-                >
-                  {/* Header: Direction + PnL */}
-                  <div className="flex justify-between items-center mb-2">
-                    <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold ${
-                      pos.isLong
-                        ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/20"
-                        : "bg-rose-500/15 text-rose-400 border border-rose-500/20"
-                    }`}>
-                      {pos.isLong ? "▲" : "▼"} {pos.isLong ? t("long") : t("short")} {leverage}x
-                    </span>
-                    <div className="text-right">
-                      <span className={`font-semibold ${pnlETH >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                        {pnlETH >= 0 ? "+" : ""}{Math.abs(pnlETH) >= 1 ? pnlETH.toFixed(4) : pnlETH.toFixed(6)} BNB
-                      </span>
-                      <span className={`ml-1 text-[10px] ${roe >= 0 ? "text-emerald-400/70" : "text-rose-400/70"}`}>
-                        ({roe >= 0 ? "+" : ""}{roe.toFixed(2)}%)
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* 2-Column Data Grid */}
-                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 mb-2">
-                    <div className="flex justify-between">
-                      <span className="text-okx-text-tertiary">{t("size")}</span>
-                      <span className="text-okx-text-primary font-mono">{sizeETH >= 1 ? sizeETH.toFixed(4) : sizeETH.toFixed(6)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-okx-text-tertiary">{t("markPrice")}</span>
-                      <span className="text-okx-text-secondary font-mono">{formatSmallPrice(realtimePrice)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-okx-text-tertiary">{t("entryAvg") || "Entry"}</span>
-                      <span className="text-okx-text-primary font-mono">{formatSmallPrice(entryPrice)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-okx-text-tertiary">{t("liqPrice")}</span>
-                      <span className={`font-mono ${pos.isLong ? "text-rose-400/80" : "text-emerald-400/80"}`}>
-                        {liqPrice > 0 ? formatSmallPrice(liqPrice) : "—"}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-okx-text-tertiary">{t("margin")}</span>
-                      <span className="text-okx-text-primary font-mono">{collateralETH >= 1 ? collateralETH.toFixed(4) : collateralETH.toFixed(5)}</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-okx-text-tertiary">{t("marginRatio") || "Margin %"}</span>
-                      <div className="flex items-center gap-1">
-                        <div className="w-8 h-1 bg-okx-bg-tertiary rounded-full overflow-hidden">
-                          <div className={`h-full rounded-full ${riskBarColor}`} style={{ width: `${riskBarWidth}%` }} />
-                        </div>
-                        <span className={`font-mono text-[10px] ${riskLevel >= 2 ? "text-orange-400" : "text-okx-text-tertiary"}`}>
-                          {marginRatio.toFixed(1)}%
-                        </span>
-                      </div>
-                    </div>
-                    {fundingFeeETH !== 0 && (
-                      <>
-                        <div className="flex justify-between col-span-2">
-                          <span className="text-okx-text-tertiary">{t("fundingFee") || "Funding"}</span>
-                          <span className={`font-mono ${fundingFeeETH >= 0 ? "text-emerald-400/70" : "text-rose-400/70"}`}>
-                            {fundingFeeETH >= 0 ? "+" : ""}{fundingFeeETH.toFixed(6)} BNB
-                          </span>
-                        </div>
-                      </>
-                    )}
-                    {(tpPrice || slPrice) && (
-                      <div className="flex justify-between col-span-2">
-                        <span className="text-okx-text-tertiary">TP/SL</span>
-                        <span className="font-mono">
-                          {tpPrice ? <span className="text-emerald-400/70">{formatSmallPrice(tpPrice)}</span> : <span className="text-okx-text-tertiary">—</span>}
-                          <span className="text-okx-text-tertiary mx-0.5">/</span>
-                          {slPrice ? <span className="text-rose-400/70">{formatSmallPrice(slPrice)}</span> : <span className="text-okx-text-tertiary">—</span>}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Action Buttons */}
-                  <div className="flex gap-1.5">
-                    <button
-                      onClick={() => setMarginModal({ pairId: pos.pairId, action: "add", collateral: collateralETH })}
-                      className="py-1.5 px-2 text-xs bg-okx-bg-tertiary hover:bg-okx-up/20 text-okx-up border border-okx-up/30 rounded transition-colors"
-                      title={t("adjustMargin") || "Add Margin"}
-                    >
-                      <Plus size={12} />
-                    </button>
-                    <button
-                      onClick={() => setMarginModal({ pairId: pos.pairId, action: "remove", collateral: collateralETH })}
-                      className="py-1.5 px-2 text-xs bg-okx-bg-tertiary hover:bg-okx-down/20 text-okx-down border border-okx-down/30 rounded transition-colors"
-                      title={t("adjustMargin") || "Remove Margin"}
-                    >
-                      <Minus size={12} />
-                    </button>
-                    <button
-                      onClick={() => setTpslModal({ pairId: pos.pairId, isLong: pos.isLong, entryPrice, liqPrice })}
-                      className="py-1.5 px-2 text-[10px] text-okx-text-tertiary border border-white/[0.06] hover:text-amber-400 hover:border-amber-500/30 rounded transition-colors"
-                    >
-                      TP/SL
-                    </button>
-                    <button
-                      onClick={() => handleClosePosition(pos.pairId)}
-                      disabled={isSubmittingOrder || isPending}
-                      className="flex-1 py-1.5 text-xs bg-okx-down/80 hover:bg-okx-down text-white rounded disabled:opacity-50 transition-colors"
-                    >
-                      {t("marketClose") || "Close"}
-                    </button>
-                  </div>
-                </div>
+                  position={pos as PositionRowData}
+                  variant="card"
+                  realtimePrice={livePrice}
+                  t={t}
+                  renderActions={(p, computed) => (
+                    <>
+                      <button
+                        onClick={() => setMarginModal({ pairId: p.pairId, action: "add", collateral: computed.collateralETH })}
+                        className="py-1.5 px-2 text-xs bg-okx-bg-tertiary hover:bg-okx-up/20 text-okx-up border border-okx-up/30 rounded transition-colors"
+                        title={t("adjustMargin") || "Add Margin"}
+                      >
+                        <Plus size={12} />
+                      </button>
+                      <button
+                        onClick={() => setMarginModal({ pairId: p.pairId, action: "remove", collateral: computed.collateralETH })}
+                        className="py-1.5 px-2 text-xs bg-okx-bg-tertiary hover:bg-okx-down/20 text-okx-down border border-okx-down/30 rounded transition-colors"
+                        title={t("adjustMargin") || "Remove Margin"}
+                      >
+                        <Minus size={12} />
+                      </button>
+                      <button
+                        onClick={() => setTpslModal({ pairId: p.pairId, isLong: p.isLong, entryPrice: computed.entryPrice, liqPrice: computed.liqPrice })}
+                        className="py-1.5 px-2 text-[10px] text-okx-text-tertiary border border-white/[0.06] hover:text-amber-400 hover:border-amber-500/30 rounded transition-colors"
+                      >
+                        TP/SL
+                      </button>
+                      <button
+                        onClick={() => handleClosePosition(p.pairId)}
+                        disabled={isSubmittingOrder || isPending}
+                        className="flex-1 py-1.5 text-xs bg-okx-down/80 hover:bg-okx-down text-white rounded disabled:opacity-50 transition-colors"
+                      >
+                        {t("marketClose") || "Close"}
+                      </button>
+                    </>
+                  )}
+                />
               );
             })}
           </div>

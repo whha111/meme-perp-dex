@@ -19,6 +19,7 @@
 
 import { useState, useCallback, useMemo, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAccount } from "wagmi";
 import type { Address, Hex } from "viem";
 import { createWalletClient, createPublicClient, http, keccak256, parseEther } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -286,7 +287,11 @@ function toOrderInfo(o: OrderDetails): OrderInfo {
 // ============================================================
 
 export function usePerpetualV2(props?: UsePerpetualV2Props): UsePerpetualV2Return {
-  const { tradingWalletAddress, tradingWalletSignature, mainWalletAddress } = props || {};
+  const { tradingWalletAddress, tradingWalletSignature, mainWalletAddress: propsMainWallet } = props || {};
+
+  // Auto-detect main wallet from wagmi if not provided via props
+  const { address: wagmiAddress } = useAccount();
+  const mainWalletAddress = propsMainWallet || wagmiAddress;
 
   const queryClient = useQueryClient();
 
@@ -356,18 +361,21 @@ export function usePerpetualV2(props?: UsePerpetualV2Props): UsePerpetualV2Retur
   }, [wsConnected, tradingWalletAddress, tradingWalletSignature]);
 
   // ── Balance: WS primary (via subscribe_trader), HTTP for initial load ──
-  // 余额查询用主钱包地址（引擎用主钱包地址→派生钱包映射查链上余额）
+  // 余额查询用派生钱包地址（引擎余额绑定在派生钱包上）
+  // 如果没有派生钱包，fallback 到主钱包地址
+  const balanceQueryAddress = tradingWalletAddress || mainWalletAddress;
   const {
     data: httpBalance,
     isLoading: isBalanceLoading,
   } = useQuery({
-    queryKey: ["perpetual-balance", mainWalletAddress],
-    queryFn: () => fetchBalance(mainWalletAddress!),
-    enabled: !!mainWalletAddress,
+    queryKey: ["perpetual-balance", balanceQueryAddress],
+    queryFn: () => fetchBalance(balanceQueryAddress!),
+    enabled: !!balanceQueryAddress,
     retry: 2,
-    staleTime: Infinity,           // No auto-refetch; WS handles real-time updates
-    refetchOnWindowFocus: false,
-    refetchOnMount: true,          // Fetch once on mount
+    staleTime: 30_000,             // 30s 后视为过期，允许后台刷新
+    refetchInterval: 30_000,       // 每 30s 兜底轮询（WS 不可靠时）
+    refetchOnWindowFocus: true,    // 切回窗口时刷新
+    refetchOnMount: true,          // 挂载时刷新
   });
 
   // WS balance from tradingDataStore (set by useUnifiedWebSocket on `balance` message)
