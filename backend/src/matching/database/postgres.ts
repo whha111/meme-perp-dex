@@ -168,6 +168,7 @@ export async function connectPostgres(): Promise<boolean> {
 
     // 自动创建镜像表
     await ensureMirrorTable();
+    await ensureP1Tables();
 
     isConnected = true;
     return true;
@@ -798,6 +799,345 @@ export const PositionMirrorRepo = {
     }
   },
 };
+
+// ============================================================
+// Trade Mirror Repository (P0-2: 成交记录持久化)
+// ============================================================
+
+export interface PgTradeMirror {
+  id: string;
+  order_id: string;
+  pair_id: string;
+  token: string;
+  trader: string;
+  is_long: boolean;
+  is_maker: boolean;
+  size: string;
+  price: string;
+  fee: string;
+  realized_pnl: string;
+  timestamp: number;
+  type: string;
+}
+
+export const TradeMirrorRepo = {
+  async upsert(trade: PgTradeMirror): Promise<void> {
+    if (!sql || !isConnected) return;
+
+    try {
+      await sql`
+        INSERT INTO perp_trade_mirror (
+          id, order_id, pair_id, token, trader, is_long, is_maker,
+          size, price, fee, realized_pnl, timestamp, type
+        ) VALUES (
+          ${trade.id}, ${trade.order_id}, ${trade.pair_id}, ${trade.token},
+          ${trade.trader}, ${trade.is_long}, ${trade.is_maker},
+          ${trade.size}, ${trade.price}, ${trade.fee}, ${trade.realized_pnl},
+          ${trade.timestamp}, ${trade.type}
+        )
+        ON CONFLICT (id) DO NOTHING
+      `;
+    } catch (error: any) {
+      logger.error("Postgres", `Failed to upsert trade ${trade.id}: ${error.message}`);
+    }
+  },
+
+  async getByTrader(trader: string, limit = 100): Promise<PgTradeMirror[]> {
+    if (!sql || !isConnected) return [];
+
+    try {
+      const rows = await sql<PgTradeMirror[]>`
+        SELECT * FROM perp_trade_mirror
+        WHERE trader = ${trader.toLowerCase()}
+        ORDER BY timestamp DESC
+        LIMIT ${limit}
+      `;
+      return rows;
+    } catch (error: any) {
+      logger.error("Postgres", `Failed to get trades for ${trader}: ${error.message}`);
+      return [];
+    }
+  },
+};
+
+// ============================================================
+// Bill Mirror Repository (P0-2: 资金流水持久化)
+// ============================================================
+
+export interface PgBill {
+  id: string;
+  trader: string;
+  type: string; // DEPOSIT, WITHDRAW, TRADE_PNL, FEE, FUNDING, LIQUIDATION, ADL
+  amount: string;
+  balance_after: string;
+  position_id?: string;
+  order_id?: string;
+  token?: string;
+  reason?: string;
+  timestamp: number;
+}
+
+export const BillMirrorRepo = {
+  async insert(bill: PgBill): Promise<void> {
+    if (!sql || !isConnected) return;
+
+    try {
+      await sql`
+        INSERT INTO perp_bills (
+          id, trader, type, amount, balance_after,
+          position_id, order_id, token, reason, timestamp
+        ) VALUES (
+          ${bill.id}, ${bill.trader}, ${bill.type}, ${bill.amount},
+          ${bill.balance_after}, ${bill.position_id || null}, ${bill.order_id || null},
+          ${bill.token || null}, ${bill.reason || null}, ${bill.timestamp}
+        )
+        ON CONFLICT (id) DO NOTHING
+      `;
+    } catch (error: any) {
+      logger.error("Postgres", `Failed to insert bill ${bill.id}: ${error.message}`);
+    }
+  },
+
+  async getByTrader(trader: string, limit = 100, type?: string): Promise<PgBill[]> {
+    if (!sql || !isConnected) return [];
+
+    try {
+      if (type) {
+        return await sql<PgBill[]>`
+          SELECT * FROM perp_bills
+          WHERE trader = ${trader.toLowerCase()} AND type = ${type}
+          ORDER BY timestamp DESC
+          LIMIT ${limit}
+        `;
+      }
+      return await sql<PgBill[]>`
+        SELECT * FROM perp_bills
+        WHERE trader = ${trader.toLowerCase()}
+        ORDER BY timestamp DESC
+        LIMIT ${limit}
+      `;
+    } catch (error: any) {
+      logger.error("Postgres", `Failed to get bills for ${trader}: ${error.message}`);
+      return [];
+    }
+  },
+};
+
+// ============================================================
+// Mode2 Adjustment Mirror (P0-2: 链下盈亏调整持久化)
+// ============================================================
+
+export const Mode2AdjustmentMirrorRepo = {
+  async upsert(trader: string, cumulativeAmount: string, deltaAmount: string, reason: string): Promise<void> {
+    if (!sql || !isConnected) return;
+
+    try {
+      const now = Date.now();
+      // Upsert cumulative value
+      await sql`
+        INSERT INTO perp_mode2_adjustments (trader, cumulative_amount, updated_at)
+        VALUES (${trader.toLowerCase()}, ${cumulativeAmount}, ${now})
+        ON CONFLICT (trader) DO UPDATE SET
+          cumulative_amount = EXCLUDED.cumulative_amount,
+          updated_at = EXCLUDED.updated_at
+      `;
+      // Append audit log entry
+      await sql`
+        INSERT INTO perp_mode2_log (trader, amount, reason, cumulative_after, timestamp)
+        VALUES (${trader.toLowerCase()}, ${deltaAmount}, ${reason}, ${cumulativeAmount}, ${now})
+      `;
+    } catch (error: any) {
+      logger.error("Postgres", `Failed to upsert mode2 for ${trader}: ${error.message}`);
+    }
+  },
+
+  async getByTrader(trader: string): Promise<{ cumulative_amount: string; updated_at: number } | null> {
+    if (!sql || !isConnected) return null;
+
+    try {
+      const [row] = await sql`
+        SELECT cumulative_amount, updated_at FROM perp_mode2_adjustments
+        WHERE trader = ${trader.toLowerCase()}
+      `;
+      return row ? { cumulative_amount: row.cumulative_amount as string, updated_at: Number(row.updated_at) } : null;
+    } catch (error: any) {
+      logger.error("Postgres", `Failed to get mode2 for ${trader}: ${error.message}`);
+      return null;
+    }
+  },
+
+  async getAll(): Promise<Map<string, bigint>> {
+    if (!sql || !isConnected) return new Map();
+
+    try {
+      const rows = await sql`SELECT trader, cumulative_amount FROM perp_mode2_adjustments`;
+      const result = new Map<string, bigint>();
+      for (const row of rows) {
+        result.set(row.trader as string, BigInt(row.cumulative_amount as string));
+      }
+      return result;
+    } catch (error: any) {
+      logger.error("Postgres", `Failed to get all mode2 adjustments: ${error.message}`);
+      return new Map();
+    }
+  },
+};
+
+// ============================================================
+// Balance Snapshot Repository (P1-1: 定期余额快照)
+// ============================================================
+
+export interface PgBalanceSnapshot {
+  trader: string;
+  total_balance: string;
+  available_balance: string;
+  used_margin: string;
+  frozen_margin: string;
+  unrealized_pnl: string;
+  settlement_available: string;
+  mode2_adjustment: string;
+  snapshot_time: number;
+}
+
+export const BalanceSnapshotRepo = {
+  async upsertBatch(snapshots: PgBalanceSnapshot[]): Promise<number> {
+    if (!sql || !isConnected || snapshots.length === 0) return 0;
+
+    try {
+      // Use a transaction for batch upsert
+      let count = 0;
+      for (const snap of snapshots) {
+        await sql`
+          INSERT INTO perp_balance_snapshots (
+            trader, total_balance, available_balance, used_margin,
+            frozen_margin, unrealized_pnl, settlement_available,
+            mode2_adjustment, snapshot_time
+          ) VALUES (
+            ${snap.trader}, ${snap.total_balance}, ${snap.available_balance},
+            ${snap.used_margin}, ${snap.frozen_margin}, ${snap.unrealized_pnl},
+            ${snap.settlement_available}, ${snap.mode2_adjustment}, ${snap.snapshot_time}
+          )
+          ON CONFLICT (trader) DO UPDATE SET
+            total_balance = EXCLUDED.total_balance,
+            available_balance = EXCLUDED.available_balance,
+            used_margin = EXCLUDED.used_margin,
+            frozen_margin = EXCLUDED.frozen_margin,
+            unrealized_pnl = EXCLUDED.unrealized_pnl,
+            settlement_available = EXCLUDED.settlement_available,
+            mode2_adjustment = EXCLUDED.mode2_adjustment,
+            snapshot_time = EXCLUDED.snapshot_time
+        `;
+        count++;
+      }
+      return count;
+    } catch (error: any) {
+      logger.error("Postgres", `Failed to upsert balance snapshots: ${error.message}`);
+      return 0;
+    }
+  },
+
+  async getAll(): Promise<PgBalanceSnapshot[]> {
+    if (!sql || !isConnected) return [];
+
+    try {
+      return await sql<PgBalanceSnapshot[]>`SELECT * FROM perp_balance_snapshots`;
+    } catch (error: any) {
+      logger.error("Postgres", `Failed to get balance snapshots: ${error.message}`);
+      return [];
+    }
+  },
+};
+
+// ============================================================
+// Additional mirror tables (P0-2 / P1-1)
+// ============================================================
+
+async function ensureP1Tables(): Promise<void> {
+  if (!sql) return;
+
+  // Trade mirror table
+  await sql`
+    CREATE TABLE IF NOT EXISTS perp_trade_mirror (
+      id VARCHAR(64) PRIMARY KEY,
+      order_id VARCHAR(64) NOT NULL,
+      pair_id VARCHAR(256),
+      token VARCHAR(42) NOT NULL,
+      trader VARCHAR(42) NOT NULL,
+      is_long BOOLEAN NOT NULL,
+      is_maker BOOLEAN NOT NULL,
+      size VARCHAR(78) NOT NULL,
+      price VARCHAR(78) NOT NULL,
+      fee VARCHAR(78) NOT NULL DEFAULT '0',
+      realized_pnl VARCHAR(78) NOT NULL DEFAULT '0',
+      timestamp BIGINT NOT NULL,
+      type VARCHAR(32) NOT NULL DEFAULT 'normal'
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_ptm_trader ON perp_trade_mirror(trader)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_ptm_token ON perp_trade_mirror(token)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_ptm_timestamp ON perp_trade_mirror(timestamp)`;
+  logger.info("Postgres", "Mirror table ready: perp_trade_mirror");
+
+  // Bills table (append-only ledger)
+  await sql`
+    CREATE TABLE IF NOT EXISTS perp_bills (
+      id VARCHAR(64) PRIMARY KEY,
+      trader VARCHAR(42) NOT NULL,
+      type VARCHAR(32) NOT NULL,
+      amount VARCHAR(78) NOT NULL,
+      balance_after VARCHAR(78) NOT NULL DEFAULT '0',
+      position_id VARCHAR(256),
+      order_id VARCHAR(64),
+      token VARCHAR(42),
+      reason TEXT,
+      timestamp BIGINT NOT NULL
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_pb_trader ON perp_bills(trader)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_pb_type ON perp_bills(trader, type)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_pb_timestamp ON perp_bills(timestamp)`;
+  logger.info("Postgres", "Mirror table ready: perp_bills");
+
+  // Mode2 adjustments (cumulative per-trader)
+  await sql`
+    CREATE TABLE IF NOT EXISTS perp_mode2_adjustments (
+      trader VARCHAR(42) PRIMARY KEY,
+      cumulative_amount VARCHAR(78) NOT NULL DEFAULT '0',
+      updated_at BIGINT NOT NULL
+    )
+  `;
+  logger.info("Postgres", "Mirror table ready: perp_mode2_adjustments");
+
+  // Mode2 audit log (append-only)
+  await sql`
+    CREATE TABLE IF NOT EXISTS perp_mode2_log (
+      id SERIAL PRIMARY KEY,
+      trader VARCHAR(42) NOT NULL,
+      amount VARCHAR(78) NOT NULL,
+      reason TEXT,
+      cumulative_after VARCHAR(78) NOT NULL,
+      timestamp BIGINT NOT NULL
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_pml_trader ON perp_mode2_log(trader)`;
+  logger.info("Postgres", "Mirror table ready: perp_mode2_log");
+
+  // Balance snapshots (one row per trader, updated periodically)
+  await sql`
+    CREATE TABLE IF NOT EXISTS perp_balance_snapshots (
+      trader VARCHAR(42) PRIMARY KEY,
+      total_balance VARCHAR(78) NOT NULL DEFAULT '0',
+      available_balance VARCHAR(78) NOT NULL DEFAULT '0',
+      used_margin VARCHAR(78) NOT NULL DEFAULT '0',
+      frozen_margin VARCHAR(78) NOT NULL DEFAULT '0',
+      unrealized_pnl VARCHAR(78) NOT NULL DEFAULT '0',
+      settlement_available VARCHAR(78) NOT NULL DEFAULT '0',
+      mode2_adjustment VARCHAR(78) NOT NULL DEFAULT '0',
+      snapshot_time BIGINT NOT NULL
+    )
+  `;
+  logger.info("Postgres", "Mirror table ready: perp_balance_snapshots");
+}
 
 // ============================================================
 // Wallet Repository (Placeholder - 未来实现)

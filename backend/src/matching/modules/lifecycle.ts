@@ -60,12 +60,22 @@ export interface ActivationCriteria {
   minBCProgressPct: number;     // BC 进度百分比
 }
 
-const ACTIVATION_THRESHOLDS: ActivationCriteria = {
-  minLiquidityBNB: 15n * 10n ** 18n,  // 15 BNB
-  minHolders: 500,
-  minVolume1hBNB: 30n * 10n ** 18n,   // 30 BNB
-  minBCProgressPct: 60,
-};
+// Testnet mode: drastically lower thresholds for development/testing
+const IS_TESTNET = process.env.CHAIN_ID === "97" || process.env.NODE_ENV === "test";
+
+const ACTIVATION_THRESHOLDS: ActivationCriteria = IS_TESTNET
+  ? {
+      minLiquidityBNB: 0n,                // no liquidity requirement (testnet)
+      minHolders: 0,
+      minVolume1hBNB: 0n,                 // no volume requirement (testnet)
+      minBCProgressPct: 0,
+    }
+  : {
+      minLiquidityBNB: 15n * 10n ** 18n,  // 15 BNB
+      minHolders: 500,
+      minVolume1hBNB: 30n * 10n ** 18n,   // 30 BNB
+      minBCProgressPct: 60,
+    };
 
 // 热度升级门槛
 interface HeatThresholds {
@@ -78,12 +88,19 @@ interface HeatThresholds {
   hotHolders: number;
 }
 
-const HEAT_THRESHOLDS: HeatThresholds = {
-  activeVolume1h: 30n * 10n ** 18n,   // 30 BNB
-  activeHolders: 500,
-  hotVolume1h: 100n * 10n ** 18n,     // 100 BNB
-  hotHolders: 2000,
-};
+const HEAT_THRESHOLDS: HeatThresholds = IS_TESTNET
+  ? {
+      activeVolume1h: 0n,
+      activeHolders: 1,
+      hotVolume1h: 1n * 10n ** 16n,     // 0.01 BNB (testnet)
+      hotHolders: 5,
+    }
+  : {
+      activeVolume1h: 30n * 10n ** 18n,   // 30 BNB
+      activeHolders: 500,
+      hotVolume1h: 100n * 10n ** 18n,     // 100 BNB
+      hotHolders: 2000,
+    };
 
 // ============================================================
 // 阶段参数 (内盘 vs 毕业 vs 热门DEX)
@@ -197,10 +214,13 @@ export function initializeTokenLifecycle(
     lastActivityTime: now,
   };
 
-  tokenLifecycles.set(token, info);
-  hourlyTrades.set(token, []);
+  const key = token.toLowerCase() as Address;
+  tokenLifecycles.set(key, info);
+  hourlyTrades.set(key, []);
 
-  logger.info("Lifecycle", `Initialized token ${token.slice(0, 10)} → INACTIVE`);
+  // Immediately evaluate state with initial data
+  evaluateState(info);
+  logger.info("Lifecycle", `Initialized token ${token.slice(0, 10)} → ${info.state}`);
   return info;
 }
 

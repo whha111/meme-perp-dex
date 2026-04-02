@@ -289,19 +289,28 @@ export async function checkFundingLiquidations(token: Address, maintenanceMargin
   for (const position of positions) {
     if (position.status !== 0) continue;
 
-    // Calculate notional value in ETH to determine maintenance margin requirement
-    // position.size = token quantity (1e18), position.entryPrice = ETH/Token (1e18)
-    const notionalETH = position.entryPrice > 0n
-      ? (position.size * position.entryPrice) / (10n ** 18n)
-      : position.size;
-
-    // Maintenance margin = notional × MMR / 10000
-    const maintenanceMargin = (notionalETH * maintenanceMarginRate) / RATE_PRECISION;
-
-    // Compare actual collateral (already reduced by settleFunding) against maintenance margin
-    if (position.collateral <= maintenanceMargin) {
+    // ★ FIX: 用实际 collateral 和 maintenanceMargin 比较，而不是固定的初始保证金率
+    // 资金费会持续扣减 collateral，当 collateral 不足以覆盖维持保证金时应触发清算
+    const collateral = position.collateral;
+    if (collateral <= 0n) {
       needsLiquidation.push(position);
-      logger.warn("Funding", `Position ${position.id} needs liquidation after funding: collateral=${position.collateral}, maintenanceMargin=${maintenanceMargin}`);
+      logger.warn("Funding", `Position ${position.id} needs liquidation: collateral depleted (${collateral})`);
+      continue;
+    }
+
+    // 计算维持保证金: positionValue * MMR / 10000
+    // positionValue = size (已经是 ETH 名义价值)
+    const positionValue = position.size;
+    const initialMarginRate = 10000n * 10000n / position.leverage;
+    const maxMmr = initialMarginRate / 2n;
+    const mmr = maintenanceMarginRate < maxMmr ? maintenanceMarginRate : maxMmr;
+    const maintenanceMargin = (positionValue * mmr) / 10000n;
+
+    // 保证金率 = maintenanceMargin / collateral * 10000
+    // >= 10000 (100%) 表示 collateral 不足以覆盖维持保证金
+    if (collateral <= maintenanceMargin) {
+      needsLiquidation.push(position);
+      logger.warn("Funding", `Position ${position.id} needs liquidation after funding: collateral=${collateral}, maintenanceMargin=${maintenanceMargin}`);
     }
   }
 

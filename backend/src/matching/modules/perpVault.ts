@@ -307,13 +307,9 @@ export function updateGraduatedTokens(tokens: Map<string, any>): void {
 
 /**
  * Determine whether OI should be tracked for a given token.
- * - If SKIP_OI_TRACKING=true: only track graduated (DEX) tokens
- * - Otherwise: track all tokens
+ * LP 作为对手方后，所有活跃代币都需要追踪 OI 以防过度敞口。
  */
-function shouldTrackOI(token: Address): boolean {
-  if (process.env.SKIP_OI_TRACKING === "true") {
-    return graduatedTokensSet.has(token.toLowerCase());
-  }
+function shouldTrackOI(_token: Address): boolean {
   return true;
 }
 
@@ -584,6 +580,25 @@ export async function getMaxPositionMargin(
 ): Promise<bigint> {
   const oiCap = await getDynamicOICap(insuranceFundBalance, coverageRatioPct);
   return oiCap / 10n; // 单仓 = tokenOI × 10%
+}
+
+/**
+ * 获取某代币的 OI 剩余可用额度 (LP fill 用)
+ */
+export async function getAvailableOIHeadroom(
+  token: Address,
+  insuranceFundBalance: bigint,
+  coverageRatioPct: number
+): Promise<bigint> {
+  if (!isPerpVaultEnabled()) return 0n;
+  try {
+    const oiCap = await getDynamicOICap(insuranceFundBalance, coverageRatioPct);
+    const { longOI, shortOI } = await getTokenOI(token);
+    const currentOI = longOI + shortOI;
+    return oiCap > currentOI ? oiCap - currentOI : 0n;
+  } catch {
+    return 0n;
+  }
 }
 
 /**

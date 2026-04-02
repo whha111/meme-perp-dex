@@ -7,7 +7,7 @@ import { bscTestnet } from "viem/chains";
 import { privateKeyToAccount } from "viem/accounts";
 
 const RPC_URL = "https://data-seed-prebsc-1-s1.binance.org:8545/";
-const TOKEN_FACTORY = "0x22276744bAF24eD503dB50Cc999a9c5AD62728cb" as const;
+const TOKEN_FACTORY = "0xB40541Ff9f24883149fc6F9CD1021dB9C7BCcB83" as const;
 // AUDIT-FIX DP-C01: Private key from env (never hardcode)
 const PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY || process.env.PRIVATE_KEY;
 if (!PRIVATE_KEY) throw new Error("Set DEPLOYER_PRIVATE_KEY or PRIVATE_KEY env var");

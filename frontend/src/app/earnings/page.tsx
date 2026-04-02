@@ -661,7 +661,7 @@ export default function EarningsPage() {
                         <div className="space-y-1 text-xs">
                           <div className="flex justify-between">
                             <span className="text-okx-text-secondary">{t("perpTradingFee")}</span>
-                            <span>0.05%</span>
+                            <span>Taker 0.05% / Maker 0.03%</span>
                           </div>
                           <div className="flex justify-between">
                             <span className="text-okx-text-secondary">{t("perpLevel1Share")}</span>

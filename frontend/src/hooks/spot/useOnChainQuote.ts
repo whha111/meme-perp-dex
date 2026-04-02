@@ -75,6 +75,17 @@ const TOKEN_FACTORY_ABI = [
     ],
     stateMutability: "view",
   },
+  {
+    type: "function",
+    name: "getGraduationInfo",
+    inputs: [{ name: "tokenAddress", type: "address" }],
+    outputs: [
+      { name: "remainingTokens", type: "uint256" },
+      { name: "ethNeeded", type: "uint256" },
+      { name: "progressBps", type: "uint256" },
+    ],
+    stateMutability: "view",
+  },
 ] as const;
 
 interface QuoteResult {
@@ -320,6 +331,32 @@ export function useCurrentPrice(tokenAddress: Address | null) {
     currentPrice: data as bigint | undefined,
     isLoading,
     isError,
+    refetch,
+  };
+}
+
+/**
+ * useGraduationInfo - 获取毕业进度信息（剩余代币 + 所需 ETH）
+ */
+export function useGraduationInfo(tokenAddress: Address | null, isGraduated?: boolean) {
+  const { data, isLoading, refetch } = useReadContract({
+    address: CONTRACTS.TOKEN_FACTORY,
+    abi: TOKEN_FACTORY_ABI,
+    functionName: "getGraduationInfo",
+    args: tokenAddress ? [tokenAddress] : undefined,
+    query: {
+      enabled: !!tokenAddress && !isGraduated,
+      refetchInterval: 5000,
+    },
+  });
+
+  const result = data as [bigint, bigint, bigint] | undefined;
+
+  return {
+    remainingTokens: result?.[0] ?? 0n,
+    ethNeeded: result?.[1] ?? 0n,
+    progressBps: result?.[2] ?? 0n,
+    isLoading,
     refetch,
   };
 }

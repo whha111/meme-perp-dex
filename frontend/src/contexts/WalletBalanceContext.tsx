@@ -145,11 +145,8 @@ export function WalletBalanceProvider({
     if (storeBalance && hasWsBalance.current) {
       // WS 引擎余额: available(可用) + locked(已锁定保证金)
       // 这是撮合引擎计算的真实余额，包含 mode2Adj 修正
-      const wsTotal = storeBalance.available + storeBalance.locked;
-      // 取 WS 余额和链上余额的较大值
-      // 因为链上结算有延迟，WS 值通常更大（包含未结算的盈利）
-      const onChainTotal = walletOnlyBalance + lockedMargin;
-      return wsTotal > onChainTotal ? wsTotal : onChainTotal;
+      // ★ FIX: 直接用 WS 值，不再取 max — 旧逻辑导致 stale 高值永远不降
+      return storeBalance.available + storeBalance.locked;
     }
     // 兜底: WS 未连接时用链上余额
     return walletOnlyBalance + lockedMargin;
@@ -190,16 +187,17 @@ export function WalletBalanceProvider({
   const lastUpdated = dataUpdatedAt || 0;
 
   // 导出的可用余额和锁定保证金也优先使用 WS 数据
+  // ★ FIX: 直接用 WS 值，不再取 max — 旧 max 逻辑导致余额只升不降
   const effectiveAvailable = useMemo(() => {
     if (storeBalance && hasWsBalance.current) {
-      return storeBalance.available > walletOnlyBalance ? storeBalance.available : walletOnlyBalance;
+      return storeBalance.available;
     }
     return walletOnlyBalance;
   }, [storeBalance, walletOnlyBalance]);
 
   const effectiveLockedMargin = useMemo(() => {
     if (storeBalance && hasWsBalance.current) {
-      return storeBalance.locked > lockedMargin ? storeBalance.locked : lockedMargin;
+      return storeBalance.locked;
     }
     return lockedMargin;
   }, [storeBalance, lockedMargin]);

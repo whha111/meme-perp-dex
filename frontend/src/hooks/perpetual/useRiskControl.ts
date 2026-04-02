@@ -195,7 +195,19 @@ export function useRiskControl(_options: UseRiskControlOptions = {}): UseRiskCon
   }, [storePositions]);
 
   const [liquidationMap] = useState<LiquidationMapData | null>(null);
-  const [insuranceFund] = useState<InsuranceFund | null>(null);
+  // ★ FIX: 从 store 读取 insurance fund（WS 已推送到 store），而不是空 useState
+  const storeInsuranceFund = useTradingDataStore((state) => state.insuranceFund);
+  const insuranceFund: InsuranceFund | null = storeInsuranceFund ? {
+    balance: storeInsuranceFund.balance || "0",
+    totalContributions: "0",
+    totalPayouts: "0",
+    lastUpdated: Date.now(),
+    display: {
+      balance: storeInsuranceFund.balance || "0",
+      totalContributions: "0",
+      totalPayouts: "0",
+    },
+  } : null;
   const [fundingRates] = useState<FundingRateInfo[]>([]);
   const [liquidationQueue] = useState<LiquidationQueueItem[]>([]);
   const [alerts, setAlerts] = useState<RiskAlert[]>([]);

@@ -24,15 +24,15 @@ contract RedeployTokenFactory is Script {
     address constant WBNB = 0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd;
     address constant PANCAKE_ROUTER_V2 = 0xD99D1c33F9fC3444f8101754aBC46c52416550D1;
 
-    // ── Existing deployed contracts (BSC Testnet 2026-03-13) ──
-    address constant PRICE_FEED = 0x016a65Fce5eC46ec563e1190986740ad4F2Fa789;
-    address constant LIQUIDATION = 0xadBBFE5F01290297050b2AB2a2BeF2DE244a83D0;
+    // ── Existing deployed contracts (BSC Testnet 2026-03-21 — from deployments/97.json) ──
+    address constant PRICE_FEED = 0xB480517B96558E4467cfa1d91d8E6592c66B564D;
+    address constant LIQUIDATION = 0x5587Cf6b94E52e2Da0B8412381fcdfe4D39CA562;
 
     function run() external {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerKey);
 
-        console.log("=== RedeployTokenFactory (WETH fix) ===");
+        console.log("=== RedeployTokenFactory (buyExactTokens) ===");
         console.log("Deployer:", deployer);
         console.log("Balance:", deployer.balance);
         console.log("WBNB (Testnet):", WBNB);

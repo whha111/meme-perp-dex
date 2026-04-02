@@ -4,7 +4,7 @@
   "deployedAt": "2026-03-18T12:00:00Z",
   "deployer": "0xAecb229194314999E396468eb091b42E44Bc3c8c",
   "contracts": {
-    "TokenFactory": "0xfa9BCb05AC174e2CC92C79C6B0cD3FCe2a60732A",
+    "TokenFactory": "0xB40541Ff9f24883149fc6F9CD1021dB9C7BCcB83",
     "Settlement": "0x32de01f0E464521583E52d50f125492D10EfDBB3",
     "SettlementV2": "0xA9157ca8bf7105316bEE270Cd3Db2d38e988d16F",
     "PriceFeed": "0xB480517B96558E4467cfa1d91d8E6592c66B564D",

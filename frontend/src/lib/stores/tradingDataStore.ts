@@ -85,7 +85,7 @@ const DEFAULT_ORDER_FORM: OrderFormState = {
   price: "",
   stopPrice: "",
   size: "",
-  leverage: 10,
+  leverage: 2,
   marginMode: "cross",
   takeProfitPrice: "",
   stopLossPrice: "",

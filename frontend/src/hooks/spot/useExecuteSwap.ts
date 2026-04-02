@@ -273,26 +273,30 @@ export function useExecuteSwap() {
         });
 
         if (params.isBuy) {
-          // 买入：调用 TokenFactory.buy(tokenAddress, minTokensOut)
+          // 买入：调用 TokenFactory.buyExactTokens(tokenAddress, tokenAmount)
+          // Pump.fun 模式：用户指定代币数量，合约只收所需 BNB，多余退回
+          // tokenAmount = previewBuy 返回的数量 (已含 graduation cap)
+          // msg.value = 用户输入的 BNB (作为 maxCost 上限)
+          // tokenAmount = 0 表示 "买完所有剩余代币直到毕业"
           const hash = await writeSwapAsync({
             address: TOKEN_FACTORY_ADDRESS,
             abi: [
               {
-                name: "buy",
+                name: "buyExactTokens",
                 type: "function",
                 stateMutability: "payable",
                 inputs: [
                   { name: "tokenAddress", type: "address" },
-                  { name: "minTokensOut", type: "uint256" },
+                  { name: "tokenAmount", type: "uint256" },
                 ],
-                outputs: [{ name: "", type: "uint256" }],
+                outputs: [],
               },
             ],
-            functionName: "buy",
+            functionName: "buyExactTokens",
             args: [effectiveTokenAddress, params.minimumAmountOut],
-            value: params.amountIn, // ETH amount to send
-            chainId: effectiveChainId, // Explicitly pass chainId
-            gas: 4_000_000n, // M-008: High gas limit to support graduation (addLiquidityETH needs ~2.8M gas)
+            value: params.amountIn, // BNB as max cost, excess refunded
+            chainId: effectiveChainId,
+            gas: 4_000_000n, // M-008: High gas limit to support graduation
           });
 
           setTransactionHash(hash);

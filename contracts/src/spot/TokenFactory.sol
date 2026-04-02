@@ -303,7 +303,7 @@ contract TokenFactory is Ownable, ReentrancyGuard, Pausable, ICurveEvents {
     }
 
     /**
-     * @notice 买入代币
+     * @notice 买入代币 (传统模式: 用户指定 ETH 数量)
      * @param tokenAddress 代币地址
      * @param minTokensOut 最小获得代币数量
      */
@@ -311,6 +311,45 @@ contract TokenFactory is Ownable, ReentrancyGuard, Pausable, ICurveEvents {
     function buy(address tokenAddress, uint256 minTokensOut) external payable nonReentrant whenNotPaused {
         if (msg.value == 0) revert InvalidAmount();
         _buyInternal(tokenAddress, msg.sender, msg.value, minTokensOut);
+    }
+
+    /**
+     * @notice 买入精确数量的代币 (Pump.fun 模式: 用户指定代币数量，多余 ETH 退回)
+     * @param tokenAddress 代币地址
+     * @param tokenAmount 想要购买的代币数量 (传 0 = 买光剩余代币)
+     */
+    function buyExactTokens(address tokenAddress, uint256 tokenAmount) external payable nonReentrant whenNotPaused {
+        if (msg.value == 0) revert InvalidAmount();
+        PoolState storage state = _pools[tokenAddress];
+        if (!state.isActive) revert PoolNotActive();
+        if (state.isGraduated) revert PoolAlreadyGraduated();
+
+        uint256 maxBuyable = state.realTokenReserve > GRADUATION_THRESHOLD
+            ? state.realTokenReserve - GRADUATION_THRESHOLD : 0;
+        if (tokenAmount == 0) tokenAmount = maxBuyable;
+        if (maxBuyable > 0 && tokenAmount > maxBuyable) tokenAmount = maxBuyable;
+        require(tokenAmount > 0, "No tokens");
+
+        uint256 virtualEth = VIRTUAL_ETH_RESERVE + state.realETHReserve;
+        uint256 virtualToken = state.realTokenReserve + (VIRTUAL_TOKEN_RESERVE - REAL_TOKEN_SUPPLY);
+        uint256 ethNeeded = ConstantProductAMMMath.getETHIn(virtualEth, virtualToken, tokenAmount);
+        uint256 fee = (ethNeeded * FEE_BPS) / (10000 - FEE_BPS);
+        uint256 totalCost = ethNeeded + fee;
+        require(msg.value >= totalCost, "Not enough ETH");
+
+        state.realETHReserve += ethNeeded;
+        state.realTokenReserve -= tokenAmount;
+        state.soldTokens += tokenAmount;
+        bool willGraduate = (tokenAmount == maxBuyable && maxBuyable > 0);
+
+        IMemeTokenV2(tokenAddress).mint(msg.sender, tokenAmount);
+        if (fee > 0) _distributeTradingFee(tokenAddress, msg.sender, fee);
+        if (msg.value > totalCost) {
+            (bool ok,) = msg.sender.call{value: msg.value - totalCost}("");
+            require(ok, "Refund failed");
+        }
+        emit Trade(tokenAddress, msg.sender, true, ethNeeded, tokenAmount, virtualEth, virtualToken, block.timestamp);
+        _postBuy(tokenAddress, state, willGraduate);
     }
 
     /**
@@ -453,41 +492,32 @@ contract TokenFactory is Ownable, ReentrancyGuard, Pausable, ICurveEvents {
         }
 
         emit Trade(tokenAddress, buyer, true, amountIn, tokensOut, virtualEth, virtualToken, block.timestamp);
+        _postBuy(tokenAddress, state, willGraduate);
+        return tokensOut;
+    }
 
-        // 检查是否开启永续合约（达到阈值且未开启）
+    /// @dev Shared post-buy: perp/lending enable, PriceFeed sync, graduation
+    function _postBuy(address tokenAddress, PoolState storage state, bool willGraduate) internal {
         if (!state.perpEnabled && state.realETHReserve >= PERP_ENABLE_THRESHOLD && priceFeed != address(0)) {
             _enablePerp(tokenAddress, state);
         }
-
-        // 检查是否开启 P2P 借贷（达到阈值且未开启）
         if (!state.lendingEnabled && state.realETHReserve >= LENDING_ENABLE_THRESHOLD && lendingPool != address(0)) {
             _enableLending(tokenAddress, state);
         }
-
-        // [C-01/C-05 修复] 同步价格到 PriceFeed（用于永续合约）
         PriceFeedHelper.syncPrice(
-            priceFeed,
-            tokenAddress,
+            priceFeed, tokenAddress,
             VIRTUAL_ETH_RESERVE + state.realETHReserve,
             state.realTokenReserve + (VIRTUAL_TOKEN_RESERVE - REAL_TOKEN_SUPPLY)
         );
-
-        // 检查是否毕业
         if (willGraduate || (state.realTokenReserve <= GRADUATION_THRESHOLD && !state.isGraduated)) {
-            // M-008: 检查剩余 gas 是否足够执行毕业
-            // addLiquidityETH (含创建 pair) 需要约 2.8M gas，加上 _graduate 开销约 3M
-            // 63/64 规则: 需要 3M * 64/63 ≈ 3.05M，保守要求 3.5M
             if (gasleft() >= 3_500_000) {
                 _graduate(tokenAddress, state);
             } else {
-                // gas 不足，标记失败让 owner 通过 retryGraduation 重试
                 state.graduationFailed = true;
                 state.graduationAttempts++;
-                emit GraduationFailed(tokenAddress, state.graduationAttempts, "Insufficient gas for graduation");
+                emit GraduationFailed(tokenAddress, state.graduationAttempts, "Low gas");
             }
         }
-
-        return tokensOut;
     }
 
     function _sellInternal(
@@ -860,7 +890,43 @@ contract TokenFactory is Ownable, ReentrancyGuard, Pausable, ICurveEvents {
         uint256 virtualEth = VIRTUAL_ETH_RESERVE + state.realETHReserve;
         uint256 virtualToken = state.realTokenReserve + (VIRTUAL_TOKEN_RESERVE - REAL_TOKEN_SUPPLY);
         uint256 fee = (ethIn * FEE_BPS) / 10000;
-        return ConstantProductAMMMath.getTokensOut(virtualEth, virtualToken, ethIn - fee);
+        uint256 tokensOut = ConstantProductAMMMath.getTokensOut(virtualEth, virtualToken, ethIn - fee);
+        // Cap at maxBuyableTokens to match actual _buyToken behavior
+        uint256 maxBuyable = state.realTokenReserve > GRADUATION_THRESHOLD
+            ? state.realTokenReserve - GRADUATION_THRESHOLD
+            : 0;
+        if (maxBuyable > 0 && tokensOut > maxBuyable) {
+            tokensOut = maxBuyable;
+        }
+        return tokensOut;
+    }
+
+    /// @notice Get remaining tokens and ETH needed to trigger graduation
+    function getGraduationInfo(address tokenAddress) external view returns (
+        uint256 remainingTokens,
+        uint256 ethNeeded,
+        uint256 progressBps
+    ) {
+        PoolState memory state = _pools[tokenAddress];
+        uint256 virtualEth = VIRTUAL_ETH_RESERVE + state.realETHReserve;
+        uint256 virtualToken = state.realTokenReserve + (VIRTUAL_TOKEN_RESERVE - REAL_TOKEN_SUPPLY);
+
+        remainingTokens = state.realTokenReserve > GRADUATION_THRESHOLD
+            ? state.realTokenReserve - GRADUATION_THRESHOLD
+            : 0;
+
+        if (remainingTokens > 0) {
+            // ETH needed (before fee) to buy remaining tokens
+            uint256 ethBeforeFee = ConstantProductAMMMath.getETHIn(virtualEth, virtualToken, remainingTokens);
+            // Add fee: ethIn = ethBeforeFee * 10000 / (10000 - FEE_BPS)
+            ethNeeded = (ethBeforeFee * 10000) / (10000 - FEE_BPS);
+        }
+
+        // Progress in basis points (10000 = 100%)
+        uint256 sold = REAL_TOKEN_SUPPLY - state.realTokenReserve;
+        uint256 target = REAL_TOKEN_SUPPLY - GRADUATION_THRESHOLD;
+        progressBps = target > 0 ? (sold * 10000) / target : 10000;
+        if (progressBps > 10000) progressBps = 10000;
     }
 
     function previewSell(address tokenAddress, uint256 tokensIn) external view returns (uint256) {

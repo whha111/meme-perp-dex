@@ -124,6 +124,8 @@ export const TRADING = {
   BASE_MMR: 3000n,      // 维持保证金率 30% = 3000bp
   INITIAL_MARGIN_RATE: 4000n, // 初始保证金率 40% = 4000bp
   MAX_TOKENS_PER_ACCOUNT: 5, // 单账户最多持仓 5 个 token
+  MAX_PROFIT_RATE: 900n,     // 单笔最大盈利 = LP池值 * 9% (防止掏空LP)
+  PRICE_BAND_BPS: 5000n,     // 限价单价格偏离 Spot Price 最大 ±50% (5000bp)
 } as const;
 
 // ============================================================

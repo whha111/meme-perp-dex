@@ -317,7 +317,8 @@ class WebSocketManager {
             const locked = BigInt(balData.usedMargin || balData.locked || "0");
             const unrealizedPnL = BigInt(balData.unrealizedPnL || "0");
             const equity = BigInt(balData.equity || "0") || (available + locked + unrealizedPnL);
-            const walletBalance = BigInt(balData.totalBalance || balData.walletBalance || "0");
+            // ★ FIX: use walletBalance field (派生钱包余额), NOT totalBalance (含仓位保证金)
+            const walletBalance = BigInt(balData.walletBalance || "0");
             store.setBalance({
               available,
               locked,

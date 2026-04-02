@@ -115,6 +115,7 @@ export interface Match {
   matchPrice: bigint;
   matchSize: bigint;
   timestamp: number;
+  isLpFill?: boolean;  // LP 池填充的匹配 (非 P2P)
 }
 
 export interface OrderBookLevel {
@@ -296,6 +297,30 @@ export class OrderBook {
       longs: aggregateLevels(this.getSortedLongs(), true),
       shorts: aggregateLevels(this.getSortedShorts(), false),
     };
+  }
+
+  /**
+   * 计算 FOK 预检: 给定订单在当前订单簿中可成交的总量
+   * 用于 FOK 订单在匹配前判断是否能全部成交
+   */
+  calculateAvailableSize(order: Order): bigint {
+    const isLong = order.isLong;
+    // FOK 买入（做多）→ 对手方是卖单（shorts），FOK 卖出（做空）→ 对手方是买单（longs）
+    const oppositeOrders = isLong ? this.getSortedShorts() : this.getSortedLongs();
+    let availableSize = 0n;
+
+    for (const counterOrder of oppositeOrders) {
+      if (counterOrder.trader.toLowerCase() === order.trader.toLowerCase()) continue;
+      // 价格匹配检查 (市价单 price=0 匹配所有)
+      if (order.price > 0n) {
+        if (isLong && counterOrder.price > order.price) break;
+        if (!isLong && counterOrder.price < order.price) break;
+      }
+      const counterRemaining = counterOrder.size - counterOrder.filledSize;
+      availableSize += counterRemaining;
+      if (availableSize >= order.size) return availableSize;
+    }
+    return availableSize;
   }
 
   /**
@@ -806,6 +831,7 @@ export class MatchingEngine {
     // ================================================================
     // P3: IOC/FOK 订单处理
     // IOC (Immediate Or Cancel): 立即成交能成交的部分，剩余取消
+    // FOK (Fill Or Kill): 必须全部成交，否则全部取消（安全网，预检应已拦截）
     // ================================================================
     if (order.timeInForce === TimeInForce.IOC) {
       // IOC: 如果有未成交部分，取消剩余

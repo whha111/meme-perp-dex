@@ -53,6 +53,7 @@ interface PerpetualOrderPanelV2Props {
   tokenAddress?: Address;
   className?: string;
   isPerpEnabled?: boolean;
+  suggestedPrice?: string; // 从 OrderBook 点击传入的价格
 }
 
 export function PerpetualOrderPanelV2({
@@ -61,6 +62,7 @@ export function PerpetualOrderPanelV2({
   tokenAddress,
   className,
   isPerpEnabled = true,
+  suggestedPrice,
 }: PerpetualOrderPanelV2Props) {
   const { address, isConnected } = useAccount();
   const { openConnectModal } = useConnectModal();
@@ -144,7 +146,8 @@ export function PerpetualOrderPanelV2({
   });
 
   // Global wallet balance context (on-chain balances — fallback when WS balance unavailable)
-  const { refreshBalance: refreshWalletBalance, totalBalance: onChainBalance } = useWalletBalance();
+  const walletBalanceCtx = useWalletBalance();
+  const { refreshBalance: refreshWalletBalance, totalBalance: onChainBalance } = walletBalanceCtx;
 
   // ── Balance 实时更新: System B (WebSocketManager) → tradingDataStore ──
   const storeBalance = useTradingDataStore(state => state.balance);
@@ -170,6 +173,14 @@ export function PerpetualOrderPanelV2({
   // Order type state (市价/限价)
   const [orderType, setOrderType] = useState<"market" | "limit">("market");
   const [limitPrice, setLimitPrice] = useState("");
+
+  // ★ OrderBook 点击价格 → 自动切换限价单并填入价格
+  useEffect(() => {
+    if (suggestedPrice) {
+      setOrderType("limit");
+      setLimitPrice(suggestedPrice);
+    }
+  }, [suggestedPrice]);
 
   // TP/SL state (止盈止损)
   const [showTpSl, setShowTpSl] = useState(false);
@@ -259,31 +270,24 @@ export function PerpetualOrderPanelV2({
   //   2. 派生钱包链上 BNB (useTradingWallet.ethBalance，最可靠)
   //   3. WalletBalanceContext (useWalletBalance，wagmi useBalance)
   const { hasSufficientBalance, availableBalanceETH } = useMemo(() => {
-    // 方案：取所有数据源的最大值，确保不会因单一数据源故障而显示 0
-    const gasReserve = 0.001;
-
-    // 数据源 1: 引擎 API (available 已包含 walletBalance，不要重复加)
-    let engineETH = 0;
-    if (balance && balance.available > 0n) {
-      engineETH = Number(balance.available) / 1e18;
+    if (balance) {
+      // ★ FIX: 引擎的 availableBalance 是唯一正确的可用余额来源
+      // 它已经计算了: walletBalance + settlementAvailable + mode2Adj - positionMargin - pendingOrders
+      // 不要再加 walletBalance，否则双重计算!
+      const availableETH = Number(balance.available) / 1e18;
+      return {
+        hasSufficientBalance: availableETH >= requiredMarginETH,
+        availableBalanceETH: availableETH,
+      };
     }
-
-    // 数据源 2: 派生钱包链上 BNB (useTradingWallet 直接读取，最可靠)
-    const directWalletETH = Number(tradingWalletBalance) / 1e18;
-    const usableDirectETH = directWalletETH > gasReserve ? directWalletETH - gasReserve : 0;
-
-    // 数据源 3: WalletBalanceContext (wagmi useBalance)
-    const contextETH = Number(onChainBalance) / 1e18;
-
-    // 取最大值：引擎余额通常最全（包含 settlement + mode2），但可能不可用
-    // 派生钱包 BNB 最可靠（直接读链上）
-    const bestAvailable = Math.max(engineETH, usableDirectETH, contextETH);
-
+    // Fallback: use on-chain wallet balance (NOT totalBalance which includes locked margin)
+    const { nativeEthBalance: walletAvailable } = walletBalanceCtx;
+    const onChainETH = Number(walletAvailable) / 1e18;
     return {
-      hasSufficientBalance: bestAvailable >= requiredMarginETH,
-      availableBalanceETH: bestAvailable,
+      hasSufficientBalance: onChainETH >= requiredMarginETH,
+      availableBalanceETH: onChainETH,
     };
-  }, [balance, tradingWalletBalance, onChainBalance, requiredMarginETH]);
+  }, [balance, walletBalanceCtx, requiredMarginETH]);
 
   // Find positions for current token
   const currentTokenPositions = useMemo(() => {
@@ -772,22 +776,16 @@ export function PerpetualOrderPanelV2({
       <div className="p-4 border-b border-okx-border-primary">
         <div className="flex gap-2 mb-3">
           <button
-            onClick={() => setMarginMode("cross")}
-            className={`flex-1 py-1.5 text-xs rounded transition-colors ${
-              marginMode === "cross"
-                ? "bg-okx-bg-hover text-okx-text-primary"
-                : "text-okx-text-tertiary hover:text-okx-text-secondary"
-            }`}
+            disabled
+            className="flex-1 py-1.5 text-xs rounded transition-colors text-okx-text-tertiary opacity-50 cursor-not-allowed relative"
+            title="Coming Soon"
           >
             {t("cross") || "Cross"}
+            <span className="absolute -top-1 -right-1 text-[9px] bg-okx-accent/20 text-okx-accent px-1 rounded">Soon</span>
           </button>
           <button
             onClick={() => setMarginMode("isolated")}
-            className={`flex-1 py-1.5 text-xs rounded transition-colors ${
-              marginMode === "isolated"
-                ? "bg-okx-bg-hover text-okx-text-primary"
-                : "text-okx-text-tertiary hover:text-okx-text-secondary"
-            }`}
+            className="flex-1 py-1.5 text-xs rounded transition-colors bg-okx-bg-hover text-okx-text-primary"
           >
             {t("isolated") || "Isolated"}
           </button>
@@ -1069,11 +1067,11 @@ export function PerpetualOrderPanelV2({
                 {requiredMarginDisplay}
               </span>
             </div>
-            {/* 手续费 (ETH 本位) — Taker 0.05% (5bp) */}
+            {/* 手续费 (ETH 本位) — Taker 0.05%, Maker 0.03% */}
             <div className="flex justify-between">
-              <span className="text-okx-text-tertiary">手续费 (Taker 0.05%)</span>
+              <span className="text-okx-text-tertiary">{orderType === "limit" ? `${t("fee")} (Maker 0.03%)` : `${t("fee")} (Taker 0.05%)`}</span>
               <span className="text-okx-text-primary">
-                BNB {(positionValueETH * 0.0005).toFixed(6)}
+                BNB {(positionValueETH * (orderType === "limit" ? 0.0003 : 0.0005)).toFixed(6)}
               </span>
             </div>
             {/* 合计所需 */}

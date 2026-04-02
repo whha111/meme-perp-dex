@@ -252,6 +252,7 @@ export function PerpetualTradingTerminal({
 
   // Mobile responsive: section switcher for Chart/Book/Trade (only used < md breakpoint)
   const [mobileActiveSection, setMobileActiveSection] = useState<"chart" | "book" | "trade">("chart");
+  const [orderBookSuggestedPrice, setOrderBookSuggestedPrice] = useState<string>("");
 
   // 订单历史和成交记录状态
   const [orderHistoryData, setOrderHistoryData] = useState<HistoricalOrder[]>([]);
@@ -547,6 +548,8 @@ export function PerpetualTradingTerminal({
     MARGIN_REMOVE:       { label: t("billMarginRemove"),     color: "text-okx-up" },
     DAILY_SETTLEMENT:    { label: t("billDailySettlement"),  color: "" },
     INSURANCE_INJECTION: { label: t("billInsurance"),        color: "text-okx-up" },
+    TRADING_FEE:         { label: t("billTradingFee") || "Trading Fee", color: "text-okx-down" },
+    ADL:                 { label: "ADL",                     color: "text-orange-400" },
   };
 
   const BILL_TYPE_FILTERS = [
@@ -557,6 +560,10 @@ export function PerpetualTradingTerminal({
     { value: "LIQUIDATION",          label: t("billLiquidation") },
     { value: "FUNDING_FEE",          label: t("billFundingFee") },
     { value: "INSURANCE_INJECTION",  label: t("billInsurance") },
+    { value: "TRADING_FEE",          label: t("billTradingFee") || "Trading Fee" },
+    { value: "ADL",                  label: "ADL" },
+    { value: "MARGIN_ADD",           label: t("billMarginAdd") || "Margin Add" },
+    { value: "MARGIN_REMOVE",        label: t("billMarginRemove") || "Margin Remove" },
   ];
 
   const [billsData, setBillsData] = useState<BillRecord[]>([]);
@@ -786,13 +793,13 @@ export function PerpetualTradingTerminal({
           {/* Symbol */}
           <div className="flex items-center gap-1.5 md:gap-2 flex-shrink-0">
             <span className="text-sm md:text-[16px] font-bold font-mono text-okx-text-primary">
-              {displaySymbol.toUpperCase()}USDT
+              {displaySymbol.toUpperCase()}/BNB
             </span>
             <span className="text-xs font-medium px-1.5 py-0.5 rounded-sm bg-okx-bg-hover text-okx-text-secondary">
               {t("perpetualLabel")}
             </span>
             <span className="text-xs font-bold font-mono px-1.5 py-0.5 rounded-sm bg-okx-accent/[0.13] text-okx-accent">
-              10x
+              2.5x
             </span>
           </div>
 
@@ -983,7 +990,7 @@ export function PerpetualTradingTerminal({
               <OrderBook
                 data={wsOrderBook ? { ...wsOrderBook, recentTrades: wsRecentTrades } : undefined}
                 onPriceClick={(price) => {
-                  console.log("Price clicked:", price);
+                  setOrderBookSuggestedPrice(String(price));
                 }}
                 maxRows={12}
               />
@@ -2009,6 +2016,7 @@ export function PerpetualTradingTerminal({
                 displaySymbol={displaySymbol}
                 tokenAddress={symbol.startsWith("0x") ? symbol as Address : undefined}
                 isPerpEnabled={isPerpEnabled}
+                suggestedPrice={orderBookSuggestedPrice}
               />
             </TradingErrorBoundary>
           </div>
@@ -2215,7 +2223,7 @@ export function PerpetualTradingTerminal({
                   data={wsOrderBook ? { ...wsOrderBook, recentTrades: wsRecentTrades } : undefined}
                   onPriceClick={(price) => {
                     setMobileActiveSection("trade");
-                    console.log("Price clicked:", price);
+                    setOrderBookSuggestedPrice(String(price));
                   }}
                   maxRows={15}
                 />
@@ -2232,6 +2240,7 @@ export function PerpetualTradingTerminal({
                   displaySymbol={displaySymbol}
                   tokenAddress={symbol.startsWith("0x") ? symbol as Address : undefined}
                   isPerpEnabled={isPerpEnabled}
+                  suggestedPrice={orderBookSuggestedPrice}
                 />
               </TradingErrorBoundary>
             </div>

@@ -1,10 +1,11 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { WssOnChainToken, useTradingDataStore } from "@/lib/stores/tradingDataStore";
 import { formatTokenPrice } from "@/utils/formatters";
+import { getAllTokenMetadata } from "@/lib/api/tokenMetadata";
 import type { Address } from "viem";
 
 // Avatar color palette for deterministic token colors
@@ -91,8 +92,9 @@ function parseMetadataURI(uri: string | undefined): string | undefined {
 }
 
 // Token avatar: shows logo image when available, falls back to letter avatar
-function TokenAvatar({ token, size = 36 }: { token: WssOnChainToken; size?: number }) {
-  const logoUrl = parseMetadataURI(token.metadataURI);
+function TokenAvatar({ token, size = 36, redisLogoMap }: { token: WssOnChainToken; size?: number; redisLogoMap?: Map<string, string> }) {
+  // Try metadataURI first, then fallback to Redis metadata logoUrl
+  const logoUrl = parseMetadataURI(token.metadataURI) || redisLogoMap?.get(token.address.toLowerCase());
   const color = getAvatarColor(token.address);
   const fontSize = size < 36 ? 13 : 16;
 
@@ -149,6 +151,24 @@ export function SpotListingView({ tokens: rawTokens }: SpotListingViewProps) {
   const router = useRouter();
   const [filter, setFilter] = useState<SpotFilter>("all");
   const tokenStatsMap = useTradingDataStore(state => state.tokenStats);
+
+  // Load Redis metadata logoUrl as fallback when metadataURI has no image
+  const [redisLogoMap, setRedisLogoMap] = useState<Map<string, string>>(new Map());
+  const logoMapLoaded = useRef(false);
+  useEffect(() => {
+    if (logoMapLoaded.current) return;
+    logoMapLoaded.current = true;
+    getAllTokenMetadata().then((metas) => {
+      const map = new Map<string, string>();
+      for (const m of metas) {
+        const url = m.logoUrl || m.imageUrl;
+        if (url && m.tokenAddress) {
+          map.set(m.tokenAddress.toLowerCase(), url);
+        }
+      }
+      if (map.size > 0) setRedisLogoMap(map);
+    }).catch(() => {});
+  }, []);
 
   // Exclude stress test tokens
   const tokens = useMemo(() => {
@@ -279,7 +299,7 @@ export function SpotListingView({ tokens: rawTokens }: SpotListingViewProps) {
                 {/* Top: Avatar + Name + Badge */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
-                    <TokenAvatar token={token} size={36} />
+                    <TokenAvatar token={token} size={36} redisLogoMap={redisLogoMap} />
                     <div className="flex flex-col gap-0.5">
                       <span className="text-sm font-semibold text-okx-text-primary">{token.symbol}</span>
                       <span className="font-mono text-xs text-okx-text-secondary">{token.name}</span>
@@ -411,7 +431,7 @@ export function SpotListingView({ tokens: rawTokens }: SpotListingViewProps) {
                 >
                   {/* Token */}
                   <div className="w-[240px] flex items-center gap-2.5">
-                    <TokenAvatar token={token} size={32} />
+                    <TokenAvatar token={token} size={32} redisLogoMap={redisLogoMap} />
                     <div className="flex flex-col gap-px">
                       <span className="text-sm font-semibold text-okx-text-primary">{token.symbol}</span>
                       <span className="font-mono text-xs text-okx-text-secondary truncate max-w-[160px]">

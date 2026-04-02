@@ -628,4 +628,157 @@ contract TokenFactoryTest is Test {
         // 应该收到一些 ETH（减去手续费后）
         assertTrue(IERC20(tokenAddress).balanceOf(user1) > 0);
     }
+
+    // ══════════════════════════════════════════════════════════════════════════════
+    // 9. buyExactTokens 测试 — 最后一笔交易 + 自动毕业
+    // ══════════════════════════════════════════════════════════════════════════════
+
+    /// @notice 基本测试：buyExactTokens 购买指定数量的代币
+    function test_BuyExactTokens_Basic() public {
+        vm.prank(user1);
+        address tokenAddress = factory.createToken{value: SERVICE_FEE}(
+            "Test Token", "TEST", "ipfs://test", 0
+        );
+
+        uint256 user2BalBefore = user2.balance;
+        uint256 tokensToBuy = 1_000_000 ether; // 买 100 万代币
+
+        vm.prank(user2);
+        factory.buyExactTokens{value: 5 ether}(tokenAddress, tokensToBuy);
+
+        // 用户获得精确代币数量
+        assertEq(IERC20(tokenAddress).balanceOf(user2), tokensToBuy, "Should receive exact token amount");
+        // 多余的 ETH 应该退回（不应该花掉全部 5 ETH）
+        assertTrue(user2.balance > user2BalBefore - 5 ether, "Excess ETH should be refunded");
+    }
+
+    /// @notice tokenAmount=0 时买光所有可买代币
+    function test_BuyExactTokens_ZeroMeansBuyAll() public {
+        vm.prank(user1);
+        address tokenAddress = factory.createToken{value: SERVICE_FEE}(
+            "Test Token", "TEST", "ipfs://test", 0
+        );
+
+        // 先买一大笔，接近毕业
+        vm.prank(user1);
+        factory.buy{value: 20 ether}(tokenAddress, 0);
+
+        // 查看还剩多少可买
+        TokenFactory.PoolState memory stateBefore = factory.getPoolState(tokenAddress);
+        uint256 remaining = stateBefore.realTokenReserve > GRADUATION_THRESHOLD
+            ? stateBefore.realTokenReserve - GRADUATION_THRESHOLD
+            : 0;
+        assertTrue(remaining > 0, "Should have remaining tokens");
+
+        // tokenAmount=0 → 买光剩余 → 触发毕业
+        vm.prank(user2);
+        factory.buyExactTokens{value: 50 ether}(tokenAddress, 0);
+
+        // user2 应该收到 remaining 数量的代币
+        assertEq(IERC20(tokenAddress).balanceOf(user2), remaining, "Should buy all remaining tokens");
+
+        // 池子应该到达毕业线（graduation 会失败因为 mockRouter 不支持，但状态已更新）
+        TokenFactory.PoolState memory stateAfter = factory.getPoolState(tokenAddress);
+        assertEq(stateAfter.realTokenReserve, GRADUATION_THRESHOLD, "Should reach graduation threshold");
+    }
+
+    /// @notice 模拟 99.98% 进度场景：用户正常买入，合约自动 cap 到 maxBuyable，退款多余 ETH
+    function test_BuyExactTokens_NearGraduation_AutoCap() public {
+        vm.prank(user1);
+        address tokenAddress = factory.createToken{value: SERVICE_FEE}(
+            "Test Token", "TEST", "ipfs://test", 0
+        );
+
+        // 大额买入接近毕业线
+        vm.prank(user1);
+        factory.buy{value: 20 ether}(tokenAddress, 0);
+
+        TokenFactory.PoolState memory state = factory.getPoolState(tokenAddress);
+        uint256 maxBuyable = state.realTokenReserve > GRADUATION_THRESHOLD
+            ? state.realTokenReserve - GRADUATION_THRESHOLD
+            : 0;
+
+        // 请求买比 maxBuyable 多 2 倍的代币 → 应该被 cap 到 maxBuyable
+        uint256 requestedAmount = maxBuyable * 2;
+        uint256 user2BalBefore = user2.balance;
+
+        vm.prank(user2);
+        factory.buyExactTokens{value: 50 ether}(tokenAddress, requestedAmount);
+
+        // 应该只收到 maxBuyable 而不是 requestedAmount
+        assertEq(IERC20(tokenAddress).balanceOf(user2), maxBuyable, "Should be capped at maxBuyable");
+        // 多余 ETH 退回
+        assertTrue(user2.balance > user2BalBefore - 50 ether, "Excess ETH refunded");
+    }
+
+    /// @notice 退款精确性测试：确保多退少补逻辑正确
+    function test_BuyExactTokens_RefundAccuracy() public {
+        vm.prank(user1);
+        address tokenAddress = factory.createToken{value: SERVICE_FEE}(
+            "Test Token", "TEST", "ipfs://test", 0
+        );
+
+        uint256 tokensToBuy = 500_000 ether;
+        // 先 previewBuy 确认函数可用
+        uint256 previewTokens = factory.previewBuy(tokenAddress, 0.01 ether);
+        assertTrue(previewTokens > 0, "Preview should return tokens");
+
+        uint256 user2BalBefore = user2.balance;
+        uint256 overpay = 10 ether; // 故意多付
+
+        vm.prank(user2);
+        factory.buyExactTokens{value: overpay}(tokenAddress, tokensToBuy);
+
+        uint256 actualSpent = user2BalBefore - user2.balance;
+        // 实际花费应该远小于 10 ETH（因为 500k 代币很少）
+        assertTrue(actualSpent < overpay, "Should not spend all 10 ETH");
+        assertEq(IERC20(tokenAddress).balanceOf(user2), tokensToBuy, "Should receive exact amount");
+    }
+
+    /// @notice ETH 不足时应该 revert
+    function test_BuyExactTokens_InsufficientETH() public {
+        vm.prank(user1);
+        address tokenAddress = factory.createToken{value: SERVICE_FEE}(
+            "Test Token", "TEST", "ipfs://test", 0
+        );
+
+        // 买 1 亿代币但只发 0.001 ETH — 肯定不够
+        vm.prank(user2);
+        vm.expectRevert("Not enough ETH");
+        factory.buyExactTokens{value: 0.001 ether}(tokenAddress, 100_000_000 ether);
+    }
+
+    /// @notice 池子已毕业后不能再买
+    function test_BuyExactTokens_AfterGraduation_Reverts() public {
+        vm.prank(user1);
+        address tokenAddress = factory.createToken{value: SERVICE_FEE}(
+            "Test Token", "TEST", "ipfs://test", 0
+        );
+
+        // 买光所有可买代币触发毕业（graduation 会 fail 因为 mock router，但 isGraduated 不会设）
+        // 所以这里测试 "No tokens available" 的情况
+        vm.prank(user1);
+        factory.buy{value: 20 ether}(tokenAddress, 0);
+
+        // buyExactTokens(0) 买光剩余
+        vm.prank(user2);
+        factory.buyExactTokens{value: 50 ether}(tokenAddress, 0);
+
+        // 此时 realTokenReserve == GRADUATION_THRESHOLD，maxBuyable == 0
+        vm.prank(user2);
+        vm.expectRevert("No tokens");
+        factory.buyExactTokens{value: 1 ether}(tokenAddress, 0);
+    }
+
+    /// @notice msg.value == 0 时 revert
+    function test_BuyExactTokens_ZeroValue_Reverts() public {
+        vm.prank(user1);
+        address tokenAddress = factory.createToken{value: SERVICE_FEE}(
+            "Test Token", "TEST", "ipfs://test", 0
+        );
+
+        vm.prank(user2);
+        vm.expectRevert(abi.encodeWithSelector(TokenFactory.InvalidAmount.selector));
+        factory.buyExactTokens{value: 0}(tokenAddress, 1000 ether);
+    }
 }

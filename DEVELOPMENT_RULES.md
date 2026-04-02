@@ -4,15 +4,16 @@
 
 ---
 
-## ⚠️ 审计状态 (截至 2026-03-04)
+## ⚠️ 审计状态 (截至 2026-03-31)
 
-**三轮审计已完成，链上资金托管已打通，BSC Testnet (97) 部署已验证。**
+**四轮审计已完成，链上资金托管已打通，BSC Testnet (97) 部署已验证。**
 
 | 审计 | 日期 | 发现 | 已修复 | 报告 |
 |------|------|------|--------|------|
 | V1 架构审计 | 2026-03-01 | 48 | 35 | `docs/ISSUES_AUDIT_REPORT.md` |
 | V2 代码审查 | 2026-03-03 | 75 | 8 | `docs/CODE_REVIEW_V2.md` |
-| V3 全量审计 | 2026-03-04 | 12 open / 9 partial / 35 fixed | `docs/AUDIT_V3_FULL.md` |
+| V3 全量审计 | 2026-03-04 | 56 | **56/56 fixed** | `docs/AUDIT_V3_FULL.md` |
+| V4 行业对标 | 2026-03-31 | 15 | **15/15 fixed** | `docs/V4_INDUSTRY_BENCHMARK.md` |
 
 ### V1 核心问题 (已修复)
 - ✅ 虚假存取款 API 已加 `ALLOW_FAKE_DEPOSIT` 守卫
@@ -27,8 +28,22 @@
 - ✅ TokenFactory `_distributeTradingFee` 无推荐人时多扣 10% (HIGH — H-08) — 已修复 2026-03-07
 - ✅ Liquidation.sol phantom insuranceFund (HIGH — H-09) — 已修复 2026-03-07
 - ✅ 双保险基金无对账 (HIGH — H-10) — 已修复 2026-03-07
-- **0 CRITICAL, 0 HIGH 剩余 — 372 contract tests pass**
-- 完整清单: `docs/AUDIT_V3_FULL.md` (12 open + 9 partial，全部 MEDIUM/LOW)
+- **0 CRITICAL, 0 HIGH 剩余 — 373 contract tests pass**
+- 完整清单: `docs/AUDIT_V3_FULL.md` (56/56 fixed)
+
+### V4 行业对标修复 (2026-03-31) — 15 issues fixed ✅
+对标 Binance/OKX/Bybit/dYdX/Hyperliquid/GMX 后发现并修复:
+- ✅ ABI 修复: `settleTraderLoss`/`settleLiquidation` nonpayable→payable
+- ✅ 手续费统一: Taker 0.05% (5bp) / Maker 0.03% (3bp)，全部从 `config.ts TRADING` 常量读取
+- ✅ LP Max Profit Cap: 单笔盈利上限 = LP池值 × 9% (防协同攻击)
+- ✅ 价格带保护: 限价单偏离 Spot Price ±50% 自动拒绝
+- ✅ Funding Rate 清算检查修复: 用实际 `collateral` vs `maintenanceMargin`
+- ✅ FOK 预检: 匹配前检查可成交量，避免部分成交后回滚
+- ✅ 前端: USDT→/BNB、10x→2.5x、parseFloat→parseEther、OrderBook 点击填价
+- ✅ 保险基金: 从 tradingDataStore 实时读取 (不再是空 useState)
+- ✅ 全仓模式 UI 禁用 (标注 Coming Soon)
+- ✅ Bill/Trade 记录全覆盖
+- 完整清单: `docs/V4_INDUSTRY_BENCHMARK.md`
 
 ---
 
@@ -320,6 +335,46 @@ Custom Hook (usePerpetualToken)
 ---
 
 ## 六、修复记录
+
+### 2026-03-31 (V4 行业对标修复 — 15 个问题)
+
+**对标 Binance/OKX/Bybit/dYdX/Hyperliquid/GMX，结合项目实际（Meme DEX）调整。**
+
+**后端修复 (8 个):**
+
+1. **ABI payable 修复** — `perpVault.ts` 中 `settleTraderLoss` 和 `settleLiquidation` 的 ABI `stateMutability` 从 `"nonpayable"` 改为 `"payable"`，否则链上调用带 `msg.value` 时 revert
+2. **手续费统一** — 8+ 处散落的硬编码费率统一到 `config.ts TRADING.TAKER_FEE_RATE (5bp)` / `TRADING.MAKER_FEE_RATE (3bp)`
+   - `server.ts`: ORDER_FEE_RATE、本地 TAKER/MAKER 常量、closeFee 计算
+   - `engine.ts`: MAKER_FEE_RATE
+3. **LP Max Profit Cap** — `server.ts closePositionByMatch()` 中 PnL 计算后加 `maxProfit = poolValue * 9%` 上限 (防止协同攻击耗尽 LP)
+4. **价格带保护** — `server.ts handleOrderSubmit()` 限价单偏离 Spot Price ±50% 自动拒绝
+5. **Funding Rate 清算修复** — `modules/funding.ts checkFundingLiquidations()` 从固定初始保证金率改为实际 `collateral vs maintenanceMargin`
+6. **FOK 预检** — `engine.ts processOrder()` 匹配前用 `calculateAvailableSize()` 检查可成交量，不够直接拒绝 (避免部分成交后回滚污染对手方订单)
+7. **config.ts 新增常量** — `MAX_PROFIT_RATE: 900n`, `PRICE_BAND_BPS: 5000n`, `MAX_LEVERAGE_GRADUATED: 50000n`
+8. **Mark Price 确认** — `syncSpotPrices()` 每秒同步 Bonding Curve/DEX 价格，合约成交不影响 (设计正确)
+
+**前端修复 (7 个):**
+
+9. **交易对显示** — `PerpetualTradingTerminal.tsx` USDT→/BNB, 10x→2.5x
+10. **OrderBook 点击填价** — 点击价格自动切换到限价模式并填入价格
+11. **parseFloat→parseEther** — `PerpetualOrderPanelV2.tsx` 保证金计算改用 viem `parseEther()`
+12. **手续费显示** — 动态显示 "Taker 0.05%" / "Maker 0.03%"，费率计算同步
+13. **全仓模式禁用** — Cross 按钮 disabled + "Soon" badge
+14. **保险基金读取** — `useRiskControl.ts` 从 `tradingDataStore` 读取 WS 推送数据 (不再是空 `useState`)
+15. **Earnings 页面** — 费率显示统一为 "Taker 0.05% / Maker 0.03%"
+
+**修改的文件:**
+- `backend/src/matching/modules/perpVault.ts` — ABI payable 修复
+- `backend/src/matching/config.ts` — 新增 MAX_PROFIT_RATE, PRICE_BAND_BPS, MAX_LEVERAGE_GRADUATED
+- `backend/src/matching/engine.ts` — MAKER_FEE_RATE 统一 + FOK 预检 + calculateAvailableSize
+- `backend/src/matching/server.ts` — 费率统一 + LP Profit Cap + 价格带保护
+- `backend/src/matching/modules/funding.ts` — checkFundingLiquidations 修复
+- `frontend/src/components/perpetual/PerpetualTradingTerminal.tsx` — 交易对显示 + OrderBook 填价
+- `frontend/src/components/perpetual/PerpetualOrderPanelV2.tsx` — parseEther + 费率 + suggestedPrice + Cross 禁用
+- `frontend/src/hooks/perpetual/useRiskControl.ts` — 保险基金从 store 读取
+- `frontend/src/app/earnings/page.tsx` — 费率显示
+
+---
 
 ### 2026-02-14 (前端性能优化 + 首页数据修复)
 

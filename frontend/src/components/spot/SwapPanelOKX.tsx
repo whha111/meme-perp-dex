@@ -81,7 +81,7 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
   
   // 检查交易是否被禁用 (毕业代币走 DEX，不禁用交易)
   const isTradingDisabled = !isPoolActive && !isGraduated;
-  
+
   // 计算内盘进度 (已售出/毕业目标)
   // 毕业目标 = 793M (需要卖出的代币数量，不是剩余代币阈值207M)
   const targetProgress = useMemo(() => {
@@ -648,7 +648,9 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
                   await executeSwap({
                     tokenAddress,
                     amountIn: amountInBigInt,
-                    minimumAmountOut: quote.minimumReceived,
+                    // Buy: pass amountOut as exact token amount for buyExactTokens
+                    // Sell: pass minimumReceived as min ETH out (slippage protected)
+                    minimumAmountOut: mode === "buy" ? quote.amountOut : quote.minimumReceived,
                     isBuy: mode === "buy",
                   });
                 }
@@ -875,6 +877,7 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
             <span>{t("sold")}: {soldTokensM.toFixed(2)}M</span>
             <span>{t("target")}: 793M ({t("graduation")})</span>
           </div>
+
         </div>
       )}
     </div>

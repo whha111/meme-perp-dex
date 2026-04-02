@@ -19,12 +19,14 @@ cat /Users/qinlinqiu/Desktop/meme-perp-dex/DEVELOPMENT_RULES.md
 | **V1 架构审计** | 2026-03-01 | 资金流、链上/链下一致性 | 48 (35 fixed) | `docs/ISSUES_AUDIT_REPORT.md` |
 | **V2 代码审查** | 2026-03-03 | 逐行代码 bug、安全漏洞 | 75 (8 fixed) | `docs/CODE_REVIEW_V2.md` |
 | **V3 全量审计** | 2026-03-04 | 全层全量 + 修复验证 | **56/56 fixed** | `docs/AUDIT_V3_FULL.md` |
+| **V4 行业对标** | 2026-03-31 | 对标成熟交易所 + bug 修复 | **15/15 fixed** | `docs/V4_INDUSTRY_BENCHMARK.md` |
 
 **当前关键状态 (BSC Testnet, Chain 97)**:
 - ✅ 链上资金托管已连通（PerpVault LP, SettlementV2 存取款）
 - ✅ **合约全量重新部署 2026-03-18** — 所有地址已更新
 - ✅ **V3 全部 56 个问题已修复** (0 CRITICAL, 0 HIGH, 0 MEDIUM, 0 LOW 剩余)
 - ✅ 373 contract tests pass, Go/TS compile clean
+- ✅ **V4 行业对标修复 2026-03-31** — 15/15 问题修复（详见下方 + `docs/V4_INDUSTRY_BENCHMARK.md`）
 
 ## 合约地址 (BSC Testnet — 2026-03-18 部署)
 
@@ -93,6 +95,19 @@ cat /Users/qinlinqiu/Desktop/meme-perp-dex/DEVELOPMENT_RULES.md
 - ✅ 373 contract tests pass, Go build clean, TypeScript compiles clean
 - 详见 `docs/AUDIT_V3_FULL.md`
 
+**V4 行业对标修复 (2026-03-31):**
+- ✅ ABI 修复: `settleTraderLoss`/`settleLiquidation` nonpayable→payable
+- ✅ 手续费统一: Taker 0.05% (5bp) / Maker 0.03% (3bp)，全部从 `config.ts` 读取
+- ✅ LP Max Profit Cap: 单笔盈利上限 = LP 池值 × 9% (`TRADING.MAX_PROFIT_RATE`)
+- ✅ 价格带保护: 限价单偏离 Spot Price ±50% 拒绝 (`TRADING.PRICE_BAND_BPS`)
+- ✅ Funding Rate 清算检查: 用实际 collateral vs maintenanceMargin（不再用固定初始保证金率）
+- ✅ FOK 预检: 匹配前检查可成交量，不够直接拒绝（不再先匹配后回滚）
+- ✅ Mark Price = Spot Price 确认: `syncSpotPrices` 每秒同步，合约成交不影响
+- ✅ 前端修复: USDT→/BNB、10x→2.5x、parseFloat→parseEther、OrderBook 点击填价、保险基金从 store 读取
+- ✅ 全仓模式 UI 禁用（标注 Coming Soon）
+- ✅ Bill/Trade 记录全覆盖: 开仓/平仓/存款/提款/ADL/清算 全路径写 Bill + Trade
+- 详见 `docs/V4_INDUSTRY_BENCHMARK.md`
+
 ## 行业标准 (必须遵循)
 
 ### PnL 计算 (GMX 标准)
@@ -126,6 +141,7 @@ hasProfit = isLong ? (currentPrice > avgPrice) : (avgPrice > currentPrice)
 | V1 审计报告 | docs/ISSUES_AUDIT_REPORT.md |
 | V2 代码审查 | docs/CODE_REVIEW_V2.md |
 | V3 全量审计 | docs/AUDIT_V3_FULL.md |
+| V4 行业对标 | docs/V4_INDUSTRY_BENCHMARK.md |
 
 ### 目录结构
 
@@ -166,6 +182,9 @@ backend/internal/     # Go API + Keeper
 13. ❌ 不要从 `database.ts` 导入 `PositionRepo` — 用 `database/redis.ts` 的版本（旧版用 `userAddress/symbol/side`，新版用 `trader/token/isLong`）
 14. ❌ 不要用 `memoryPositionToDB()` 转换仓位再存 Redis — 直接传 Position 对象给 `PositionRepo`
 15. ❌ server.ts 内存 Position 用 **string** 字段，database/redis.ts Position (types.ts) 用 **bigint** — 跨边界必须显式转换
+16. ❌ 不要硬编码手续费率 — 统一使用 `config.ts TRADING.TAKER_FEE_RATE` / `TRADING.MAKER_FEE_RATE`
+17. ❌ 不要让单笔盈利超过 LP 池值的 9% — `TRADING.MAX_PROFIT_RATE` 上限
+18. ❌ 不要接受偏离 Spot Price ±50% 以上的限价单 — `TRADING.PRICE_BAND_BPS` 保护
 
 ## 修改检查清单
 
@@ -181,4 +200,6 @@ backend/internal/     # Go API + Keeper
 - [ ] WS 广播是否只发送给目标用户（不是全量广播）?
 - [ ] Redis 仓位保存后是否能正常 `JSON.stringify`（无 BigInt 泄漏）?
 - [ ] 仓位删除是否传了 `traderHint` 参数（pairId≠Redis UUID）?
+- [ ] 手续费率是否从 `config.ts TRADING` 读取（不是硬编码）?
+- [ ] 新增盈利路径是否有 LP Profit Cap 检查?
 - [ ] DEVELOPMENT_RULES.md 是否需要更新?

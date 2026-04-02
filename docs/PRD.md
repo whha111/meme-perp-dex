@@ -2,8 +2,8 @@
 
 > 本文档基于项目实际代码编写，反映当前已实现的功能
 >
-> **⚠️ 2026-03-01 审计**: 永续合约"已实现"功能实际运行在虚拟余额上，无链上资金保障。
-> 用户资金安全依赖 Redis 不丢失数据。详见 `docs/ISSUES_AUDIT_REPORT.md`
+> **✅ 2026-03-31 更新**: 四轮审计全部修复。链上资金托管已打通 (SettlementV2 + PerpVault)。
+> BSC Testnet (Chain 97) 部署已验证。详见 `docs/AUDIT_V3_FULL.md` + `docs/V4_INDUSTRY_BENCHMARK.md`
 
 ## 项目概述
 
@@ -17,7 +17,7 @@ MEME Perp DEX - 去中心化 MEME 币永续合约交易平台
 | 层级 | 技术 |
 |------|------|
 | 智能合约 | Solidity 0.8.24, Foundry |
-| 区块链 | Base Sepolia (测试网) |
+| 区块链 | BSC Testnet (Chain 97) |
 | 后端 | Go 1.21, Gin, GORM, PostgreSQL, Redis |
 | 前端 | Next.js 14, TypeScript, Wagmi, TailwindCSS |
 
@@ -191,11 +191,14 @@ function getLiquidationPrice(
 #### 2.3 交易参数
 | 参数 | 值 |
 |------|-----|
-| 保证金类型 | ETH |
-| 最大杠杆 | 100x |
+| 保证金类型 | BNB (WBNB) |
+| 最大杠杆 (内盘/Bonding Curve) | 2.5x |
+| 最大杠杆 (毕业后/DEX) | 5x |
 | 最小杠杆 | 1x |
-| 开仓手续费 | 0.1% |
-| 平仓手续费 | 0.1% |
+| Taker 手续费 (市价单) | 0.05% (5bp) |
+| Maker 手续费 (限价单) | 0.03% (3bp) |
+| 单笔最大盈利 | LP 池值 × 9% |
+| 限价单价格偏离保护 | ±50% |
 
 #### 2.4 PnL 计算公式 (GMX 标准)
 ```
@@ -210,9 +213,9 @@ hasProfit = isLong ? (currentPrice > avgPrice) : (avgPrice > currentPrice)
 ```
 
 #### 2.6 保证金模式
-支持全仓和逐仓两种模式：
-- **全仓 (Cross)**: 所有可用余额作为仓位保证金
-- **逐仓 (Isolated)**: 仅使用指定保证金
+当前仅支持逐仓模式：
+- **逐仓 (Isolated)**: 仅使用指定保证金，仓位间风险隔离
+- **全仓 (Cross)**: 已规划，前端标注 "Coming Soon"，暂未启用
 
 #### 2.7 事件
 ```solidity
@@ -449,11 +452,10 @@ function validatePositionSize(address token, uint256 size) external view returns
 #### 8.3 保证金率表
 | 杠杆倍数 | 初始保证金率 | 维持保证金率 |
 |----------|--------------|--------------|
-| 100x | 1% | 0.5% |
-| 50x | 2% | 1% |
-| 20x | 5% | 2.5% |
-| 10x | 10% | 5% |
-| 5x | 20% | 10% |
+| 5x (毕业后最大) | 20% | 10% |
+| 2.5x (内盘最大) | 40% | 20% |
+| 2x | 50% | 25% |
+| 1x | 100% | 50% |
 
 ---
 

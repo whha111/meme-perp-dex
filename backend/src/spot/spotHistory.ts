@@ -337,18 +337,30 @@ export const KlineRepo = {
     // 从第一笔交易开始
     const startTime = firstTradeBar.time;
 
-    // 填充 K 线数据（从第一笔交易到当前时间）
+    // 找到最后一根有交易的 K 线
+    let lastTradeBar = firstTradeBar;
+    for (const bar of storedBars) {
+      if (bar.trades > 0) lastTradeBar = bar;
+    }
+    const lastTradeTime = lastTradeBar.time;
+
+    // 填充策略：
+    // 1. 有交易的 K 线之间：完整填充空隙（保持价格连续性）
+    // 2. 最后一笔交易到当前时间：最多填充 MAX_TRAILING_EMPTY 根
+    //    避免长时间无交易后出现几百根空蜡烛
+    const MAX_TRAILING_EMPTY = 6;
+    const trailingLimit = lastTradeTime + MAX_TRAILING_EMPTY * resolutionSeconds;
+    const endTime = Math.min(currentBucket, trailingLimit);
+
     const filledBars: KlineBar[] = [];
-    // 初始 prevClose：用第一根有交易的 K 线的 open
     let prevClose = firstTradeBar.open;
 
-    for (let t = startTime; t <= currentBucket; t += resolutionSeconds) {
+    for (let t = startTime; t <= endTime; t += resolutionSeconds) {
       const existing = barMap.get(t);
       if (existing) {
         filledBars.push(existing);
         prevClose = existing.close;
       } else {
-        // 空白 K 线：使用上一根的收盘价（横盘）
         filledBars.push({
           time: t,
           open: prevClose,
