@@ -8,6 +8,7 @@
  * 4. 定时批量提交到链上结算
  */
 
+import { TRADING } from "./config";
 import {
   createPublicClient,
   createWalletClient,
@@ -878,10 +879,8 @@ export class MatchingEngine {
       order.avgFillPrice = (order.totalFillValue * (10n ** 18n)) / newFilledSize;
     }
 
-    // 手续费: Maker 0.02%, Taker 0.05% (行业标准: 鼓励挂单提供流动性)
-    const TAKER_FEE_RATE = 5n; // 0.05% = 5 / 10000
-    const MAKER_FEE_RATE = 2n; // 0.02% = 2 / 10000
-    const feeRate = isMaker ? MAKER_FEE_RATE : TAKER_FEE_RATE;
+    // 手续费: Maker/Taker 费率从 config.ts 统一读取
+    const feeRate = isMaker ? TRADING.MAKER_FEE_RATE : TRADING.TAKER_FEE_RATE;
     const fillFee = currentFillValue * feeRate / 10000n;
     order.fee = order.fee + fillFee;
 
@@ -1181,7 +1180,7 @@ export class MatchingEngine {
    * 撤销单次成交对订单成交信息的影响
    */
   private reverseOrderFillInfo(order: Order, fillPrice: bigint, fillSize: bigint): void {
-    const FEE_RATE = 5n; // 0.05%
+    const FEE_RATE = TRADING.TAKER_FEE_RATE; // worst-case fee for reversal
     const fillValue = (fillSize * fillPrice) / (10n ** 18n);
 
     order.totalFillValue -= fillValue;
