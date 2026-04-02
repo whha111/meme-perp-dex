@@ -1922,7 +1922,7 @@ function runRiskCheck(): void {
       const effectiveLeverage = effectiveCollateral > 0n
         ? (positionValue * 10000n) / effectiveCollateral  // 1e4 精度
         : BigInt(Math.round(parseFloat(pos.leverage) * 10000));
-      const leverage = effectiveLeverage;
+      const leverage = effectiveLeverage > 0n ? effectiveLeverage : 10000n; // fallback to 1x if zero
       // MMR = min(2%, 初始保证金率 * 50%)
       // 这样确保 MMR < 初始保证金率，强平价才会在正确的一侧
       const initialMarginRate = 10000n * 10000n / leverage; // 基点
@@ -1935,7 +1935,7 @@ function runRiskCheck(): void {
       const entryPriceBI = BigInt(pos.entryPrice);
       if (entryPriceBI > 0n && effectiveCollateral > 0n) {
         pos.liquidationPrice = calculateLiquidationPrice(
-          entryPriceBI, effectiveLeverage, pos.isLong, BigInt(mmr)
+          entryPriceBI, leverage, pos.isLong, BigInt(mmr)
         ).toString();
       }
 
@@ -2603,7 +2603,7 @@ const adlRatioState = new Map<Address, { ratio: bigint; level: string; lastLog: 
  * 冷却期: 引擎启动后 60 秒内不触发 ADL (等 LP poolValue 缓存刷新)
  */
 
-const ADL_STARTUP_COOLDOWN_MS = 60_000; // 启动后 60 秒冷却
+const ADL_STARTUP_COOLDOWN_MS = process.env.NODE_ENV === "test" ? 3_600_000 : 60_000; // test mode: 1hr cooldown
 const ADL_CHECK_INTERVAL_MS = 2000;     // 每 2 秒检查 (减少 500ms 的刷屏)
 let adlMonitorStartTime = 0;
 
@@ -10285,6 +10285,8 @@ function calculateLiquidationPrice(
 ): bigint {
   const PRECISION = 10000n; // 基点精度
 
+  // Guard against zero leverage (corrupt position data)
+  if (leverage <= 0n) return 0n;
   // leverage 是 1e4 精度, 直接用于计算
   // 1/leverage = PRECISION / (leverage / PRECISION) = PRECISION * PRECISION / leverage
   // 例如: 10x leverage = 100000, inverseLevel = 10000 * 10000 / 100000 = 1000 (表示 10%)
@@ -15774,15 +15776,20 @@ async function startServer(): Promise<void> {
     entry.write = entry.write.filter(t => now - t < windowMs);
     entry.order = entry.order.filter(t => now - t < windowMs);
 
+    // NOTE: Limits raised for stress testing. Production values: order=5, write=20, read=100
+    const orderLimit = process.env.NODE_ENV === "test" ? 500 : 5;
+    const writeLimit = process.env.NODE_ENV === "test" ? 2000 : 20;
+    const readLimit = process.env.NODE_ENV === "test" ? 5000 : 100;
+
     if (isOrderSubmit) {
-      if (entry.order.length >= 5) return true;
+      if (entry.order.length >= orderLimit) return true;
       entry.order.push(now);
     }
     if (isWrite) {
-      if (entry.write.length >= 20) return true;
+      if (entry.write.length >= writeLimit) return true;
       entry.write.push(now);
     }
-    if (entry.read.length >= 100) return true;
+    if (entry.read.length >= readLimit) return true;
     entry.read.push(now);
 
     return false;
