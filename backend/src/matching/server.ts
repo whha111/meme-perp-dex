@@ -3593,10 +3593,10 @@ async function processTPSLTriggerQueue(): Promise<void> {
         position.isLong
       );
 
-      // 计算平仓手续费 (0.3% taker)
+      // 计算平仓手续费 (Taker 费率 — 市价平仓)
       // currentSize 已经是 ETH 名义价值 (1e18 精度)
       const positionValue = currentSize;
-      const closeFee = (positionValue * 30n) / 10000n;
+      const closeFee = (positionValue * TRADING.TAKER_FEE_RATE) / 10000n;
 
       // 更新订单状态
       order.executedAt = Date.now();
@@ -3674,6 +3674,17 @@ async function processTPSLTriggerQueue(): Promise<void> {
         fee: tpslTrade.fee, realizedPnL: tpslTrade.realizedPnL,
         timestamp: tpslTrade.timestamp, type: "close",
       }, "tpsl");
+
+      // Bill: record close fee for TP/SL close
+      if (closeFee > 0n) {
+        const tpslBal = getUserBalance(normalizedTrader);
+        createBillWithMirror({
+          userAddress: normalizedTrader, type: "CLOSE_FEE", amount: (-closeFee).toString(),
+          balanceBefore: (tpslBal.totalBalance + closeFee).toString(),
+          balanceAfter: tpslBal.totalBalance.toString(),
+          positionId: order.pairId, onChainStatus: "OFF_CHAIN",
+        });
+      }
 
       // ✅ 记录 SETTLE_PNL 账单
       // FIX: 使用 computeSettlementBalance 替代硬编码 "0" / returnAmount
@@ -9177,10 +9188,10 @@ async function handleClosePair(req: Request, pairId: string): Promise<Response> 
     const totalCollateral = BigInt(position.collateral);
     const releasedCollateral = (totalCollateral * sizeToClose) / currentSize;
 
-    // 计算平仓手续费 (0.3% taker)
+    // 计算平仓手续费 (Taker 费率 — 市价平仓)
     // sizeToClose 已经是 ETH 名义价值 (1e18 精度)
     const positionValue = sizeToClose;
-    const closeFee = (positionValue * 30n) / 10000n;
+    const closeFee = (positionValue * TRADING.TAKER_FEE_RATE) / 10000n;
 
     // 实际返还金额 = 释放保证金 + PnL - 手续费
     const returnAmount = releasedCollateral + closePnL - closeFee;
@@ -9324,6 +9335,17 @@ async function handleClosePair(req: Request, pairId: string): Promise<Response> 
         });
       } catch (billErr) {
         console.error("[Close] Failed to log settle PnL bill:", billErr);
+      }
+
+      // Bill: record close fee for HTTP manual close
+      if (closeFee > 0n) {
+        const httpCloseBal = getUserBalance(normalizedTrader);
+        createBillWithMirror({
+          userAddress: normalizedTrader, type: "CLOSE_FEE", amount: (-closeFee).toString(),
+          balanceBefore: (httpCloseBal.totalBalance + closeFee).toString(),
+          balanceAfter: httpCloseBal.totalBalance.toString(),
+          positionId: pairId, onChainStatus: "OFF_CHAIN",
+        });
       }
 
       return jsonResponse({
