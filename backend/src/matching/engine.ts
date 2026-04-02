@@ -785,13 +785,27 @@ export class MatchingEngine {
       console.log(`[PostOnly] Order ${order.id} accepted as Maker`);
     }
 
+    // FOK pre-check: verify sufficient liquidity BEFORE matching to avoid corrupting counterparty orders
+    if (order.timeInForce === TimeInForce.FOK) {
+      const availableSize = this.getAvailableLiquidity(order);
+      if (availableSize < order.size) {
+        console.log(`[FOK] Order ${order.id}: Available liquidity ${availableSize} < required ${order.size}, rejecting`);
+        order.status = OrderStatus.CANCELLED;
+        return {
+          order,
+          matches: [],
+          rejected: true,
+          rejectReason: "FOK order could not be fully filled"
+        };
+      }
+    }
+
     // 尝试撮合
     const matches = this.tryMatch(order);
 
     // ================================================================
     // P3: IOC/FOK 订单处理
     // IOC (Immediate Or Cancel): 立即成交能成交的部分，剩余取消
-    // FOK (Fill Or Kill): 必须全部成交，否则全部取消
     // ================================================================
     if (order.timeInForce === TimeInForce.IOC) {
       // IOC: 如果有未成交部分，取消剩余
@@ -806,26 +820,6 @@ export class MatchingEngine {
         }
         // 不加入订单簿
         return { order, matches };
-      }
-    } else if (order.timeInForce === TimeInForce.FOK) {
-      // FOK: 如果不能全部成交，取消整个订单
-      if (order.filledSize < order.size) {
-        console.log(`[FOK] Order ${order.id}: Only filled ${order.filledSize}/${order.size}, rejecting entire order`);
-
-        // 回滚成交 (这里简化处理，实际需要更复杂的回滚逻辑)
-        // FOK 的正确实现应该是先检查能否全部成交，再执行
-        // 这里我们返回 rejected 状态
-        order.status = OrderStatus.CANCELLED;
-        order.filledSize = 0n;
-        order.avgFillPrice = 0n;
-        order.totalFillValue = 0n;
-
-        return {
-          order,
-          matches: [],
-          rejected: true,
-          rejectReason: "FOK order could not be fully filled"
-        };
       }
     }
 
@@ -939,6 +933,48 @@ export class MatchingEngine {
     }
 
     return false;
+  }
+
+  /**
+   * FOK pre-check: sum available liquidity at matching prices without modifying state.
+   * Mirrors tryMatch price-matching logic but only reads sizes.
+   */
+  private getAvailableLiquidity(order: Order): bigint {
+    const orderBook = this.getOrderBook(order.token);
+    const currentPrice = orderBook.getCurrentPrice();
+    let available = 0n;
+
+    if (order.isLong) {
+      const shorts = orderBook.getSortedShorts();
+      for (const shortOrder of shorts) {
+        if (shortOrder.trader.toLowerCase() === order.trader.toLowerCase()) continue;
+
+        const longPrice = order.price === 0n ? currentPrice : order.price;
+        const shortPrice = shortOrder.price === 0n ? currentPrice : shortOrder.price;
+
+        if (longPrice < shortPrice && order.price !== 0n && shortOrder.price !== 0n) continue;
+        if (shortPrice === 0n) continue;
+
+        available += shortOrder.size - shortOrder.filledSize;
+        if (available >= order.size) return available;
+      }
+    } else {
+      const longs = orderBook.getSortedLongs();
+      for (const longOrder of longs) {
+        if (longOrder.trader.toLowerCase() === order.trader.toLowerCase()) continue;
+
+        const longPrice = longOrder.price === 0n ? currentPrice : longOrder.price;
+        const shortPrice = order.price === 0n ? currentPrice : order.price;
+
+        if (longPrice < shortPrice && order.price !== 0n && longOrder.price !== 0n) continue;
+        if (longPrice === 0n) continue;
+
+        available += longOrder.size - longOrder.filledSize;
+        if (available >= order.size) return available;
+      }
+    }
+
+    return available;
   }
 
   /**

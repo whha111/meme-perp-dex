@@ -77,6 +77,10 @@ contract SettlementV2 is Ownable2Step, ReentrancyGuard, Pausable, EIP712 {
     // Authorized state root updaters
     mapping(address => bool) public authorizedUpdaters;
 
+    /// @notice FIX H-1: Number of historical roots accepted for withdrawal proofs.
+    ///         Prevents grief: if root updates between sign and submit, old roots still valid.
+    uint256 public stateRootValidityWindow = 5;
+
     // ============================================================
     // Deposit Caps (risk mitigation before audit)
     // ============================================================
@@ -204,6 +208,7 @@ contract SettlementV2 is Ownable2Step, ReentrancyGuard, Pausable, EIP712 {
         uint256 amount,
         uint256 userEquity,
         bytes32[] calldata merkleProof,
+        bytes32 merkleRoot,
         uint256 deadline,
         bytes calldata signature
     ) external nonReentrant whenNotPaused {
@@ -213,20 +218,23 @@ contract SettlementV2 is Ownable2Step, ReentrancyGuard, Pausable, EIP712 {
         address user = msg.sender;
         uint256 nonce = withdrawalNonces[user];
 
-        // 1. Verify Merkle proof
+        // FIX H-1: Verify merkleRoot is current OR within the validity window.
+        // This prevents grief attacks where root updates between sign and submit.
+        if (!_isValidStateRoot(merkleRoot)) revert InvalidProof();
+
+        // 1. Verify Merkle proof against the caller-specified root
         bytes32 leaf = keccak256(abi.encodePacked(user, userEquity));
-        if (!MerkleProof.verify(merkleProof, currentStateRoot.root, leaf)) {
+        if (!MerkleProof.verify(merkleProof, merkleRoot, leaf)) {
             revert InvalidProof();
         }
 
         // 2. Check user has enough equity
-        // User can only withdraw up to their equity minus previous withdrawals
         uint256 maxWithdrawable = userEquity > totalWithdrawn[user]
             ? userEquity - totalWithdrawn[user]
             : 0;
         if (amount > maxWithdrawable) revert InsufficientEquity();
 
-        // 3. Verify platform signature (EIP-712)
+        // 3. Verify platform signature (EIP-712) — binds to the specific merkleRoot
         bytes32 structHash = keccak256(
             abi.encode(
                 WITHDRAWAL_TYPEHASH,
@@ -234,7 +242,7 @@ contract SettlementV2 is Ownable2Step, ReentrancyGuard, Pausable, EIP712 {
                 amount,
                 nonce,
                 deadline,
-                currentStateRoot.root
+                merkleRoot
             )
         );
         bytes32 digest = _hashTypedDataV4(structHash);
@@ -275,7 +283,7 @@ contract SettlementV2 is Ownable2Step, ReentrancyGuard, Pausable, EIP712 {
      * @dev Can only be called by authorized updaters
      * @param newRoot New Merkle root
      */
-    function updateStateRoot(bytes32 newRoot) external {
+    function updateStateRoot(bytes32 newRoot) external whenNotPaused {
         if (!authorizedUpdaters[msg.sender] && msg.sender != owner()) {
             revert UnauthorizedUpdater();
         }
@@ -306,6 +314,24 @@ contract SettlementV2 is Ownable2Step, ReentrancyGuard, Pausable, EIP712 {
      */
     function getStateRootByIndex(uint256 index) external view returns (StateRoot memory) {
         return stateRootHistory[index];
+    }
+
+    /// @dev FIX H-1: Check if a merkleRoot matches current or recent historical roots
+    function _isValidStateRoot(bytes32 root) internal view returns (bool) {
+        if (root == currentStateRoot.root) return true;
+
+        uint256 histLen = stateRootHistory.length;
+        uint256 lookback = stateRootValidityWindow < histLen ? stateRootValidityWindow : histLen;
+        for (uint256 i = 0; i < lookback; i++) {
+            if (stateRootHistory[histLen - 1 - i].root == root) return true;
+        }
+        return false;
+    }
+
+    /// @notice Set the number of historical roots accepted for withdrawals
+    function setStateRootValidityWindow(uint256 window) external onlyOwner {
+        require(window >= 1 && window <= 50, "Window out of range");
+        stateRootValidityWindow = window;
     }
 
     // ============================================================

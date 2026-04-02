@@ -131,9 +131,11 @@ export const TRADING = {
 // ============================================================
 
 export const FUNDING = {
-  BASE_INTERVAL_MS: 15 * 60 * 1000,    // P2: 15分钟基础周期（同步链上 FundingRate.sol 设计）
+  BASE_INTERVAL_MS: 8 * 60 * 1000,     // 8分钟结算周期（匹配 funding.ts Skew-Based 模型）
   MIN_INTERVAL_MS: 5 * 60 * 1000,      // 最小5分钟
-  MAX_RATE: 500n,                       // P2: 最大5% = 500bp（meme 币高波动需更大区间）
+  MAX_RATE: 5n,                         // ±0.05% = 5bp（Skew-Based 模型上限）
+  SKEW_BASE_RATE_MULTIPLIER: 1n,        // skew × 1 / 100
+  SKEW_DIVISOR: 100n,                   // 费率精度分母
   VOLATILITY_MULTIPLIER: 1.5,           // 波动率乘数
   IMBALANCE_MULTIPLIER: 2,              // 不平衡乘数
 } as const;

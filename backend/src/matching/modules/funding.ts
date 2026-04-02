@@ -16,27 +16,22 @@
 
 import type { Address } from "viem";
 import { PositionRepo, SettlementLogRepo } from "../database/redis";
+import { FUNDING, PRECISION_MULTIPLIER } from "../config";
 import { logger } from "../utils/logger";
 import { calculateLiquidationPriceWithCollateral } from "../utils/precision";
 import type { Position, FundingRate, FundingPayment } from "../types";
 
 // ============================================================
-// Constants
+// Constants (from config.ts — single source of truth)
 // ============================================================
 
-// 资金费率基础系数: skew × BASE_RATE / RATE_PRECISION
-// 实际: fundingRate(bp) = skew(bp) × 1 / 100 → 0.01% per 100% skew
-const BASE_RATE_MULTIPLIER = 1n;
-const SKEW_DIVISOR = 100n;
-
-// 费率上限: ±5bp = ±0.05%
-const MAX_FUNDING_RATE = 5n;
-
-// 结算周期：8 分钟
-const FUNDING_INTERVAL_MS = 8 * 60 * 1000;
+const BASE_RATE_MULTIPLIER = FUNDING.SKEW_BASE_RATE_MULTIPLIER;
+const SKEW_DIVISOR = FUNDING.SKEW_DIVISOR;
+const MAX_FUNDING_RATE = FUNDING.MAX_RATE;
+const FUNDING_INTERVAL_MS = FUNDING.BASE_INTERVAL_MS;
 
 // 精度
-const RATE_PRECISION = 10000n;
+const RATE_PRECISION = PRECISION_MULTIPLIER.RATE;
 
 // ============================================================
 // State
@@ -294,12 +289,19 @@ export async function checkFundingLiquidations(token: Address, maintenanceMargin
   for (const position of positions) {
     if (position.status !== 0) continue;
 
-    const marginRate = (10000n * 10000n) / position.leverage;
+    // Calculate notional value in ETH to determine maintenance margin requirement
+    // position.size = token quantity (1e18), position.entryPrice = ETH/Token (1e18)
+    const notionalETH = position.entryPrice > 0n
+      ? (position.size * position.entryPrice) / (10n ** 18n)
+      : position.size;
 
-    // 维持保证金率 30% = 3000bp
-    if (marginRate < maintenanceMarginRate) {
+    // Maintenance margin = notional × MMR / 10000
+    const maintenanceMargin = (notionalETH * maintenanceMarginRate) / RATE_PRECISION;
+
+    // Compare actual collateral (already reduced by settleFunding) against maintenance margin
+    if (position.collateral <= maintenanceMargin) {
       needsLiquidation.push(position);
-      logger.warn("Funding", `Position ${position.id} needs liquidation after funding: marginRate=${marginRate}bp`);
+      logger.warn("Funding", `Position ${position.id} needs liquidation after funding: collateral=${position.collateral}, maintenanceMargin=${maintenanceMargin}`);
     }
   }
 

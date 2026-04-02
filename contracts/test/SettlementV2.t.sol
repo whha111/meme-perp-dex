@@ -219,6 +219,7 @@ contract SettlementV2Test is Test {
             withdrawAmount,
             user1Equity,
             proof1,
+            merkleRoot,
             deadline,
             signature
         );
@@ -241,6 +242,7 @@ contract SettlementV2Test is Test {
             secondWithdraw,
             user1Equity,
             proof1,
+            merkleRoot,
             deadline,
             sig2
         );
@@ -280,7 +282,7 @@ contract SettlementV2Test is Test {
         vm.prank(user1);
         vm.expectRevert(SettlementV2.InsufficientEquity.selector);
         settlement.withdraw(
-            6 * WETH_UNIT, user1Equity, proof, deadline, sig
+            6 * WETH_UNIT, user1Equity, proof, merkleRoot, deadline, sig
         );
 
         console.log("  [PASS] Excess withdrawal rejected");
@@ -316,7 +318,7 @@ contract SettlementV2Test is Test {
         vm.prank(user1);
         vm.expectRevert(SettlementV2.InvalidProof.selector);
         settlement.withdraw(
-            1 * WETH_UNIT, user1Equity, wrongProof, deadline, sig
+            1 * WETH_UNIT, user1Equity, wrongProof, merkleRoot, deadline, sig
         );
 
         console.log("  [PASS] Invalid proof rejected");
@@ -351,7 +353,7 @@ contract SettlementV2Test is Test {
         vm.prank(user1);
         vm.expectRevert(SettlementV2.DeadlineExpired.selector);
         settlement.withdraw(
-            1 * WETH_UNIT, user1Equity, proof, pastDeadline, sig
+            1 * WETH_UNIT, user1Equity, proof, merkleRoot, pastDeadline, sig
         );
 
         console.log("  [PASS] Expired deadline rejected");
@@ -399,7 +401,7 @@ contract SettlementV2Test is Test {
         vm.prank(user1);
         vm.expectRevert(SettlementV2.InvalidSignature.selector);
         settlement.withdraw(
-            1 * WETH_UNIT, user1Equity, proof, deadline, wrongSig
+            1 * WETH_UNIT, user1Equity, proof, merkleRoot, deadline, wrongSig
         );
 
         console.log("  [PASS] Wrong signer rejected");
@@ -443,13 +445,13 @@ contract SettlementV2Test is Test {
         // First withdrawal (nonce 0)
         bytes memory sig0 = _signWithdrawal(user1, 2 * WETH_UNIT, 0, deadline, merkleRoot);
         vm.prank(user1);
-        settlement.withdraw(2 * WETH_UNIT, user1Equity, proof, deadline, sig0);
+        settlement.withdraw(2 * WETH_UNIT, user1Equity, proof, merkleRoot, deadline, sig0);
         assertEq(settlement.getUserNonce(user1), 1);
 
         // Second withdrawal (nonce 1)
         bytes memory sig1 = _signWithdrawal(user1, 3 * WETH_UNIT, 1, deadline, merkleRoot);
         vm.prank(user1);
-        settlement.withdraw(3 * WETH_UNIT, user1Equity, proof, deadline, sig1);
+        settlement.withdraw(3 * WETH_UNIT, user1Equity, proof, merkleRoot, deadline, sig1);
         assertEq(settlement.getUserNonce(user1), 2);
 
         // Total withdrawn should be 5 ETH
@@ -615,7 +617,7 @@ contract SettlementV2Test is Test {
         // Withdraw should revert
         vm.prank(user1);
         vm.expectRevert(Pausable.EnforcedPause.selector);
-        settlement.withdraw(1 * WETH_UNIT, user1Equity, proof, deadline, sig);
+        settlement.withdraw(1 * WETH_UNIT, user1Equity, proof, merkleRoot, deadline, sig);
 
         console.log("  [PASS] Withdraw rejected when paused");
     }

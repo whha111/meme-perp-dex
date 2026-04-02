@@ -176,7 +176,7 @@ contract Vault is Ownable, ReentrancyGuard, Pausable {
      * @param user 用户地址
      * @param amount 金额
      */
-    function emergencyRescue(address user, uint256 amount) external onlyOwner {
+    function emergencyRescue(address user, uint256 amount) external onlyOwner nonReentrant {
         uint256 available = balances[user];
         uint256 locked = lockedBalances[user];
         require(available + locked >= amount, "Insufficient user balance");

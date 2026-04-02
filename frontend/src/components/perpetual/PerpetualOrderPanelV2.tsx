@@ -19,7 +19,7 @@ import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { useAccount } from "wagmi";
 import { useConnectModal } from "@rainbow-me/rainbowkit";
 import { useTranslations } from "next-intl";
-import { formatEther, type Address } from "viem";
+import { formatEther, parseEther, type Address } from "viem";
 import { formatTokenPrice } from "@/utils/formatters";
 import { privateKeyToAccount } from "viem/accounts";
 import { useToast } from "@/components/shared/Toast";
@@ -243,7 +243,7 @@ export function PerpetualOrderPanelV2({
   const requiredMarginETH = useMemo(() => {
     if (positionValueETH <= 0) return 0;
     const marginETH = positionValueETH / leverage;
-    const feeETH = positionValueETH * 0.001; // 0.1% fee
+    const feeETH = positionValueETH * 0.0005; // 0.05% taker fee (5bp)
     return marginETH + feeETH;
   }, [positionValueETH, leverage]);
 
@@ -435,7 +435,7 @@ export function PerpetualOrderPanelV2({
   // 增减保证金处理
   const handleAdjustMargin = useCallback(async () => {
     if (!marginModal || !marginAmount || !tradingWalletAddress) return;
-    const amountWei = BigInt(Math.floor(parseFloat(marginAmount) * 1e18)).toString();
+    const amountWei = parseEther(marginAmount).toString();
     if (BigInt(amountWei) <= 0n) {
       showToast("请输入有效金额", "error");
       return;
@@ -532,14 +532,23 @@ export function PerpetualOrderPanelV2({
     } finally { setIsSettingTpsl(false); }
   }, [tpslModal, tpInput, slInput, tradingWalletAddress, exportKey, showToast, t]);
 
-  // ── TP/SL: 取消 ──
+  // ── TP/SL: 取消 (with signature auth) ──
   const handleCancelTpsl = useCallback(async (cancelType: "tp" | "sl" | "both") => {
-    if (!tpslModal) return;
+    if (!tpslModal || !tradingWalletAddress) return;
     try {
+      const keyData = exportKey?.();
+      if (!keyData?.privateKey) {
+        showToast("交易钱包未激活", "error");
+        return;
+      }
+      const signerAccount = privateKeyToAccount(keyData.privateKey);
+      const cancelMessage = `Cancel TPSL ${tpslModal.pairId} for ${tradingWalletAddress.toLowerCase()}`;
+      const signature = await signerAccount.signMessage({ message: cancelMessage });
+
       const res = await fetch(`${MATCHING_ENGINE_URL}/api/position/${tpslModal.pairId}/tpsl`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cancelType }),
+        body: JSON.stringify({ cancelType, trader: tradingWalletAddress, signature }),
       });
       const data = await res.json();
       if (data.success) {
@@ -549,7 +558,7 @@ export function PerpetualOrderPanelV2({
         else { setSlInput(""); setCurrentTpsl(prev => prev ? { ...prev, stopLossPrice: null } : null); }
       }
     } catch {}
-  }, [tpslModal, showToast, t]);
+  }, [tpslModal, tradingWalletAddress, exportKey, showToast, t]);
 
   return (
     <div className={`bg-okx-bg-secondary rounded-lg ${className}`}>
@@ -1060,11 +1069,11 @@ export function PerpetualOrderPanelV2({
                 {requiredMarginDisplay}
               </span>
             </div>
-            {/* 手续费 (ETH 本位) — Taker 0.3%, Maker 0.05% */}
+            {/* 手续费 (ETH 本位) — Taker 0.05% (5bp) */}
             <div className="flex justify-between">
-              <span className="text-okx-text-tertiary">手续费 (Taker 0.3%)</span>
+              <span className="text-okx-text-tertiary">手续费 (Taker 0.05%)</span>
               <span className="text-okx-text-primary">
-                BNB {(positionValueETH * 0.003).toFixed(6)}
+                BNB {(positionValueETH * 0.0005).toFixed(6)}
               </span>
             </div>
             {/* 合计所需 */}

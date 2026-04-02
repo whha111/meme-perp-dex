@@ -222,8 +222,10 @@ contract Liquidation is Ownable, ReentrancyGuard {
         }
     }
 
-    // M-15 FIX: 添加 nonReentrant 防重入保护
-    function liquidateSingle(address user, address liquidator) external nonReentrant {
+    /// @notice FIX C-1: Removed nonReentrant to prevent nested-lock deadlock with liquidateBatch.
+    ///         Reentrancy protection is provided by liquidateBatch's nonReentrant modifier.
+    ///         Direct external calls are blocked by `require(msg.sender == address(this))`.
+    function liquidateSingle(address user, address liquidator) external {
         require(msg.sender == address(this), "Internal only");
 
         IPositionManager.Position memory pos = positionManager.getPosition(user);
@@ -349,11 +351,10 @@ contract Liquidation is Ownable, ReentrancyGuard {
         }
     }
 
-    /**
-     * @notice 内部函数：清算单个代币仓位
-     */
-    // M-15 FIX: 添加 nonReentrant 防重入保护
-    function liquidateSingleToken(address user, address token, address liquidator) external nonReentrant {
+    /// @notice FIX C-1: Removed nonReentrant to prevent nested-lock deadlock with liquidateBatchToken.
+    ///         Reentrancy protection is provided by liquidateBatchToken's nonReentrant modifier.
+    ///         Direct external calls are blocked by `require(msg.sender == address(this))`.
+    function liquidateSingleToken(address user, address token, address liquidator) external {
         require(msg.sender == address(this), "Internal only");
 
         IPositionManager.PositionEx memory pos = positionManager.getPositionByToken(user, token);

@@ -669,31 +669,35 @@ export const BalanceRepo = {
   },
 
   async freezeMargin(trader: Address, amount: bigint): Promise<boolean> {
-    // P0-2: 使用 try/catch 防止 update 失败导致 margin 双花
+    // Atomic: withLock prevents concurrent freeze/unfreeze on same trader
     try {
-      const balance = await this.getOrCreate(trader);
-      if (balance.availableBalance < amount) {
-        return false;
-      }
+      return await withLock(`balance:${trader}`, 5000, async () => {
+        const balance = await this.getOrCreate(trader);
+        if (balance.availableBalance < amount) {
+          return false;
+        }
 
-      await this.update(trader, {
-        availableBalance: balance.availableBalance - amount,
-        frozenMargin: balance.frozenMargin + amount,
+        await this.update(trader, {
+          availableBalance: balance.availableBalance - amount,
+          frozenMargin: balance.frozenMargin + amount,
+        });
+        return true;
       });
-      return true;
     } catch (err) {
       logger.error("Redis", `freezeMargin failed for ${trader} (${amount}): ${err}`);
-      return false; // 失败时拒绝冻结，防止双花
+      return false;
     }
   },
 
   async unfreezeMargin(trader: Address, amount: bigint): Promise<void> {
-    const balance = await this.getOrCreate(trader);
-    const toUnfreeze = amount > balance.frozenMargin ? balance.frozenMargin : amount;
+    await withLock(`balance:${trader}`, 5000, async () => {
+      const balance = await this.getOrCreate(trader);
+      const toUnfreeze = amount > balance.frozenMargin ? balance.frozenMargin : amount;
 
-    await this.update(trader, {
-      availableBalance: balance.availableBalance + toUnfreeze,
-      frozenMargin: balance.frozenMargin - toUnfreeze,
+      await this.update(trader, {
+        availableBalance: balance.availableBalance + toUnfreeze,
+        frozenMargin: balance.frozenMargin - toUnfreeze,
+      });
     });
   },
 

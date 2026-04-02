@@ -10495,7 +10495,23 @@ async function handleGetTPSL(pairId: string): Promise<Response> {
 async function handleCancelTPSL(req: Request, pairId: string): Promise<Response> {
   try {
     const body = await req.json();
-    const { cancelType = "both" } = body;
+    const { cancelType = "both", trader, signature } = body;
+
+    // Verify trader identity (matches handleSetTPSL pattern)
+    if (!trader) {
+      return errorResponse("Missing trader address", 401);
+    }
+    const cancelMessage = `Cancel TPSL ${pairId} for ${(trader as string).toLowerCase()}`;
+    const auth = await verifyTraderSignature(trader, signature, cancelMessage);
+    if (!auth.valid) {
+      return errorResponse(auth.error || "Authentication failed", 401);
+    }
+
+    // Verify the TP/SL order belongs to this trader
+    const existing = tpslOrders.get(pairId);
+    if (existing && existing.trader.toLowerCase() !== (trader as string).toLowerCase()) {
+      return errorResponse("Not authorized to cancel this TP/SL", 403);
+    }
 
     if (!["tp", "sl", "both"].includes(cancelType)) {
       return errorResponse('cancelType must be "tp", "sl", or "both"');
@@ -10677,6 +10693,11 @@ function addMarginToPosition(pairId: string, amount: bigint): AddMarginResult {
 
   console.log(`[Margin] Added $${Number(amount) / 1e18} to ${pairId}. New collateral: $${Number(newCollateral) / 1e18}, leverage: ${newLeverage.toFixed(2)}x`);
 
+  // Persist to Redis
+  savePositionToRedis(position as any).catch(e =>
+    console.error(`[Margin] Failed to save position to Redis after addMargin: ${e}`)
+  );
+
   // 广播保证金更新
   broadcastMarginUpdate(position, "add", amount);
 
@@ -10803,6 +10824,11 @@ function removeMarginFromPosition(pairId: string, amount: bigint): RemoveMarginR
   position.updatedAt = Date.now();
 
   console.log(`[Margin] Removed $${Number(amount) / 1e18} from ${pairId}. New collateral: $${Number(newCollateral) / 1e18}, leverage: ${newLeverage.toFixed(2)}x`);
+
+  // Persist to Redis
+  savePositionToRedis(position as any).catch(e =>
+    console.error(`[Margin] Failed to save position to Redis after removeMargin: ${e}`)
+  );
 
   // 广播保证金更新
   broadcastMarginUpdate(position, "remove", amount);
@@ -10948,7 +10974,11 @@ async function handleAddMargin(req: Request, pairId: string): Promise<Response> 
       return errorResponse(auth.error || "Authentication failed", 401);
     }
 
-    const result = addMarginToPosition(pairId, BigInt(amount));
+    const normalizedTrader = (trader as string).toLowerCase();
+    const result = await withLock(`position:${normalizedTrader}`, 10000, async () => {
+      return addMarginToPosition(pairId, BigInt(amount));
+    });
+
     if (!result.success) {
       return errorResponse(result.reason || "Failed to add margin");
     }
@@ -10984,13 +11014,16 @@ async function handleRemoveMargin(req: Request, pairId: string): Promise<Respons
       return errorResponse(auth.error || "Authentication failed", 401);
     }
 
-    const result = removeMarginFromPosition(pairId, BigInt(amount));
+    const normalizedTrader = (trader as string).toLowerCase() as Address;
+    const result = await withLock(`position:${normalizedTrader}`, 10000, async () => {
+      return removeMarginFromPosition(pairId, BigInt(amount));
+    });
+
     if (!result.success) {
       return errorResponse(result.reason || "Failed to remove margin");
     }
 
     // AUDIT-FIX: 减少的保证金应返还 trader 的 availableBalance
-    const normalizedTrader = trader.toLowerCase() as Address;
     const balance = getUserBalance(normalizedTrader);
     balance.availableBalance += BigInt(amount);
     balance.usedMargin = (balance.usedMargin || 0n) - BigInt(amount);
@@ -13890,14 +13923,48 @@ async function handleWSMessage(ws: WebSocket, message: string): Promise<void> {
         timestamp: Date.now(),
       }));
     }
-    // ── WS Auth handler ──
-    else if (msg.type === "auth" && msg.trader) {
-      // Simple auth — trust the trader field for now (WS is internal)
-      // Full signature verification can be added later
-      ws.send(JSON.stringify({ type: "auth_success", timestamp: Date.now() }));
-    }
-    else if (msg.type === "subscribe_trader" && msg.trader) {
+    // ── WS Auth + Subscribe handler (with signature verification) ──
+    else if ((msg.type === "auth" || msg.type === "subscribe_trader") && msg.trader) {
       const normalizedTrader = (msg.trader as string).toLowerCase() as Address;
+
+      if (!SKIP_SIGNATURE_VERIFY_ENV) {
+        const { signature, timestamp } = msg;
+        if (!signature || !timestamp) {
+          ws.send(JSON.stringify({
+            type: "error",
+            error: `${msg.type} requires signature and timestamp for authentication`,
+            timestamp: Date.now(),
+          }));
+          return;
+        }
+        // Anti-replay: timestamp must be within 5 minutes
+        const now = Math.floor(Date.now() / 1000);
+        const ts = Number(timestamp);
+        if (Math.abs(now - ts) > 300) {
+          ws.send(JSON.stringify({
+            type: "error",
+            error: `${msg.type} timestamp expired (must be within 5 minutes)`,
+            timestamp: Date.now(),
+          }));
+          return;
+        }
+        const expectedMessage = `${msg.type}:${normalizedTrader}:${timestamp}`;
+        const auth = await verifyTraderSignature(normalizedTrader, signature, expectedMessage);
+        if (!auth.valid) {
+          ws.send(JSON.stringify({
+            type: "error",
+            error: `${msg.type} auth failed: ${auth.error}`,
+            timestamp: Date.now(),
+          }));
+          return;
+        }
+      }
+
+      if (msg.type === "auth") {
+        ws.send(JSON.stringify({ type: "auth_success", timestamp: Date.now() }));
+      }
+
+      // Subscribe trader to personal updates
       const wsSet = wsTraderClients.get(normalizedTrader) || new Set();
       wsSet.add(ws);
       wsTraderClients.set(normalizedTrader, wsSet);

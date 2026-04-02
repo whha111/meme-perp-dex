@@ -57,6 +57,9 @@ contract RiskManager is Ownable {
     // 暂停原因
     string public pauseReason;
 
+    // FIX C-2: Authorized pausers (e.g. Liquidation contract) can trigger emergency pause
+    mapping(address => bool) public authorizedPausers;
+
     // ============================================================
     // Events
     // ============================================================
@@ -69,6 +72,7 @@ contract RiskManager is Ownable {
     event TradingPaused(string reason);
     event TradingResumed();
     event InsuranceFundSet(address indexed fund);
+    event AuthorizedPauserSet(address indexed pauser, bool authorized);
 
     // ============================================================
     // Errors
@@ -104,6 +108,13 @@ contract RiskManager is Ownable {
         if (_insuranceFund == address(0)) revert ZeroAddress();
         insuranceFund = _insuranceFund;
         emit InsuranceFundSet(_insuranceFund);
+    }
+
+    /// @notice FIX C-2: Allow owner to authorize contracts (e.g. Liquidation) to trigger emergency pause
+    function setAuthorizedPauser(address pauser, bool authorized) external onlyOwner {
+        if (pauser == address(0)) revert ZeroAddress();
+        authorizedPausers[pauser] = authorized;
+        emit AuthorizedPauserSet(pauser, authorized);
     }
 
     function setMaxLeverage(uint256 value) external onlyOwner {
@@ -145,9 +156,12 @@ contract RiskManager is Ownable {
 
     /**
      * @notice 暂停交易
+     * @dev FIX C-2: Owner OR authorized pausers (e.g. Liquidation) can trigger.
+     *      resumeTrading remains onlyOwner — only humans should un-pause.
      * @param reason 暂停原因
      */
-    function pauseTrading(string calldata reason) external onlyOwner {
+    function pauseTrading(string calldata reason) external {
+        if (msg.sender != owner() && !authorizedPausers[msg.sender]) revert InvalidParameter();
         tradingPaused = true;
         pauseReason = reason;
         emit TradingPaused(reason);

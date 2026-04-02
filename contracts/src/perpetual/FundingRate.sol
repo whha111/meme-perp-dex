@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 import "../interfaces/IPositionManager.sol";
 import "../interfaces/IVault.sol";
@@ -19,7 +20,7 @@ import "../interfaces/IPriceFeed.sol";
  *      4. 收取的资金费 100% 注入保险基金（不在交易者间转移）
  *      5. 50/50 平衡时双方费率相同 = baseFundingRate
  */
-contract FundingRate is Ownable {
+contract FundingRate is Ownable, ReentrancyGuard {
     using Address for address payable;
 
     // ============================================================
@@ -234,7 +235,7 @@ contract FundingRate is Ownable {
         emit InsuranceFundInjected(msg.sender, msg.value);
     }
 
-    function emergencyWithdrawInsurance(uint256 amount, address recipient) external onlySuperAdmin {
+    function emergencyWithdrawInsurance(uint256 amount, address recipient) external onlySuperAdmin nonReentrant {
         if (recipient == address(0)) revert ZeroAddress();
         if (amount > insuranceFundBalance) revert InsufficientBalance();
         insuranceFundBalance -= amount;
@@ -242,7 +243,7 @@ contract FundingRate is Ownable {
         emit InsuranceFundWithdrawn(recipient, amount);
     }
 
-    function withdrawRiskReserve(address recipient) external onlyOwner {
+    function withdrawRiskReserve(address recipient) external onlyOwner nonReentrant {
         if (recipient == address(0)) revert ZeroAddress();
         uint256 amount = riskReserveBalance;
         if (amount == 0) revert ZeroAmount();
@@ -251,7 +252,7 @@ contract FundingRate is Ownable {
         emit RiskReserveWithdrawn(recipient, amount);
     }
 
-    function coverDeficit(uint256 amount) external returns (uint256 covered) {
+    function coverDeficit(uint256 amount) external nonReentrant returns (uint256 covered) {
         require(msg.sender == address(vault), "Only Vault");
         covered = amount > insuranceFundBalance ? insuranceFundBalance : amount;
         if (covered > 0) {

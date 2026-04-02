@@ -131,14 +131,14 @@ const PERP_VAULT_ABI = [
   {
     name: "settleTraderLoss",
     type: "function",
-    stateMutability: "nonpayable",
+    stateMutability: "payable",
     inputs: [{ name: "lossETH", type: "uint256" }],
     outputs: [],
   },
   {
     name: "settleLiquidation",
     type: "function",
-    stateMutability: "nonpayable",
+    stateMutability: "payable",
     inputs: [
       { name: "collateralETH", type: "uint256" },
       { name: "liquidatorReward", type: "uint256" },
@@ -171,7 +171,7 @@ const PERP_VAULT_ABI = [
   {
     name: "collectFee",
     type: "function",
-    stateMutability: "nonpayable",
+    stateMutability: "payable",
     inputs: [{ name: "feeETH", type: "uint256" }],
     outputs: [],
   },

@@ -131,21 +131,30 @@ export function calculatePnL(
  */
 export function calculateLiquidationPrice(
   entryPrice: bigint,
-  leverage: bigint,
-  mmr: bigint,  // 维持保证金率 (基点)
+  leverage: bigint,   // 1e4 精度, 如 25000n = 2.5x
+  mmr: bigint,        // 维持保证金率 (基点, 如 200n = 2%)
   isLong: boolean
 ): bigint {
   // 多头: liqPrice = entryPrice * (1 - 1/leverage + MMR/10000)
   // 空头: liqPrice = entryPrice * (1 + 1/leverage - MMR/10000)
-  const leverageNum = Number(leverage) / 10000;
-  const mmrNum = Number(mmr) / 10000;
+  //
+  // 纯 BigInt 实现 (消除 Number() 精度丢失):
+  //   1/leverage 在 1e4 精度下 = 10000*10000/leverage
+  //   公分母 10000n:
+  //     long factor  = 10000 - inverseLev + mmr
+  //     short factor = 10000 + inverseLev - mmr
+
+  if (leverage === 0n) return 0n;
+
+  const inverseLev = (10000n * 10000n) / leverage; // 1/leverage in basis points
 
   if (isLong) {
-    const factor = 1 - 1 / leverageNum + mmrNum;
-    return BigInt(Math.floor(Number(entryPrice) * factor));
+    const factor = 10000n - inverseLev + mmr;
+    if (factor <= 0n) return 0n;
+    return (entryPrice * factor) / 10000n;
   } else {
-    const factor = 1 + 1 / leverageNum - mmrNum;
-    return BigInt(Math.floor(Number(entryPrice) * factor));
+    const factor = 10000n + inverseLev - mmr;
+    return (entryPrice * factor) / 10000n;
   }
 }
 
@@ -168,39 +177,17 @@ export function calculateLiquidationPriceWithCollateral(
   mmr: bigint,
   isLong: boolean
 ): bigint {
-  // ETH 本位: 所有精度都是 1e18
-  // 有效杠杆 = 仓位名义价值 / 当前保证金
-  // notionalETH = size * entryPrice / 1e18 (ETH)
-  // effectiveLeverage = notionalETH / collateral
+  if (currentCollateral === 0n) return entryPrice;
 
-  const notionalETH = (size * entryPrice) / (10n ** 18n);  // ETH (1e18)
+  const notionalETH = (size * entryPrice) / (10n ** 18n);
+  if (notionalETH === 0n) return 0n;
 
-  if (currentCollateral === 0n) {
-    // 保证金为0，返回开仓价作为爆仓价
-    return entryPrice;
-  }
-
-  // effectiveLeverage = notional / collateral (都是 1e18 精度)
-  // 转换为 1e4 精度的杠杆值
+  // effectiveLeverage in 1e4 精度
   const effectiveLeverage = (notionalETH * 10000n) / currentCollateral;
+  if (effectiveLeverage === 0n) return 0n;
 
-  if (effectiveLeverage === 0n) {
-    return 0n;
-  }
-
-  const leverageNum = Number(effectiveLeverage) / 10000;
-  const mmrNum = Number(mmr) / 10000;
-
-  if (isLong) {
-    // 多头: liqPrice = entryPrice * (1 - 1/leverage + MMR)
-    const factor = 1 - 1 / leverageNum + mmrNum;
-    if (factor <= 0) return 0n;  // 不可能的爆仓价
-    return BigInt(Math.floor(Number(entryPrice) * factor));
-  } else {
-    // 空头: liqPrice = entryPrice * (1 + 1/leverage - MMR)
-    const factor = 1 + 1 / leverageNum - mmrNum;
-    return BigInt(Math.floor(Number(entryPrice) * factor));
-  }
+  // 复用纯 BigInt 的 calculateLiquidationPrice
+  return calculateLiquidationPrice(entryPrice, effectiveLeverage, mmr, isLong);
 }
 
 // 计算保证金率

@@ -62,7 +62,7 @@ contract TestWithdraw is Script {
 
         // Step 4: Execute withdrawal
         vm.startBroadcast(pk);
-        settlement.withdraw(withdrawAmount, userEquity, proof, deadline, signature);
+        settlement.withdraw(withdrawAmount, userEquity, proof, root, deadline, signature);
         vm.stopBroadcast();
 
         console.log("=== WITHDRAWAL SUCCESSFUL ===");

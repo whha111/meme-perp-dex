@@ -199,9 +199,14 @@ func (k *LiquidationKeeper) getPositionsFromEngine() ([]model.Position, error) {
 
 	internalKey := os.Getenv("MEMEPERP_INTERNAL_API_KEY")
 	if internalKey == "" {
-		internalKey = "memeperp-internal-2026"
+		return nil, fmt.Errorf("MEMEPERP_INTERNAL_API_KEY env var is required")
 	}
-	resp, err := k.httpClient.Get(k.matchingEngineURL + "/api/internal/positions/all?key=" + internalKey)
+	req, err := http.NewRequest("GET", k.matchingEngineURL+"/api/internal/positions/all", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("X-Internal-Key", internalKey)
+	resp, err := k.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("engine request failed: %w", err)
 	}
