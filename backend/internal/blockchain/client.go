@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 	"math/big"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
@@ -46,12 +47,16 @@ func NewClient(cfg *config.BlockchainConfig, nonceManager *nonce.Manager, logger
 		return nil, fmt.Errorf("chain ID mismatch: expected %d, got %d", cfg.ChainID, chainID.Int64())
 	}
 
-	// Parse private key
+	// Parse private key (strip 0x prefix if present)
 	if cfg.PrivateKey == "" {
 		return nil, fmt.Errorf("private key not configured")
 	}
+	pkHex := cfg.PrivateKey
+	if strings.HasPrefix(pkHex, "0x") || strings.HasPrefix(pkHex, "0X") {
+		pkHex = pkHex[2:]
+	}
 
-	privateKey, err := crypto.HexToECDSA(cfg.PrivateKey)
+	privateKey, err := crypto.HexToECDSA(pkHex)
 	if err != nil {
 		return nil, fmt.Errorf("invalid private key: %w", err)
 	}
