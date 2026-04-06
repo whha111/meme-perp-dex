@@ -6755,11 +6755,13 @@ async function startTradeEventPoller(): Promise<void> {
   lastScannedBlock = currentBlock;
   console.log(`[TradePoller] Started at block ${currentBlock}, polling every ${TRADE_POLL_INTERVAL_MS / 1000}s`);
 
-  // 启动前先回填：扫描最近 20 个区块（~1 分钟）
-  // 减少回填范围以避免与其他 EventPoller 启动竞争 RPC 配额
+  // Startup backfill: scan recent blocks for trades
+  // Receipt-based scanning is O(N) in blocks, so keep range reasonable
+  // 200 blocks ≈ ~10 minutes of BSC history
   try {
-    const backfillFrom = currentBlock > 20n ? currentBlock - 20n : 0n;
-    console.log(`[TradePoller] Backfilling from block ${backfillFrom} to ${currentBlock}...`);
+    const BACKFILL_BLOCKS = 200n;
+    const backfillFrom = currentBlock > BACKFILL_BLOCKS ? currentBlock - BACKFILL_BLOCKS : 0n;
+    console.log(`[TradePoller] Backfilling from block ${backfillFrom} to ${currentBlock} (${BACKFILL_BLOCKS} blocks)...`);
     await pollTradeEvents(pollClient, TRADE_EVENT_ABI, backfillFrom, currentBlock);
   } catch (e: any) {
     console.error(`[TradePoller] Backfill failed:`, e.message);
@@ -6785,22 +6787,69 @@ async function startTradeEventPoller(): Promise<void> {
 
 /**
  * 轮询指定区块范围内的 Trade 事件并处理
+ *
+ * Strategy: Try RPC getLogs first → if blocked (datacenter IP throttling), fall back to BSCScan API.
+ * BSCScan API uses a separate indexed database, completely unaffected by RPC rate limits.
  */
+let useRpcGetLogs = true;  // Start optimistic, switch to BSCScan after first RPC failure
+let rpcFailCount = 0;
+const RPC_FAIL_THRESHOLD = 2;  // After 2 consecutive RPC failures, permanently switch to BSCScan
+
 async function pollTradeEvents(
   client: any,
   eventAbi: any,
   fromBlock: bigint,
   toBlock: bigint
 ): Promise<void> {
-  const BATCH_SIZE = 200n; // BSC Testnet public RPC: 500 often gets "limit exceeded", 200 is safe
+  // If RPC getLogs has been consistently failing, skip directly to receipt scanning
+  if (!useRpcGetLogs) {
+    return pollTradeEventsViaBscscan(fromBlock, toBlock, client);
+  }
+
+  // Try RPC getLogs first (faster, single call)
+  try {
+    await pollTradeEventsViaRpc(client, eventAbi, fromBlock, toBlock);
+    rpcFailCount = 0;  // Reset on success
+  } catch (rpcErr: any) {
+    rpcFailCount++;
+    const msg = rpcErr?.message || "";
+    const isRateLimited = msg.includes("limit exceeded") || msg.includes("429") ||
+                          msg.includes("Too Many") || msg.includes("rate limit") ||
+                          msg.includes("HTTP request failed") || msg.includes("Missing");
+    console.warn(`[TradePoller] RPC getLogs failed (${rpcFailCount}/${RPC_FAIL_THRESHOLD}): ${msg.slice(0, 100)}`);
+
+    if (isRateLimited && rpcFailCount >= RPC_FAIL_THRESHOLD) {
+      console.log(`[TradePoller] 🔄 Switching to receipt-based scanning (RPC getLogs blocked from this IP)`);
+      useRpcGetLogs = false;
+    }
+
+    // Fall back to receipt-based scanning for this request
+    try {
+      await pollTradeEventsViaBscscan(fromBlock, toBlock, client);
+    } catch (bscErr: any) {
+      console.error(`[TradePoller] Receipt scanner also failed: ${bscErr?.message?.slice(0, 100)}`);
+      throw bscErr;
+    }
+  }
+}
+
+/**
+ * RPC-based trade scanning (original implementation)
+ */
+async function pollTradeEventsViaRpc(
+  client: any,
+  eventAbi: any,
+  fromBlock: bigint,
+  toBlock: bigint
+): Promise<void> {
+  const BATCH_SIZE = 50n;
   let totalProcessed = 0;
 
   for (let start = fromBlock; start <= toBlock; start += BATCH_SIZE) {
     const end = start + BATCH_SIZE > toBlock ? toBlock : start + BATCH_SIZE;
 
-    // Rate-limit between batches to avoid RPC "limit exceeded" errors
     if (start > fromBlock) {
-      await new Promise(r => setTimeout(r, 1000));
+      await new Promise(r => setTimeout(r, 3000));
     }
 
     const logs = await client.getLogs({
@@ -6823,64 +6872,133 @@ async function pollTradeEvents(
         virtualToken: bigint;
         timestamp: bigint;
       };
-
-      try {
-        const { processTradeEvent } = await import("../spot/spotHistory");
-        const ethPriceUsd = currentEthPriceUsd || 600;
-
-        // processTradeEvent 内部会检查 exists() 自动去重
-        await processTradeEvent(
-          args.token,
-          args.trader,
-          args.isBuy,
-          args.ethAmount,
-          args.tokenAmount,
-          args.virtualEth,
-          args.virtualToken,
-          args.timestamp,
-          log.transactionHash as Hex,
-          log.blockNumber ?? 0n,
-          ethPriceUsd
-        );
-        totalProcessed++;
-
-        // 确保代币在支持列表中
-        addSupportedToken(args.token);
-
-        // 广播给 WebSocket 客户端
-        let afterVirtualEth: bigint;
-        let afterVirtualToken: bigint;
-        if (args.isBuy) {
-          afterVirtualEth = args.virtualEth + args.ethAmount;
-          afterVirtualToken = args.virtualToken - args.tokenAmount;
-        } else {
-          const FEE_MULTIPLIER = 0.99;
-          const ethOutTotal = BigInt(Math.ceil(Number(args.ethAmount) / FEE_MULTIPLIER));
-          afterVirtualEth = args.virtualEth - ethOutTotal;
-          afterVirtualToken = args.virtualToken + args.tokenAmount;
-        }
-        const afterPrice = afterVirtualToken > 0n
-          ? Number(afterVirtualEth) / Number(afterVirtualToken)
-          : Number(args.virtualEth) / Number(args.virtualToken);
-
-        broadcastSpotTrade(args.token, {
-          token: args.token,
-          trader: args.trader,
-          isBuy: args.isBuy,
-          ethAmount: args.ethAmount.toString(),
-          tokenAmount: args.tokenAmount.toString(),
-          price: afterPrice.toString(),
-          txHash: log.transactionHash,
-          timestamp: Number(args.timestamp),
-        });
-      } catch (tradeErr: any) {
-        console.error(`[TradePoller] Failed to process trade ${log.transactionHash?.slice(0, 10)}:`, tradeErr.message);
-      }
+      totalProcessed += await processAndBroadcastTrade(args, log.transactionHash as Hex, log.blockNumber ?? 0n);
     }
   }
 
   if (totalProcessed > 0) {
-    console.log(`[TradePoller] Processed ${totalProcessed} trades from blocks ${fromBlock}-${toBlock}`);
+    console.log(`[TradePoller:RPC] Processed ${totalProcessed} trades from blocks ${fromBlock}-${toBlock}`);
+  }
+}
+
+/**
+ * Receipt-based trade scanning (fallback when RPC getLogs is blocked)
+ *
+ * Uses eth_getBlockByNumber + eth_getTransactionReceipt instead of eth_getLogs.
+ * These are cheap O(1) lookups that aren't throttled by BSC Testnet public RPCs.
+ */
+async function pollTradeEventsViaBscscan(
+  fromBlock: bigint,
+  toBlock: bigint,
+  rpcClient?: any
+): Promise<void> {
+  const { scanTradeEventsBatched } = await import("./modules/bscscanFallback");
+
+  // Use passed client, or create a new one with fallback transport
+  const client = rpcClient || createPublicClient({ chain: activeChain, transport: rpcTransport });
+
+  const events = await scanTradeEventsBatched(
+    client,
+    TOKEN_FACTORY_ADDRESS,
+    fromBlock,
+    toBlock,
+    50n  // 50 blocks per batch — balance between speed and RPC politeness
+  );
+
+  let totalProcessed = 0;
+  for (const evt of events) {
+    totalProcessed += await processAndBroadcastTrade(
+      {
+        token: evt.token,
+        trader: evt.trader,
+        isBuy: evt.isBuy,
+        ethAmount: evt.ethAmount,
+        tokenAmount: evt.tokenAmount,
+        virtualEth: evt.virtualEth,
+        virtualToken: evt.virtualToken,
+        timestamp: evt.timestamp,
+      },
+      evt.txHash,
+      evt.blockNumber
+    );
+  }
+
+  if (totalProcessed > 0) {
+    console.log(`[TradePoller:ReceiptScan] Processed ${totalProcessed} trades from blocks ${fromBlock}-${toBlock}`);
+  }
+}
+
+/**
+ * Shared: process a single trade event and broadcast to WS clients
+ * Returns 1 if processed, 0 if skipped/error
+ */
+async function processAndBroadcastTrade(
+  args: {
+    token: Address;
+    trader: Address;
+    isBuy: boolean;
+    ethAmount: bigint;
+    tokenAmount: bigint;
+    virtualEth: bigint;
+    virtualToken: bigint;
+    timestamp: bigint;
+  },
+  txHash: Hex,
+  blockNumber: bigint
+): Promise<number> {
+  try {
+    const { processTradeEvent } = await import("../spot/spotHistory");
+    const ethPriceUsd = currentEthPriceUsd || 600;
+
+    // processTradeEvent checks exists() internally for dedup
+    await processTradeEvent(
+      args.token,
+      args.trader,
+      args.isBuy,
+      args.ethAmount,
+      args.tokenAmount,
+      args.virtualEth,
+      args.virtualToken,
+      args.timestamp,
+      txHash,
+      blockNumber,
+      ethPriceUsd
+    );
+
+    // Ensure token is in supported list
+    addSupportedToken(args.token);
+
+    // Broadcast to WebSocket clients
+    let afterVirtualEth: bigint;
+    let afterVirtualToken: bigint;
+    if (args.isBuy) {
+      afterVirtualEth = args.virtualEth + args.ethAmount;
+      afterVirtualToken = args.virtualToken - args.tokenAmount;
+    } else {
+      const FEE_MULTIPLIER = 0.99;
+      const ethOutTotal = BigInt(Math.ceil(Number(args.ethAmount) / FEE_MULTIPLIER));
+      afterVirtualEth = args.virtualEth - ethOutTotal;
+      afterVirtualToken = args.virtualToken + args.tokenAmount;
+    }
+    const afterPrice = afterVirtualToken > 0n
+      ? Number(afterVirtualEth) / Number(afterVirtualToken)
+      : Number(args.virtualEth) / Number(args.virtualToken);
+
+    broadcastSpotTrade(args.token, {
+      token: args.token,
+      trader: args.trader,
+      isBuy: args.isBuy,
+      ethAmount: args.ethAmount.toString(),
+      tokenAmount: args.tokenAmount.toString(),
+      price: afterPrice.toString(),
+      txHash,
+      timestamp: Number(args.timestamp),
+    });
+
+    return 1;
+  } catch (tradeErr: any) {
+    console.error(`[TradePoller] Failed to process trade ${txHash?.slice(0, 10)}:`, tradeErr.message);
+    return 0;
   }
 }
 
@@ -15553,48 +15671,53 @@ async function startServer(): Promise<void> {
     }
 
     // ── Piggyback: 检查链上 Trade 事件 ──
-    // 首次回填: 第 30 次 sync (~90s 后，启动 RPC 拥堵已平息)
-    // 增量扫描: 每 5 次 sync (~15s)
+    // Uses BSCScan API fallback when RPC getLogs is blocked (datacenter IP throttling)
+    // 首次回填: 第 20 次 sync (~60s)，增量扫描: 每 10 次 sync (~30s)
     syncTradeCounter++;
-    const TRADE_SCAN_INTERVAL = tradeBackfillDone ? 5 : 30;
+    const TRADE_SCAN_INTERVAL = tradeBackfillDone ? 10 : 20;
     if (syncTradeCounter >= TRADE_SCAN_INTERVAL) {
       syncTradeCounter = 0;
       try {
-        const { parseAbiItem } = await import("viem");
-        const TRADE_ABI = parseAbiItem(
-          "event Trade(address indexed token, address indexed trader, bool isBuy, uint256 ethAmount, uint256 tokenAmount, uint256 virtualEth, uint256 virtualToken, uint256 timestamp)"
-        );
+        // Use main publicClient for getBlockNumber (has fallback transport, more reliable)
         const latestBlock = await publicClient.getBlockNumber();
 
-        // 首次运行: 延迟到第 30 个 sync 周期 (~90s) 后回填，避免启动期 RPC 拥堵
+        // 首次: 只记录 baseline block
         if (!tradeBackfillDone && lastSyncTradeBlock === 0n) {
-          // 第一次: 只记录 baseline block，不做扫描
           lastSyncTradeBlock = latestBlock;
-          console.log(`[TradeBackfill] Baseline set at block ${latestBlock}, will backfill in ~90s`);
+          console.log(`[TradeBackfill] Baseline set at block ${latestBlock}, will backfill in ~60s`);
           return;
         }
+        // 回填: 扫描最近 200 块 (~10 minutes)
+        // Receipt-based scanning is O(N) in blocks, so keep range small
         if (!tradeBackfillDone) {
           tradeBackfillDone = true;
-          const BACKFILL_BLOCKS = 500n; // ~25 分钟，小范围避免 RPC 限流
+          const BACKFILL_BLOCKS = 200n;
           const backfillFrom = latestBlock > BACKFILL_BLOCKS ? latestBlock - BACKFILL_BLOCKS : 0n;
-          console.log(`[TradeBackfill] Scanning blocks ${backfillFrom} → ${latestBlock} for historical trades...`);
+          console.log(`[TradeBackfill] Scanning blocks ${backfillFrom} → ${latestBlock} (${BACKFILL_BLOCKS} blocks)...`);
           try {
+            const { parseAbiItem } = await import("viem");
+            const TRADE_ABI = parseAbiItem(
+              "event Trade(address indexed token, address indexed trader, bool isBuy, uint256 ethAmount, uint256 tokenAmount, uint256 virtualEth, uint256 virtualToken, uint256 timestamp)"
+            );
             await pollTradeEvents(publicClient, TRADE_ABI, backfillFrom, latestBlock);
             console.log(`[TradeBackfill] Historical trade backfill complete`);
           } catch (backfillErr: any) {
-            console.warn(`[TradeBackfill] Backfill failed (will retry incrementally):`, backfillErr?.message?.slice(0, 100));
+            console.warn(`[TradeBackfill] Backfill failed (non-critical):`, backfillErr?.message?.slice(0, 100));
           }
           lastSyncTradeBlock = latestBlock;
           return;
         }
 
-        // 增量扫描: 扫描上次到现在的新区块
+        // 增量扫描
         if (latestBlock > lastSyncTradeBlock && lastSyncTradeBlock > 0n) {
+          const { parseAbiItem } = await import("viem");
+          const TRADE_ABI = parseAbiItem(
+            "event Trade(address indexed token, address indexed trader, bool isBuy, uint256 ethAmount, uint256 tokenAmount, uint256 virtualEth, uint256 virtualToken, uint256 timestamp)"
+          );
           await pollTradeEvents(publicClient, TRADE_ABI, lastSyncTradeBlock + 1n, latestBlock);
         }
         lastSyncTradeBlock = latestBlock;
       } catch (e: any) {
-        // 非关键 — 不影响价格同步，但记录错误便于排查
         console.warn(`[syncSpotPrices] Trade event scan error:`, e?.message?.slice(0, 120));
       }
     }
