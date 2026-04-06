@@ -211,10 +211,11 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/health > /dev/null 2>&1"]
+      test: ["CMD-SHELL", "bun -e \"fetch('http://localhost:8081/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))\""]
       interval: 15s
       timeout: 10s
       retries: 3
+      start_period: 30s
     deploy:
       resources:
         limits:
