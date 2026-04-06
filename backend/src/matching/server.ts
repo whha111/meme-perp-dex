@@ -6792,11 +6792,16 @@ async function pollTradeEvents(
   fromBlock: bigint,
   toBlock: bigint
 ): Promise<void> {
-  const BATCH_SIZE = 500n; // BSC Testnet public RPC limits getLogs range
+  const BATCH_SIZE = 200n; // BSC Testnet public RPC: 500 often gets "limit exceeded", 200 is safe
   let totalProcessed = 0;
 
   for (let start = fromBlock; start <= toBlock; start += BATCH_SIZE) {
     const end = start + BATCH_SIZE > toBlock ? toBlock : start + BATCH_SIZE;
+
+    // Rate-limit between batches to avoid RPC "limit exceeded" errors
+    if (start > fromBlock) {
+      await new Promise(r => setTimeout(r, 1000));
+    }
 
     const logs = await client.getLogs({
       address: TOKEN_FACTORY_ADDRESS,
@@ -15547,10 +15552,12 @@ async function startServer(): Promise<void> {
       try { runRiskCheck(); } catch (e) { /* 非关键路径 */ }
     }
 
-    // ── Piggyback: 每 5 次 sync (~15s) 顺便检查链上 Trade 事件 ──
-    // 复用 syncSpotPrices 的 RPC 连接，避免 TradePoller 的额外请求被限流
+    // ── Piggyback: 检查链上 Trade 事件 ──
+    // 首次回填: 第 30 次 sync (~90s 后，启动 RPC 拥堵已平息)
+    // 增量扫描: 每 5 次 sync (~15s)
     syncTradeCounter++;
-    if (syncTradeCounter >= 5) {
+    const TRADE_SCAN_INTERVAL = tradeBackfillDone ? 5 : 30;
+    if (syncTradeCounter >= TRADE_SCAN_INTERVAL) {
       syncTradeCounter = 0;
       try {
         const { parseAbiItem } = await import("viem");
@@ -15559,10 +15566,16 @@ async function startServer(): Promise<void> {
         );
         const latestBlock = await publicClient.getBlockNumber();
 
-        // 首次运行: 回填最近 2000 个区块 (~100 分钟) 的历史交易
+        // 首次运行: 延迟到第 30 个 sync 周期 (~90s) 后回填，避免启动期 RPC 拥堵
+        if (!tradeBackfillDone && lastSyncTradeBlock === 0n) {
+          // 第一次: 只记录 baseline block，不做扫描
+          lastSyncTradeBlock = latestBlock;
+          console.log(`[TradeBackfill] Baseline set at block ${latestBlock}, will backfill in ~90s`);
+          return;
+        }
         if (!tradeBackfillDone) {
           tradeBackfillDone = true;
-          const BACKFILL_BLOCKS = 2000n;
+          const BACKFILL_BLOCKS = 500n; // ~25 分钟，小范围避免 RPC 限流
           const backfillFrom = latestBlock > BACKFILL_BLOCKS ? latestBlock - BACKFILL_BLOCKS : 0n;
           console.log(`[TradeBackfill] Scanning blocks ${backfillFrom} → ${latestBlock} for historical trades...`);
           try {
@@ -15572,7 +15585,7 @@ async function startServer(): Promise<void> {
             console.warn(`[TradeBackfill] Backfill failed (will retry incrementally):`, backfillErr?.message?.slice(0, 100));
           }
           lastSyncTradeBlock = latestBlock;
-          return; // 回填完成后跳过本轮增量扫描
+          return;
         }
 
         // 增量扫描: 扫描上次到现在的新区块
@@ -15965,9 +15978,12 @@ async function startServer(): Promise<void> {
   startAllSwapWatchers();
 
   // ========================================
-  // 启动时回填现货交易数据 (异步，不阻塞启动)
-  // 回填最近 50000 个区块 (~28 小时) 以捕获重启期间遗漏的交易
+  // 启动时回填现货交易数据 — 已移至 syncSpotPrices piggyback (延迟 90s)
+  // 旧的 backfillHistoricalTrades 有 @noble/hashes 依赖解析问题
+  // 新方案使用 pollTradeEvents (静态 import viem，无依赖问题)
   // ========================================
+  console.log(`[Startup] Trade backfill will run in ~90s via syncSpotPrices (avoiding startup RPC congestion)`);
+  if (false) { // DISABLED: old backfill has @noble/hashes/crypto ENOENT bug
   (async () => {
     try {
       const { createPublicClient, http } = await import("viem");
@@ -15976,7 +15992,6 @@ async function startServer(): Promise<void> {
         transport: rpcTransport,
       });
       const currentBlock = await backfillClient.getBlockNumber();
-      // BSC Testnet public RPC has strict getLogs limits, use smaller range
       const backfillFrom = currentBlock > 5000n ? currentBlock - 5000n : 0n;
       console.log(`[Startup] Backfilling spot trades from block ${backfillFrom} to ${currentBlock} for all supported tokens...`);
       const { backfillHistoricalTrades } = await import("../spot/spotHistory");
@@ -15995,6 +16010,7 @@ async function startServer(): Promise<void> {
       console.error("[Startup] Spot trade backfill failed:", e.message);
     }
   })();
+  } // end DISABLED
 
   // ========================================
   // 启动 Event-Driven Risk Engine (Meme Perp 核心)
