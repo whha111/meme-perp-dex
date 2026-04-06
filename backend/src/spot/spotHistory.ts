@@ -746,56 +746,55 @@ export async function updateKlineWithCurrentPrice(
   // 使用 USD 价格，前端图表直接显示 USD
   const price = parseFloat(priceUsd);
 
-  // 只更新 1m K 线 (其他周期会基于 1m 聚合)
-  const resolution: KlineResolution = "1m";
-  const resolutionSeconds = KLINE_RESOLUTIONS[resolution];
-  const bucketTime = Math.floor(now / resolutionSeconds) * resolutionSeconds;
+  // 更新所有周期的 K 线 (不只是 1m)
+  // 前端可切换 1m/5m/15m/1h/4h/1d，如果只写 1m 其他周期会返回空数据
+  for (const resolution of Object.keys(KLINE_RESOLUTIONS) as KlineResolution[]) {
+    const resolutionSeconds = KLINE_RESOLUTIONS[resolution];
+    const bucketTime = Math.floor(now / resolutionSeconds) * resolutionSeconds;
 
-  const key = Keys.kline(token, resolution);
-  const existing = await client.hget(key, bucketTime.toString());
+    const key = Keys.kline(token, resolution);
+    const existing = await client.hget(key, bucketTime.toString());
 
-  let bar: KlineBar;
+    let bar: KlineBar;
 
-  if (existing) {
-    bar = JSON.parse(existing);
+    if (existing) {
+      bar = JSON.parse(existing);
 
-    // 更新 close，仅在真实新高/新低时更新 high/low
-    // 防止 RPC 返回旧区块价格导致 vol=0 蜡烛出现假下影线
-    const currentClose = parseFloat(bar.close);
-    if (bar.trades === 0 && currentClose > 0) {
-      // 无交易时：仅允许价格向上扩展（bonding curve 没交易价格不会下跌）
-      // 小幅波动（<0.5%）视为精度误差，不更新 low
-      const dropPct = (currentClose - price) / currentClose;
-      if (price > parseFloat(bar.high)) bar.high = price.toString();
-      if (dropPct < 0.005) {
-        // 正常精度范围内，更新 close
+      // 更新 close，仅在真实新高/新低时更新 high/low
+      // 防止 RPC 返回旧区块价格导致 vol=0 蜡烛出现假下影线
+      const currentClose = parseFloat(bar.close);
+      if (bar.trades === 0 && currentClose > 0) {
+        // 无交易时：仅允许价格向上扩展（bonding curve 没交易价格不会下跌）
+        // 小幅波动（<0.5%）视为精度误差，不更新 low
+        const dropPct = (currentClose - price) / currentClose;
+        if (price > parseFloat(bar.high)) bar.high = price.toString();
+        if (dropPct < 0.005) {
+          bar.close = price.toString();
+        }
+      } else {
+        // 有交易时：正常更新 high/low/close
+        bar.high = Math.max(parseFloat(bar.high), price).toString();
+        bar.low = Math.min(parseFloat(bar.low), price).toString();
         bar.close = price.toString();
       }
-      // 超过 0.5% 的下跌在无交易时视为 RPC 旧数据，忽略
     } else {
-      // 有交易时：正常更新 high/low/close
-      bar.high = Math.max(parseFloat(bar.high), price).toString();
-      bar.low = Math.min(parseFloat(bar.low), price).toString();
-      bar.close = price.toString();
+      bar = {
+        time: bucketTime,
+        open: price.toString(),
+        high: price.toString(),
+        low: price.toString(),
+        close: price.toString(),
+        volume: "0",
+        trades: 0,
+      };
     }
-  } else {
-    // 创建新的 K 线
-    // 使用当前轮询价格作为 open（避免 prevClose 精度不同导致假红蜡烛）
-    bar = {
-      time: bucketTime,
-      open: price.toString(),
-      high: price.toString(),
-      low: price.toString(),
-      close: price.toString(),
-      volume: "0",
-      trades: 0,
-    };
+
+    await client.hset(key, bucketTime.toString(), JSON.stringify(bar));
+
+    // 刷新 TTL: 1m=7天, 其他=30天
+    const ttl = resolution === "1m" ? 7 * 24 * 60 * 60 : 30 * 24 * 60 * 60;
+    await client.expire(key, ttl);
   }
-
-  await client.hset(key, bucketTime.toString(), JSON.stringify(bar));
-
-  // 刷新 TTL (防止 initializeTokenKline 设的 7 天过期后 K 线永久丢失)
-  await client.expire(key, 7 * 24 * 60 * 60);
 
   // 更新最新价格
   await SpotStatsRepo.updatePrice(token, priceEth, priceUsd);
