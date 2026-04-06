@@ -114,7 +114,7 @@ const LIQUIDATION_ADDRESS_LOCAL = process.env.LIQUIDATION_ADDRESS as Address;
 const PERP_VAULT_ADDRESS_LOCAL = process.env.PERP_VAULT_ADDRESS as Address;
 const BATCH_INTERVAL_MS = parseInt(process.env.BATCH_INTERVAL_MS || "30000"); // 30 seconds
 const FUNDING_RATE_INTERVAL_MS = parseInt(process.env.FUNDING_RATE_INTERVAL_MS || "5000"); // 5 seconds
-const SPOT_PRICE_SYNC_INTERVAL_MS = parseInt(process.env.SPOT_PRICE_SYNC_INTERVAL_MS || "1000"); // P0-3: 1s (was 3s) — faster price sync for risk engine
+const SPOT_PRICE_SYNC_INTERVAL_MS = parseInt(process.env.SPOT_PRICE_SYNC_INTERVAL_MS || "3000"); // 3s — balanced between price accuracy and RPC rate limits
 // P0-1: 签名验证仅在 NODE_ENV=test 时可跳过，生产环境硬编码开启
 const SKIP_SIGNATURE_VERIFY = process.env.NODE_ENV === "test" && process.env.SKIP_SIGNATURE_VERIFY === "true";
 // P0-1: 生产环境硬保护 — 即使 env 配错也不能绕过签名
@@ -6313,8 +6313,8 @@ async function startEventWatching(): Promise<void> {
       name: "settlementV2-deposited",
       contractAddress: SETTLEMENT_V2_ADDRESS,
       eventAbi: v2DepositedAbi,
-      pollIntervalMs: 3000,
-      backfillBlocks: 200n,
+      pollIntervalMs: 15000,
+      backfillBlocks: 50n,
       batchSize: 500n,
       rpcUrl: RPC_URL,
       chainId: CONFIG_CHAIN_ID,
@@ -6348,8 +6348,8 @@ async function startEventWatching(): Promise<void> {
       name: "settlementV2-depositedBNB",
       contractAddress: SETTLEMENT_V2_ADDRESS,
       eventAbi: v2DepositedBNBAbi,
-      pollIntervalMs: 3000,
-      backfillBlocks: 200n,
+      pollIntervalMs: 15000,
+      backfillBlocks: 50n,
       batchSize: 500n,
       rpcUrl: RPC_URL,
       chainId: CONFIG_CHAIN_ID,
@@ -6383,8 +6383,8 @@ async function startEventWatching(): Promise<void> {
       name: "settlementV2-depositedFor",
       contractAddress: SETTLEMENT_V2_ADDRESS,
       eventAbi: v2DepositedForAbi,
-      pollIntervalMs: 3000,
-      backfillBlocks: 200n,
+      pollIntervalMs: 15000,
+      backfillBlocks: 50n,
       batchSize: 500n,
       rpcUrl: RPC_URL,
       chainId: CONFIG_CHAIN_ID,
@@ -6418,8 +6418,8 @@ async function startEventWatching(): Promise<void> {
       name: "settlementV2-withdrawn",
       contractAddress: SETTLEMENT_V2_ADDRESS,
       eventAbi: v2WithdrawnAbi,
-      pollIntervalMs: 3000,
-      backfillBlocks: 200n,
+      pollIntervalMs: 15000,
+      backfillBlocks: 50n,
       batchSize: 500n,
       rpcUrl: RPC_URL,
       chainId: CONFIG_CHAIN_ID,
@@ -6504,8 +6504,8 @@ async function startEventWatching(): Promise<void> {
     name: "tokenFactory-liquidityMigrated",
     contractAddress: TOKEN_FACTORY_ADDRESS,
     eventAbi: liquidityMigratedAbi,
-    pollIntervalMs: 10000,
-    backfillBlocks: 500n,
+    pollIntervalMs: 30000,
+    backfillBlocks: 100n,
     batchSize: 500n,
     rpcUrl: RPC_URL,
     chainId: CONFIG_CHAIN_ID,
@@ -6540,8 +6540,8 @@ async function startEventWatching(): Promise<void> {
     name: "tokenFactory-tokenCreated",
     contractAddress: TOKEN_FACTORY_ADDRESS,
     eventAbi: tokenCreatedAbi,
-    pollIntervalMs: 10000,
-    backfillBlocks: 500n,
+    pollIntervalMs: 30000,
+    backfillBlocks: 100n,
     batchSize: 500n,
     rpcUrl: RPC_URL,
     chainId: CONFIG_CHAIN_ID,
