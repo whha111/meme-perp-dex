@@ -324,36 +324,30 @@ export const KlineRepo = {
       barMap.set(bar.time, bar);
     }
 
-    // ✅ 关键修改：从第一笔有交易的 K 线开始，而不是从 limit 个周期前开始
     // 找到第一根有交易的 K 线（trades > 0）
     const firstTradeBar = storedBars.find(b => b.trades > 0);
-    if (!firstTradeBar) {
-      // 没有任何交易：只返回最新的 1 根 K 线（当前价格点）
-      // 不做 gap-fill，避免新 token 未交易就显示多根虚假水平线
-      const latestBar = storedBars[storedBars.length - 1];
-      return [latestBar];
-    }
 
-    // 从第一笔交易开始
-    const startTime = firstTradeBar.time;
+    // 起点：优先用第一笔真实交易，否则用最早的 bar（updateKlineWithCurrentPrice 写入的也有效）
+    const startBar = firstTradeBar || storedBars[0];
+    const startTime = startBar.time;
 
-    // 找到最后一根有交易的 K 线
-    let lastTradeBar = firstTradeBar;
+    // 终点：优先用最后一笔真实交易 + trailing，否则用最新的 bar
+    let lastTradeBar = startBar;
     for (const bar of storedBars) {
       if (bar.trades > 0) lastTradeBar = bar;
     }
-    const lastTradeTime = lastTradeBar.time;
+    // 如果没有任何 trade bar，使用最后一个 stored bar 的时间
+    const lastBarTime = firstTradeBar ? lastTradeBar.time : storedBars[storedBars.length - 1].time;
 
     // 填充策略：
-    // 1. 有交易的 K 线之间：完整填充空隙（保持价格连续性）
-    // 2. 最后一笔交易到当前时间：最多填充 MAX_TRAILING_EMPTY 根
-    //    避免长时间无交易后出现几百根空蜡烛
+    // 1. 有数据的 K 线之间：完整填充空隙（保持价格连续性）
+    // 2. 最后数据到当前时间：最多填充 MAX_TRAILING_EMPTY 根
     const MAX_TRAILING_EMPTY = 6;
-    const trailingLimit = lastTradeTime + MAX_TRAILING_EMPTY * resolutionSeconds;
+    const trailingLimit = lastBarTime + MAX_TRAILING_EMPTY * resolutionSeconds;
     const endTime = Math.min(currentBucket, trailingLimit);
 
     const filledBars: KlineBar[] = [];
-    let prevClose = firstTradeBar.open;
+    let prevClose = startBar.open;
 
     for (let t = startTime; t <= endTime; t += resolutionSeconds) {
       const existing = barMap.get(t);
@@ -799,6 +793,9 @@ export async function updateKlineWithCurrentPrice(
   }
 
   await client.hset(key, bucketTime.toString(), JSON.stringify(bar));
+
+  // 刷新 TTL (防止 initializeTokenKline 设的 7 天过期后 K 线永久丢失)
+  await client.expire(key, 7 * 24 * 60 * 60);
 
   // 更新最新价格
   await SpotStatsRepo.updatePrice(token, priceEth, priceUsd);
