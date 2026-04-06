@@ -6730,11 +6730,24 @@ let lastScannedBlock = 0n;
 const TRADE_POLL_INTERVAL_MS = 15_000; // 15 秒轮询一次
 
 async function startTradeEventPoller(): Promise<void> {
-  const { createPublicClient, http, parseAbiItem } = await import("viem");
+  const { createPublicClient, http, parseAbiItem, fallback } = await import("viem");
+
+  // Use a DEDICATED transport for TradePoller to avoid competing with syncSpotPrices
+  // Primary: fallback URL 1 (different endpoint from main transport)
+  // Backup: fallback URL 2, then main RPC_URL
+  const tradeRpcUrls = [
+    process.env.RPC_URL_FALLBACK_1,
+    process.env.RPC_URL_FALLBACK_2,
+    RPC_URL,
+  ].filter(Boolean) as string[];
+  const tradeTransport = tradeRpcUrls.length > 1
+    ? fallback(tradeRpcUrls.map(url => http(url, { retryCount: 1, retryDelay: 2000 })))
+    : http(tradeRpcUrls[0] || RPC_URL, { retryCount: 2, retryDelay: 1000 });
+  console.log(`[TradePoller] Using dedicated RPC: ${tradeRpcUrls[0]?.slice(0, 40)}...`);
 
   const pollClient = createPublicClient({
     chain: activeChain,
-    transport: rpcTransport,
+    transport: tradeTransport,
   });
 
   const TRADE_EVENT_ABI = parseAbiItem(
