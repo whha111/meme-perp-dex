@@ -6705,14 +6705,10 @@ async function startEventWatching(): Promise<void> {
   console.log("[Events] Event watching started successfully");
 
   // ========================================
-  // 启动 HTTP 轮询式 Trade 事件监听 (WebSocket 的可靠备份)
-  // 延迟 10 秒启动，确保其他 EventPoller 已稳定
+  // Trade 事件监听已整合到 syncSpotPrices 周期中 (每 5 次 sync = ~15s)
+  // 不再单独启动 TradePoller — 避免额外 RPC 请求被限流
   // ========================================
-  setTimeout(() => {
-    startTradeEventPoller().catch((e) => {
-      console.error("[TradePoller] Failed to start:", e);
-    });
-  }, 10000);
+  console.log("[Events] Trade event detection integrated into syncSpotPrices (every ~15s)");
 }
 
 /**
@@ -15364,6 +15360,9 @@ async function startServer(): Promise<void> {
   // 日志节流: 避免 429 错误刷屏
   let _lastSyncErrorLog = 0;
 
+  let syncTradeCounter = 0;
+  let lastSyncTradeBlock = 0n;
+
   const syncSpotPrices = async () => {
     const { updateKlineWithCurrentPrice } = await import("../spot/spotHistory");
 
@@ -15538,6 +15537,29 @@ async function startServer(): Promise<void> {
       // P0-3: 价格变动即触发风控检查 — 不等 500ms 兜底轮询
       // 参考 GMX: Keeper 监控 oracle 价格变动即触发清算
       try { runRiskCheck(); } catch (e) { /* 非关键路径 */ }
+    }
+
+    // ── Piggyback: 每 5 次 sync (~15s) 顺便检查链上 Trade 事件 ──
+    // 复用 syncSpotPrices 的 RPC 连接，避免 TradePoller 的额外请求被限流
+    syncTradeCounter++;
+    if (syncTradeCounter >= 5) {
+      syncTradeCounter = 0;
+      try {
+        const { parseAbiItem } = await import("viem");
+        const latestBlock = await publicClient.getBlockNumber();
+        if (latestBlock > lastSyncTradeBlock && lastSyncTradeBlock > 0n) {
+          const TRADE_ABI = parseAbiItem(
+            "event Trade(address indexed token, address indexed trader, bool isBuy, uint256 ethAmount, uint256 tokenAmount, uint256 virtualEth, uint256 virtualToken, uint256 timestamp)"
+          );
+          await pollTradeEvents(publicClient, TRADE_ABI, lastSyncTradeBlock + 1n, latestBlock);
+        }
+        lastSyncTradeBlock = latestBlock;
+      } catch (e: any) {
+        // 非关键 — 不影响价格同步
+        if (!e?.message?.includes("limit")) {
+          console.warn(`[syncSpotPrices] Trade event scan failed:`, e?.message?.slice(0, 80));
+        }
+      }
     }
   };
 
