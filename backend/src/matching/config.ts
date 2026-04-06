@@ -252,4 +252,4 @@ export const REDIS_PASSWORD = process.env.REDIS_PASSWORD || "";
 // PostgreSQL配置
 // ============================================================
 
-export const POSTGRES_URL = process.env.DATABASE_URL || "postgresql://localhost:5432/memeperp";
+export const POSTGRES_URL = process.env.POSTGRES_URL || process.env.DATABASE_URL || "postgresql://localhost:5432/memeperp";

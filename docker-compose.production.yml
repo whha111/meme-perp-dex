@@ -100,6 +100,7 @@ services:
       - MEMEPERP_TOKEN_FACTORY_ADDRESS=${TOKEN_FACTORY_ADDRESS}
       # Matching Engine
       - MEMEPERP_MATCHING_ENGINE_URL=http://matching-engine:8081
+      - MEMEPERP_INTERNAL_API_KEY=${INTERNAL_API_KEY:-memeperp_internal_key_2026}
       # Security — production allowed origins
       - MEMEPERP_SECURITY_ALLOWED_ORIGINS=http://23.27.201.207,http://23.27.201.207:80,http://23.27.201.207:3000
       - MEMEPERP_LOG_LEVEL=info
@@ -152,6 +153,7 @@ services:
       - MEMEPERP_FUNDING_RATE_ADDRESS=${FUNDING_RATE_ADDRESS}
       - MEMEPERP_BLOCKCHAIN_PRICE_FEED_ADDRESS=${PRICE_FEED_ADDRESS}
       - MEMEPERP_MATCHING_ENGINE_URL=http://matching-engine:8081
+      - MEMEPERP_INTERNAL_API_KEY=${INTERNAL_API_KEY:-memeperp_internal_key_2026}
       # Security — production allowed origins
       - MEMEPERP_SECURITY_ALLOWED_ORIGINS=http://23.27.201.207,http://23.27.201.207:80
       - MEMEPERP_LOG_LEVEL=info
@@ -198,10 +200,11 @@ services:
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
       - POSTGRES_URL=postgresql://memeperp:${POSTGRES_PASSWORD}@postgres:5432/memeperp
       - PLATFORM_SIGNER_KEY=${PLATFORM_SIGNER_KEY}
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY:-memeperp_internal_key_2026}
       - SKIP_BALANCE_SYNC=${SKIP_BALANCE_SYNC:-true}
       - SNAPSHOT_INTERVAL_MS=${SNAPSHOT_INTERVAL_MS:-300000}
       - RPC_URL_FALLBACK_1=https://data-seed-prebsc-2-s1.binance.org:8545/
-      - RPC_URL_FALLBACK_2=https://bsc-testnet.public.blastapi.io
+      - RPC_URL_FALLBACK_2=https://data-seed-prebsc-1-s2.binance.org:8545/
     depends_on:
       postgres:
         condition: service_healthy
@@ -228,7 +231,9 @@ services:
         - NEXT_PUBLIC_API_URL=${API_URL:-https://api.memeperp.xyz}
         - NEXT_PUBLIC_WEBSOCKET_URL=${WS_URL:-wss://api.memeperp.xyz/ws}
         - NEXT_PUBLIC_CHAIN_ID=${CHAIN_ID:-97}
-        - NEXT_PUBLIC_MATCHING_ENGINE_URL=${MATCHING_ENGINE_URL:-http://23.27.201.207:8081}
+        # IMPORTANT: This URL is accessed from the USER'S BROWSER, not from Docker.
+        # Must use the public-facing nginx URL, NOT Docker internal hostname.
+        - NEXT_PUBLIC_MATCHING_ENGINE_URL=${PUBLIC_API_URL:-http://23.27.201.207}
         # Contract addresses (baked into JS bundle at build time)
         - NEXT_PUBLIC_TOKEN_FACTORY_ADDRESS=${TOKEN_FACTORY_ADDRESS:-0xB40541Ff9f24883149fc6F9CD1021dB9C7BCcB83}
         - NEXT_PUBLIC_SETTLEMENT_ADDRESS=${SETTLEMENT_ADDRESS:-0x32de01f0E464521583E52d50f125492D10EfDBB3}
