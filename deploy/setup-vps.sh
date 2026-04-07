@@ -74,9 +74,27 @@ JWT_SECRET=${JWT_SEC}
 
 # ============================================================
 # 区块链配置 — BSC Testnet (Chain 97)
+# 每个服务用独立 RPC 节点，避免限流
 # ============================================================
-RPC_URL=https://data-seed-prebsc-1-s1.binance.org:8545/
 CHAIN_ID=97
+
+# 撮合引擎 (最重，主 + 3 fallback)
+RPC_URL_MATCHING_ENGINE=https://rpc.ankr.com/bsc_testnet_chapel/c1a8e7c8345743fa7649c1477f51c72f1050ef49c10c6c46870b3f6a1f5f581e
+RPC_URL_MATCHING_ENGINE_FALLBACK_1=https://bsc-testnet.drpc.org
+RPC_URL_MATCHING_ENGINE_FALLBACK_2=https://bsc-testnet-rpc.publicnode.com
+RPC_URL_MATCHING_ENGINE_FALLBACK_3=https://data-seed-prebsc-1-s1.bnbchain.org:8545
+
+# Keeper (清算/资金费率)
+RPC_URL_KEEPER=https://go.getblock.io/3b565c67c0af4a59a66c6c5e8f703b61
+
+# Go 后端 (API/索引)
+RPC_URL_BACKEND=https://bsc-testnet.nodereal.io/v1/b639a93790d0469296e4334cbf7c7bbc
+
+# 前端 (用户浏览器端)
+RPC_URL_FRONTEND=https://go.getblock.io/039f3697664446639ddbec3a2cef5d69
+
+# 向后兼容
+RPC_URL=https://rpc.ankr.com/bsc_testnet_chapel/c1a8e7c8345743fa7649c1477f51c72f1050ef49c10c6c46870b3f6a1f5f581e
 
 # ⚠️ 必填: Keeper 钱包私钥 (不带 0x 前缀)
 KEEPER_PRIVATE_KEY=FILL_IN_YOUR_PRIVATE_KEY

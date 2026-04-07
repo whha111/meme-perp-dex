@@ -16,7 +16,7 @@ export const ENV = {
   BACKEND_URL: process.env.BACKEND_URL || "http://localhost:8080",
   MASTER_PRIVATE_KEY: process.env.MASTER_PRIVATE_KEY || "",
   MASTER_MNEMONIC: process.env.MASTER_MNEMONIC || "",
-  DEPLOYER_PRIVATE_KEY: process.env.DEPLOYER_PRIVATE_KEY || "0x4698c351c4aead4844a41399b035e1177535db94a5418a79df07b7f0bf158776",
+  DEPLOYER_PRIVATE_KEY: process.env.DEPLOYER_PRIVATE_KEY || "",
 };
 
 // ═══════════════════════════════════════════════

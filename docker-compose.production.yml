@@ -81,8 +81,8 @@ services:
       - MEMEPERP_REDIS_ADDR=redis:6379
       - MEMEPERP_REDIS_PASSWORD=${REDIS_PASSWORD}
       - MEMEPERP_JWT_SECRET=${JWT_SECRET}
-      # Blockchain configuration
-      - MEMEPERP_BLOCKCHAIN_RPC_URL=${RPC_URL}
+      # Blockchain configuration — Go 后端用独立 RPC 节点
+      - MEMEPERP_BLOCKCHAIN_RPC_URL=${RPC_URL_BACKEND:-${RPC_URL}}
       - MEMEPERP_BLOCKCHAIN_CHAIN_ID=${CHAIN_ID:-97}
       - MEMEPERP_BLOCKCHAIN_PRIVATE_KEY=${KEEPER_PRIVATE_KEY}
       - MEMEPERP_BLOCKCHAIN_VAULT_ADDRESS=${VAULT_ADDRESS}
@@ -142,8 +142,8 @@ services:
       - MEMEPERP_REDIS_ADDR=redis:6379
       - MEMEPERP_REDIS_PASSWORD=${REDIS_PASSWORD}
       - MEMEPERP_JWT_SECRET=${JWT_SECRET}
-      # Blockchain configuration
-      - MEMEPERP_BLOCKCHAIN_RPC_URL=${RPC_URL}
+      # Blockchain configuration — Keeper 用独立 RPC 节点
+      - MEMEPERP_BLOCKCHAIN_RPC_URL=${RPC_URL_KEEPER:-${RPC_URL}}
       - MEMEPERP_BLOCKCHAIN_CHAIN_ID=${CHAIN_ID:-97}
       - MEMEPERP_BLOCKCHAIN_PRIVATE_KEY=${KEEPER_PRIVATE_KEY}
       # Contract addresses
@@ -182,7 +182,11 @@ services:
     environment:
       - PORT=8081
       - CHAIN_ID=${CHAIN_ID:-97}
-      - RPC_URL=${RPC_URL}
+      # 撮合引擎用独立 RPC 节点 + 多 fallback
+      - RPC_URL=${RPC_URL_MATCHING_ENGINE:-${RPC_URL}}
+      - RPC_URL_FALLBACK_1=${RPC_URL_MATCHING_ENGINE_FALLBACK_1:-https://bsc-testnet.drpc.org}
+      - RPC_URL_FALLBACK_2=${RPC_URL_MATCHING_ENGINE_FALLBACK_2:-https://bsc-testnet-rpc.publicnode.com}
+      - RPC_URL_FALLBACK_3=${RPC_URL_MATCHING_ENGINE_FALLBACK_3:-https://data-seed-prebsc-1-s1.bnbchain.org:8545}
       - MATCHER_PRIVATE_KEY=${KEEPER_PRIVATE_KEY}
       - SETTLEMENT_ADDRESS=${POSITION_ADDRESS}
       - TOKEN_FACTORY_ADDRESS=${TOKEN_FACTORY_ADDRESS}
@@ -203,8 +207,6 @@ services:
       - INTERNAL_API_KEY=${INTERNAL_API_KEY:-memeperp_internal_key_2026}
       - SKIP_BALANCE_SYNC=${SKIP_BALANCE_SYNC:-true}
       - SNAPSHOT_INTERVAL_MS=${SNAPSHOT_INTERVAL_MS:-300000}
-      - RPC_URL_FALLBACK_1=https://data-seed-prebsc-2-s1.binance.org:8545/
-      - RPC_URL_FALLBACK_2=https://data-seed-prebsc-1-s2.binance.org:8545/
     depends_on:
       postgres:
         condition: service_healthy
@@ -250,9 +252,9 @@ services:
         - NEXT_PUBLIC_CONTRACT_REGISTRY_ADDRESS=0x0C6605b820084e43d0708943d15b1c681f2bCac1
         - NEXT_PUBLIC_WETH_ADDRESS=0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd
         - NEXT_PUBLIC_ROUTER_ADDRESS=0xD99D1c33F9fC3444f8101754aBC46c52416550D1
-        - NEXT_PUBLIC_RPC_URL=${RPC_URL:-https://data-seed-prebsc-1-s1.binance.org:8545/}
-        - NEXT_PUBLIC_BSC_RPC_URL=${RPC_URL:-https://data-seed-prebsc-1-s1.binance.org:8545/}
-        - NEXT_PUBLIC_BSC_TESTNET_RPC_URL=${RPC_URL:-https://data-seed-prebsc-1-s1.binance.org:8545/}
+        - NEXT_PUBLIC_RPC_URL=${RPC_URL_FRONTEND:-${RPC_URL:-https://data-seed-prebsc-1-s1.binance.org:8545/}}
+        - NEXT_PUBLIC_BSC_RPC_URL=${RPC_URL_FRONTEND:-${RPC_URL:-https://data-seed-prebsc-1-s1.binance.org:8545/}}
+        - NEXT_PUBLIC_BSC_TESTNET_RPC_URL=${RPC_URL_FRONTEND:-${RPC_URL:-https://data-seed-prebsc-1-s1.binance.org:8545/}}
     container_name: memeperp-frontend
     restart: always
     ports:

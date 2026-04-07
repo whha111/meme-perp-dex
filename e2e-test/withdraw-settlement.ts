@@ -24,8 +24,8 @@ import { bscTestnet } from "viem/chains";
 
 // ============ Config ============
 const RPC_URL = "https://data-seed-prebsc-1-s1.bnbchain.org:8545";
-const DEPLOYER_PK =
-  "0x4698c351c4aead4844a41399b035e1177535db94a5418a79df07b7f0bf158776" as Hex;
+const DEPLOYER_PK = (process.env.DEPLOYER_PRIVATE_KEY || "") as Hex;
+if (!DEPLOYER_PK) { console.error("❌ Set DEPLOYER_PRIVATE_KEY env var"); process.exit(1); }
 const DEPLOYER = "0xAecb229194314999E396468eb091b42E44Bc3c8c" as Address;
 const SETTLEMENT_V2 = "0xF83D5d2E437D0e27144900cb768d2B5933EF3d6b" as Address;
 const WBNB_ADDR = "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd" as Address;

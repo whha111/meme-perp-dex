@@ -89,7 +89,8 @@ if (!DEPLOYER_KEY) throw new Error("Set DEPLOYER_PRIVATE_KEY");
 
 // Wallet 0 from main-wallets.json (verified EOA on BSC Testnet)
 const TRADER2_KEY = (process.env.TRADER2_PRIVATE_KEY ||
-  "0xf26b5decfae47ab48f7781f087726c8717e1381114015f8ed1f7b931c1985a9d") as Hex;
+  "") as Hex;
+if (!TRADER2_KEY) throw new Error("Set TRADER2_PRIVATE_KEY env var");
 
 const trader1 = privateKeyToAccount(DEPLOYER_KEY);
 const trader2 = privateKeyToAccount(TRADER2_KEY);

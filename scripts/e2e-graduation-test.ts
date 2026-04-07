@@ -43,16 +43,21 @@ const TARGET_TOKEN: Address = "0xe96B9071FdF8494A84C5bAC4ea198D9Be5C5ABc2";
 const TARGET_NAME = "DOGE";
 
 // Deployer = bonding curve 买手
-const DEPLOYER_KEY: Hex = "0x4698c351c4aead4844a41399b035e1177535db94a5418a79df07b7f0bf158776";
+// Set DEPLOYER_KEY env var before running
+const DEPLOYER_KEY: Hex = (process.env.DEPLOYER_KEY || "") as Hex;
+if (!DEPLOYER_KEY) { console.error("❌ DEPLOYER_KEY env var required"); process.exit(1); }
 const deployer = privateKeyToAccount(DEPLOYER_KEY);
 
-// 合约交易使用的测试钱包 (从 main-wallets.json 挑 4 个有余额的)
-const PERP_WALLETS: { key: Hex; addr: Address }[] = [
-  { key: "0xb1b635271517a8061fd58dbf260e185d5b327872b1a3c51d1d36b6f6f8771477", addr: "0xCd6217Dbc3670acDa6Ec2526e99DD699b136b63a" },
-  { key: "0x5864d1a4dc2897d3a9c56b48f442306997c89a60adf7c35e63fb26b2cfb891c4", addr: "0xe796edf6a2A0F3f1505A0bE57192f2a9F06f0226" },
-  { key: "0xe30e1e5d6bb7863ad333807865b7fa391ecb8732192d7e0bb3bb708351fd2092", addr: "0x0e03798EC626BE86fe766355497C363cb8410577" },
-  { key: "0xcbe4cc7cf82c6d1cc3d117ae3289153b55112c90b0525ffec06d7b896c9a6614", addr: "0x4561a71E348d40C8A16Fd9e7c97A307a4b1c0917" },
-];
+// 合约交易使用的测试钱包
+// Set PERP_WALLET_KEYS env var as comma-separated private keys
+// Set PERP_WALLET_ADDRS env var as comma-separated addresses
+const walletKeys = (process.env.PERP_WALLET_KEYS || "").split(",").filter(Boolean) as Hex[];
+const walletAddrs = (process.env.PERP_WALLET_ADDRS || "").split(",").filter(Boolean) as Address[];
+if (walletKeys.length < 2 || walletKeys.length !== walletAddrs.length) {
+  console.error("❌ PERP_WALLET_KEYS and PERP_WALLET_ADDRS env vars required (comma-separated, min 2)");
+  process.exit(1);
+}
+const PERP_WALLETS: { key: Hex; addr: Address }[] = walletKeys.map((key, i) => ({ key, addr: walletAddrs[i] }));
 
 // EIP-712 域 (合约交易签名) — 引擎用 Settlement V1 地址作 verifyingContract
 const SETTLEMENT_V1: Address = "0x32de01f0E464521583E52d50f125492D10EfDBB3";

@@ -43,10 +43,11 @@ const TYPES = {
 } as const;
 
 // Wallets with enough margin in matching engine (~0.04-0.06 ETH available)
-const WALLETS = [
-  { addr: "0x1d17fdbb1fda1e988a35ad815b618d35bf553122" as Address, key: "0x03c2f0b3c6b7f7fab4fe3be57050f5365a73bd3f72798cd1e55c6100fb49ca9b" as Hex },
-  { addr: "0x013e5e89015fcab6043a64a6cb219cdd3b59a1f3" as Address, key: "0xfba84589214ffe5572bfb4840e14792825a9454d24006f2e0751a0643af0ed36" as Hex },
-];
+// Set MM_WALLET_KEYS and MM_WALLET_ADDRS env vars (comma-separated)
+const mmKeys = (process.env.MM_WALLET_KEYS || "").split(",").filter(Boolean) as Hex[];
+const mmAddrs = (process.env.MM_WALLET_ADDRS || "").split(",").filter(Boolean) as Address[];
+if (mmKeys.length < 1) { console.error("❌ Set MM_WALLET_KEYS and MM_WALLET_ADDRS env vars"); process.exit(1); }
+const WALLETS = mmKeys.map((key, i) => ({ addr: mmAddrs[i], key }));
 
 const SPREADS = [0.005, 0.01, 0.02, 0.03]; // 0.5%, 1%, 2%, 3%
 const SIZES = [3000000000000000n, 4000000000000000n, 5000000000000000n, 3000000000000000n]; // 0.003-0.005 ETH
