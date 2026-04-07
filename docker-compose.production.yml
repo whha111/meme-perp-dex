@@ -231,8 +231,8 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - NEXT_PUBLIC_API_URL=${API_URL:-https://api.memeperp.xyz}
-        - NEXT_PUBLIC_WEBSOCKET_URL=${WS_URL:-wss://api.memeperp.xyz/ws}
+        - NEXT_PUBLIC_API_URL=${API_URL:-https://dexi.fun}
+        - NEXT_PUBLIC_WEBSOCKET_URL=${WS_URL:-wss://dexi.fun/ws}
         - NEXT_PUBLIC_CHAIN_ID=${CHAIN_ID:-97}
         # IMPORTANT: This URL is accessed from the USER'S BROWSER, not from Docker.
         # Must use the public-facing nginx URL, NOT Docker internal hostname.
@@ -279,7 +279,7 @@ services:
       - "443:443"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/ssl:/etc/nginx/ssl:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
       - ./nginx/logs:/var/log/nginx
     depends_on:
       - backend
