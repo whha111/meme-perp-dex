@@ -293,7 +293,7 @@ The result: a production-grade perpetual DEX with 15 smart contracts, 12,000+ li
 
 ### Phase 3: AgentX — AI Agent Platform (8 weeks)
 
-> **Every AI agent is a Token. Every chat is a transaction.**
+> **Every AI Agent is a Token. Every chat drives hype.**
 
 AgentX transforms DEXI from a trading platform into an AI-native financial platform. Users interact through natural language chat (like ChatGPT), while all financial actions are powered by DEXI's infrastructure under the hood.
 
