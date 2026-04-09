@@ -279,54 +279,29 @@ The result: a production-grade perpetual DEX with 15 smart contracts, 12,000+ li
 | Docker production deployment + SSL | ✅ VPS running |
 | Referral system (2-tier, 30% fee sharing) | ✅ Implemented |
 
-### Phase 2: BSC Mainnet Launch (4 weeks)
-
-> Migrate to mainnet and acquire first real users.
+### Phase 2: BSC Mainnet Launch
 
 - BSC Mainnet deployment — contracts already audited 4x, direct migration
-- opBNB integration — high-frequency trades on L2, reduce gas cost by 95%
-- AA Wallet + Paymaster — zero-friction onboarding, gas sponsored for new users
-- KOL onboarding — invite 10+ Meme KOLs to launch tokens, bring fan traffic
-- Marketing campaign — Twitter/Telegram community, testnet airdrop for early users
+- opBNB integration — high-frequency trades on L2, lower gas costs
+- AA Wallet + Paymaster — zero-friction onboarding, gas sponsored
 
-**KPIs**: 1,000+ registered users | $50K+ daily volume | 50+ tokens launched | Apply to BNB Chain MVB Accelerator
-
-### Phase 3: AgentX — AI Agent Platform (8 weeks)
+### Phase 3: AgentX — AI Agent Platform
 
 > **Every AI Agent is a Token. Every chat drives hype.**
 
-AgentX transforms DEXI from a trading platform into an AI-native financial platform. Users interact through natural language chat (like ChatGPT), while all financial actions are powered by DEXI's infrastructure under the hood.
+AgentX builds an AI chat layer on top of DEXI. Users interact through natural language, and all trading is powered by DEXI's existing infrastructure.
 
-- Fork LobeChat + integrate DeepSeek V3 — conversational trading interface
-- Intent parsing via Function Calling — "buy 100U of DOGE", "long 10x PEPE"
-- Create AI agent → auto-mint token via TokenFactory — every agent is tradeable
-- Agent graduation system — reach threshold users before token launch (anti-spam)
-- Agent marketplace & leaderboard — discover and rank by volume/holders
-- Copy trading — follow top agent creators' strategies
-- Push notifications — price alerts, liquidation warnings, trade confirmations
-- Capacitor packaging — iOS/Android native app
+- Fork LobeChat + integrate DeepSeek V3 — conversational interface
+- Intent parsing via Function Calling — natural language to trade orders
+- Create AI agent → auto-mint token via TokenFactory
+- Agent marketplace & leaderboard
+- Capacitor packaging — iOS/Android app
 
-**KPIs**: 5,000+ users, 500+ DAU | 200+ agents created, 5+ graduated to DEX | $5K+ monthly fee revenue | Seed round $500K
-
-### Phase 4: Ecosystem Expansion (12 weeks)
-
-> Scale the platform and deepen BNB Chain integration.
+### Phase 4: Ecosystem Expansion
 
 - Agent API — third-party DApps can embed AgentX agents
 - BNB Greenfield — decentralized storage for agent training data
-- Multi-language agent support — agents that chat in EN/ZH/JA/KO
-- Compliance framework — KYC, audit logs, large transaction monitoring
-- Institutional LP onboarding — deeper liquidity for perpetual markets
-
-**KPIs**: 20,000+ users, 2,000+ DAU | $500K+ daily volume | 1,000+ agents | Series A preparation
-
-### Why This Roadmap is Feasible
-
-- **Phase 1 is already done** — 15 contracts, 12,000+ line engine, 4 audits, 373 tests. Not a whitepaper project.
-- **Each phase has clear gates** — must hit KPIs before advancing to the next phase.
-- **BNB Chain native** — deep integration with BSC + opBNB + Greenfield, leveraging the full BNB ecosystem.
-- **Revenue from Day 1 on mainnet** — trading fees (Taker 0.05% / Maker 0.03%) start immediately, no dependency on token issuance.
-- **AI-native development** — entire platform built by solo founder with AI, proving fast iteration velocity for future phases.
+- Copy trading — follow top agent creators' strategies
 
 > Full AgentX development plan: [docs/AgentX_Development_Plan.docx](docs/AgentX_Development_Plan.docx)
 
