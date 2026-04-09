@@ -107,7 +107,7 @@ meme-perp-dex/
 | `PerpVault.sol` | LP pool + insurance fund + OI management |
 | `TokenFactory.sol` | Meme token launchpad with bonding curve |
 | `Liquidation.sol` | Position liquidation + ADL |
-| `FundingRate.sol` | 8-hour funding rate settlement |
+| `FundingRate.sol` | 8-minute funding rate settlement |
 | `PriceFeed.sol` | Oracle price feed for all supported tokens |
 | `InsuranceFund.sol` | Protocol insurance fund |
 | `RiskManager.sol` | Risk parameter management |
@@ -117,7 +117,7 @@ meme-perp-dex/
 
 - **PnL Calculation**: GMX standard — `delta = size * |currentPrice - avgPrice| / avgPrice`
 - **Liquidation Price**: Bybit standard — `liqPrice = entryPrice * (1 - 1/leverage + MMR)`
-- **Funding Rate**: 8-hour settlement intervals with configurable base rate
+- **Funding Rate**: 8-minute settlement intervals with configurable base rate
 - **Fee Structure**: Taker 0.05% (5bp) / Maker 0.03% (3bp)
 - **LP Profit Cap**: Max single-trade profit = LP pool value × 9%
 - **Price Band**: Limit orders rejected if >±50% from spot price
