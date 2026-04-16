@@ -6235,16 +6235,19 @@ async function detectGraduatedTokens(): Promise<void> {
         }
       }
 
-      // FIX #5: Fallback for tokens where getPoolState reverted.
-      // Some graduated tokens have their bonding-curve pool state wiped post-graduation,
-      // so getPoolState() reverts and the token is silently skipped above. Probe Pancake
-      // directly — if a pair with non-zero reserves exists, treat the token as graduated.
+      // FIX #5: Ground-truth graduation check via PancakeFactory.getPair.
+      // TokenFactory.getPoolState is unreliable for graduated tokens — it may revert
+      // (bonding-curve state wiped) OR return a zeroed struct via multicall's silent
+      // allowFailure path. Either way, isGraduated=false is reported and the token
+      // gets silently skipped. PancakeFactory.getPair is the actual source of truth:
+      // a non-zero pair means liquidity was migrated, which is exactly "graduated".
+      // We probe every token that isn't already marked as graduated.
       if (UNISWAP_V2_FACTORY_ADDRESS) {
-        const erroredIdx = poolResults
-          .map((r, i) => (r.status !== "success" ? i : -1))
-          .filter(i => i >= 0 && !graduatedTokens.has(SUPPORTED_TOKENS[i].toLowerCase()));
-        if (erroredIdx.length > 0) {
-          const fbCalls = erroredIdx.map(i => ({
+        const probeIdx = SUPPORTED_TOKENS
+          .map((t, i) => (!graduatedTokens.has(t.toLowerCase()) ? i : -1))
+          .filter(i => i >= 0);
+        if (probeIdx.length > 0) {
+          const fbCalls = probeIdx.map(i => ({
             address: UNISWAP_V2_FACTORY_ADDRESS!,
             abi: UNISWAP_V2_FACTORY_ABI,
             functionName: "getPair" as const,
@@ -6253,16 +6256,21 @@ async function detectGraduatedTokens(): Promise<void> {
           try {
             const fbResults = await publicClient.multicall({ contracts: fbCalls });
             const ZERO = "0x0000000000000000000000000000000000000000";
+            let fallbackRegistered = 0;
             for (let k = 0; k < fbResults.length; k++) {
               const fbRes = fbResults[k];
-              const token = SUPPORTED_TOKENS[erroredIdx[k]];
+              const token = SUPPORTED_TOKENS[probeIdx[k]];
               if (fbRes.status === "success") {
                 const pair = fbRes.result as Address;
                 if (pair && pair.toLowerCase() !== ZERO) {
-                  console.log(`[Graduation] Fallback: ${token.slice(0, 10)} has Pancake pair ${pair.slice(0, 10)} (getPoolState reverted) — treating as graduated`);
+                  console.log(`[Graduation] Fallback: ${token.slice(0, 10)} has Pancake pair ${pair.slice(0, 10)} (TokenFactory didn't flag) — treating as graduated`);
                   await registerGraduatedToken(token, pair);
+                  fallbackRegistered++;
                 }
               }
+            }
+            if (fallbackRegistered > 0) {
+              console.log(`[Graduation] Fallback registered ${fallbackRegistered} additional graduated tokens`);
             }
           } catch (e: any) {
             console.warn(`[Graduation] Fallback multicall failed:`, e?.message?.slice(0, 120));
