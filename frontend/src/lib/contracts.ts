@@ -4,9 +4,12 @@
 
 import { type Address } from "viem";
 import TOKEN_FACTORY_ABI_IMPORT from "../abis/TokenFactory.json";
+import EXTERNAL_TOKEN_REGISTRY_ABI_IMPORT from "../abis/ExternalTokenRegistry.json";
 
 // Export TokenFactory ABI (extract .abi from Foundry JSON format)
 export const TOKEN_FACTORY_ABI = TOKEN_FACTORY_ABI_IMPORT.abi;
+// ExternalTokenRegistry ABI — used by list-your-token page + admin panel
+export const EXTERNAL_TOKEN_REGISTRY_ABI = EXTERNAL_TOKEN_REGISTRY_ABI_IMPORT.abi;
 
 /**
  * Deployed Contract Addresses (BSC Mainnet)
@@ -52,6 +55,9 @@ export const CONTRACTS = {
   LIQUIDATION: (process.env.NEXT_PUBLIC_LIQUIDATION_ADDRESS || "") as Address,
   CONTRACT_SPEC: (process.env.NEXT_PUBLIC_CONTRACT_SPEC_ADDRESS || "") as Address,
   ROUTER: (process.env.NEXT_PUBLIC_ROUTER_ADDRESS || "") as Address,
+
+  // ExternalTokenRegistry — third-party meme token listing ($500 fee + 60d locked LP)
+  EXTERNAL_TOKEN_REGISTRY: (process.env.NEXT_PUBLIC_EXTERNAL_TOKEN_REGISTRY_ADDRESS || "") as Address,
 
 } as const;
 
