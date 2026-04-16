@@ -16225,12 +16225,15 @@ async function startServer(): Promise<void> {
   setInterval(updatePriceFeedOnChain, PRICE_FEED_UPDATE_INTERVAL_MS);
   console.log(`[Server] PriceFeed on-chain update interval: ${PRICE_FEED_UPDATE_INTERVAL_MS}ms`);
 
-  // 定时刷新 token pool cache (60秒, 覆盖新上币/状态变化)
+  // FIX #6: Token pool refresh interval shortened from 60s to 15s to cut new-token
+  // activation latency. Previously a freshly-created token took up to 60s before the
+  // engine registered it, blocking the first trade with "INACTIVE" errors.
+  // All three calls use multicall internally, so the RPC cost is minimal.
   setInterval(async () => {
     await syncSupportedTokens();
     await syncTokenInfoCache();
     await syncFullTokenData();
-  }, 60_000);
+  }, 15_000);
 
   // NOTE: Balance snapshot already runs at line ~15112 via snapshotBalancesToPG() every 5 min
   // (removed broken duplicate that called nonexistent insertBatch/cleanup)
