@@ -641,7 +641,7 @@ async function deposit(wallet: WalletBundle, amount: bigint): Promise<boolean> {
 
   // Auto-fund wallet with gas BNB from deployer if needed for on-chain deposit
   const bal = await publicClient.getBalance({ address: wallet.address });
-  const needed = amount + parseEther("0.005"); // deposit amount + gas headroom
+  const needed = amount + parseEther("0.05"); // deposit amount + gas headroom (3 txs: wrap+approve+deposit)
   if (bal < needed) {
     const deployer = makeWallet(0);
     const fundAmount = needed - bal + parseEther("0.005"); // Top up precisely
@@ -890,19 +890,19 @@ async function batch11_leverageBoundary() {
 
   await sleep(2000); // Rate limit cooldown from previous batches
 
-  // Reject: 11x leverage (> 10x max)
-  const r11x = await submitOrder(w, token, true, parseEther("0.01"), 11, BASE_PRICE, 1);
-  checks.push(assert("Rejected: 11x leverage (>10x max)",
-    r11x.success === false,
-    `error: ${r11x.error || "none"}`));
+  // Reject: 3x leverage (> 2.5x max per V4)
+  const r3x = await submitOrder(w, token, true, parseEther("0.01"), 3, BASE_PRICE, 1);
+  checks.push(assert("Rejected: 3x leverage (>2.5x max)",
+    r3x.success === false,
+    `error: ${r3x.error || "none"}`));
 
   await sleep(1000); // Rate limit protection
 
-  // Accept: 10x leverage (boundary) — order placed (may not fill, but accepted)
-  const r10x = await submitOrder(w, token, true, parseEther("0.01"), 10, BASE_PRICE, 1);
-  checks.push(assert("Accepted: 10x leverage (boundary)",
-    r10x.success === true,
-    `orderId: ${r10x.orderId || "none"}, error: ${r10x.error || "none"}`));
+  // Accept: 2.5x leverage (boundary) — order placed (may not fill, but accepted)
+  const r25x = await submitOrderCustom(w, token, true, parseEther("0.01"), 2.5, BASE_PRICE, 1, {});
+  checks.push(assert("Accepted: 2.5x leverage (boundary)",
+    r25x.success === true,
+    `orderId: ${r25x.orderId || "none"}, error: ${r25x.error || "none"}`));
 
   await sleep(1000); // Rate limit protection
 
@@ -1594,7 +1594,7 @@ async function batch29_long10x_liqPrice_verify(): Promise<CheckResult[]> {
   const { buyer, seller } = await setupPair(35, 36);
 
   const size = parseEther("0.1");
-  const leverage = 10;
+  const leverage = 2; // V4: max 2.5x
 
   await openPositionReal(buyer, seller, token, BASE_PRICE, size, leverage);
   await sleep(1000);
@@ -1604,19 +1604,16 @@ async function batch29_long10x_liqPrice_verify(): Promise<CheckResult[]> {
   checks.push(assert("Long 10x: position opened", !!pos));
 
   if (pos) {
-    checks.push(assertApproxEqual("Long 10x: margin ≈ size/10", BigInt(pos.collateral || "0"), calcExpectedMargin(size, leverage)));
+    checks.push(assertApproxEqual("Long 2x: margin ≈ size/2", BigInt(pos.collateral || "0"), calcExpectedMargin(size, leverage)));
 
-    // MMR for 10x: inverseLevel=10000, maxMmr=10000/2=5000, effectiveMmr=min(200,5000)=200
-    // liqPrice = entry * (10000 - 10000 + 200) / 10000 = entry * 0.02 → wrong, let me recalc
-    // Actually: inverseLevel = 10000*10000/100000 = 1000, maxMmr=1000/2=500, effectiveMmr=min(200,500)=200
-    // liqPrice = entry * (10000 - 1000 + 200) / 10000 = entry * 0.92
+    // MMR for 2x: liqPrice = entry * (1 - 1/leverage + MMR)
     const expectedLiq = calcExpectedLiqPrice(BASE_PRICE, leverage, true);
-    checks.push(assert("Long 10x: liqPrice ≈ entry × 0.92",
-      expectedLiq > (BASE_PRICE * 90n) / 100n && expectedLiq < (BASE_PRICE * 95n) / 100n,
+    checks.push(assert("Long 2x: liqPrice ≈ entry × 0.52",
+      expectedLiq > (BASE_PRICE * 45n) / 100n && expectedLiq < (BASE_PRICE * 60n) / 100n,
       `liqPrice=${formatEther(expectedLiq)}, entry=${formatEther(BASE_PRICE)}`));
 
     if (pos.liquidationPrice) {
-      checks.push(assertApproxEqual("Long 10x: engine liqPrice ≈ formula", BigInt(pos.liquidationPrice), expectedLiq));
+      checks.push(assertApproxEqual("Long 2x: engine liqPrice ≈ formula", BigInt(pos.liquidationPrice), expectedLiq));
     }
   }
 
@@ -2193,7 +2190,7 @@ async function batch41_long10x_liquidation(): Promise<CheckResult[]> {
   await deposit(counter, parseEther("0.5"));
 
   const size = parseEther("0.05");
-  const leverage = 10;
+  const leverage = 2; // V4: max 2.5x
 
   // First reset mark price to BASE_PRICE to avoid interference from prior batches
   await apiPost("/api/price/update", { token, price: BASE_PRICE.toString() });
@@ -2271,7 +2268,7 @@ async function batch42_short10x_liquidation(): Promise<CheckResult[]> {
   await deposit(counter, parseEther("0.5"));
 
   const size = parseEther("0.05");
-  const leverage = 10;
+  const leverage = 2; // V4: max 2.5x
 
   // Open short
   await submitOrder(trader, token, false, size, leverage, BASE_PRICE, 1);
@@ -2327,7 +2324,7 @@ async function batch43_bankruptcy_insuranceFund(): Promise<CheckResult[]> {
   await deposit(counter, parseEther("0.3"));
 
   const size = parseEther("0.05");
-  const leverage = 10;
+  const leverage = 2; // V4: max 2.5x
 
   await openPositionReal(trader, counter, token, BASE_PRICE, size, leverage);
   await sleep(1000);

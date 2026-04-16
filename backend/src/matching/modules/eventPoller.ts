@@ -156,6 +156,24 @@ export async function createEventPoller(config: EventPollerConfig): Promise<Poll
     }
   }
 
+  // 1.5. Safety: if Redis value is too far behind, skip to near-current
+  // This prevents impossible backfills that kill free RPCs
+  if (state.lastScannedBlock > 0n) {
+    try {
+      const currentBlock = await getCachedBlockNumber(client);
+      const MAX_SAFE_BACKFILL = 10_000n; // ~8.3 hours at 3s/block
+      const gap = currentBlock - state.lastScannedBlock;
+      if (gap > MAX_SAFE_BACKFILL) {
+        const newStart = currentBlock - 1000n;
+        console.warn(`[EventPoller:${name}] ⚠️ Gap too large (${gap} blocks, ${Math.round(Number(gap) * 3 / 3600)}h behind). Skipping from ${state.lastScannedBlock} to ${newStart}`);
+        state.lastScannedBlock = newStart;
+        await persistLastBlock(name, newStart, redisKeyPrefix);
+      }
+    } catch (e: any) {
+      // Non-blocking, will be handled by backfill step
+    }
+  }
+
   // 2. 如果 Redis 没有记录，从当前区块 - backfillBlocks 开始
   if (state.lastScannedBlock === 0n) {
     try {

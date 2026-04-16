@@ -2,6 +2,7 @@ package repository
 
 import (
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/memeperp/backend/internal/model"
 )
@@ -15,7 +16,10 @@ func NewFundingRateRepository(db *gorm.DB) *FundingRateRepository {
 }
 
 func (r *FundingRateRepository) Create(rate *model.FundingRate) error {
-	return r.db.Create(rate).Error
+	return r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "inst_id"}, {Name: "funding_time"}},
+		DoUpdates: clause.AssignmentColumns([]string{"funding_rate", "realized_rate"}),
+	}).Create(rate).Error
 }
 
 func (r *FundingRateRepository) GetLatest(instID string) (*model.FundingRate, error) {
