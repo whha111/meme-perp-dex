@@ -6040,7 +6040,7 @@ function startSwapEventWatching(
     eventAbi: swapAbi,
     pollIntervalMs: 3000,
     backfillBlocks: 100n,
-    batchSize: 500n,
+    batchSize: 200n,
     rpcUrl: RPC_URL,
     chainId: CONFIG_CHAIN_ID,
     onLogs: async (logs) => {
@@ -6361,7 +6361,7 @@ async function startEventWatching(): Promise<void> {
       eventAbi: v2DepositedAbi,
       pollIntervalMs: 60000,
       backfillBlocks: 50n,
-      batchSize: 500n,
+      batchSize: 200n,
       rpcUrl: RPC_URL,
       chainId: CONFIG_CHAIN_ID,
       onLogs: async (logs) => {
@@ -6398,7 +6398,7 @@ async function startEventWatching(): Promise<void> {
       eventAbi: v2DepositedBNBAbi,
       pollIntervalMs: 60000,
       backfillBlocks: 50n,
-      batchSize: 500n,
+      batchSize: 200n,
       rpcUrl: RPC_URL,
       chainId: CONFIG_CHAIN_ID,
       onLogs: async (logs) => {
@@ -6435,7 +6435,7 @@ async function startEventWatching(): Promise<void> {
       eventAbi: v2DepositedForAbi,
       pollIntervalMs: 60000,
       backfillBlocks: 50n,
-      batchSize: 500n,
+      batchSize: 200n,
       rpcUrl: RPC_URL,
       chainId: CONFIG_CHAIN_ID,
       onLogs: async (logs) => {
@@ -6472,7 +6472,7 @@ async function startEventWatching(): Promise<void> {
       eventAbi: v2WithdrawnAbi,
       pollIntervalMs: 60000,
       backfillBlocks: 50n,
-      batchSize: 500n,
+      batchSize: 200n,
       rpcUrl: RPC_URL,
       chainId: CONFIG_CHAIN_ID,
       onLogs: async (logs) => {
@@ -6560,7 +6560,7 @@ async function startEventWatching(): Promise<void> {
     eventAbi: liquidityMigratedAbi,
     pollIntervalMs: 120000,
     backfillBlocks: 50n,
-    batchSize: 500n,
+    batchSize: 200n,
     rpcUrl: RPC_URL,
     chainId: CONFIG_CHAIN_ID,
     onLogs: async (logs) => {
@@ -6598,7 +6598,7 @@ async function startEventWatching(): Promise<void> {
     eventAbi: tokenCreatedAbi,
     pollIntervalMs: 120000,
     backfillBlocks: 50n,
-    batchSize: 500n,
+    batchSize: 200n,
     rpcUrl: RPC_URL,
     chainId: CONFIG_CHAIN_ID,
     onLogs: async (logs) => {

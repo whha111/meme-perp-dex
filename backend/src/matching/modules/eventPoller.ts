@@ -183,33 +183,55 @@ export async function createEventPoller(config: EventPollerConfig): Promise<Poll
     // 不阻塞启动
   }
 
-  // 4. 启动定期轮询
-  state.intervalId = setInterval(async () => {
-    if (state.isRunning) return; // 防止重叠
-    state.isRunning = true;
+  // 4. 启动定期轮询 (with jitter + exponential backoff)
+  let consecutiveFailures = 0;
+  const MAX_BACKOFF_MS = 5 * 60 * 1000; // 5 min cap
 
-    try {
-      const latestBlock = await getCachedBlockNumber(client);
-      if (latestBlock <= state.lastScannedBlock) {
-        state.isRunning = false;
+  const schedulePoll = () => {
+    // Jitter: add 0-10s random delay to avoid thundering herd (6 pollers firing simultaneously)
+    const jitter = Math.floor(Math.random() * 10_000);
+    // Exponential backoff on consecutive failures: base * 2^failures, capped at 5 min
+    const backoff = consecutiveFailures > 0
+      ? Math.min(pollIntervalMs * Math.pow(2, consecutiveFailures - 1), MAX_BACKOFF_MS)
+      : 0;
+    const delay = pollIntervalMs + jitter + backoff;
+
+    state.intervalId = setTimeout(async () => {
+      if (state.isRunning) {
+        schedulePoll();
         return;
       }
+      state.isRunning = true;
 
-      const fromBlock = state.lastScannedBlock + 1n;
-      await pollEvents(client, config, state, fromBlock, latestBlock);
+      try {
+        const latestBlock = await getCachedBlockNumber(client);
+        if (latestBlock <= state.lastScannedBlock) {
+          state.isRunning = false;
+          schedulePoll();
+          return;
+        }
 
-      // 成功后更新 lastScannedBlock
-      state.lastScannedBlock = latestBlock;
-      state.lastPollTime = Date.now();
-      await persistLastBlock(name, latestBlock, redisKeyPrefix);
-    } catch (e: any) {
-      state.errors++;
-      console.error(`[EventPoller:${name}] Poll error (#${state.errors}): ${e.message}`);
-      // 不更新 lastScannedBlock，下次从同一位置重试
-    } finally {
-      state.isRunning = false;
-    }
-  }, pollIntervalMs);
+        const fromBlock = state.lastScannedBlock + 1n;
+        await pollEvents(client, config, state, fromBlock, latestBlock);
+
+        // 成功后更新 lastScannedBlock + reset backoff
+        state.lastScannedBlock = latestBlock;
+        state.lastPollTime = Date.now();
+        consecutiveFailures = 0;
+        await persistLastBlock(name, latestBlock, redisKeyPrefix);
+      } catch (e: any) {
+        state.errors++;
+        consecutiveFailures++;
+        const nextDelay = Math.min(pollIntervalMs * Math.pow(2, consecutiveFailures - 1), MAX_BACKOFF_MS);
+        console.error(`[EventPoller:${name}] Poll error (#${state.errors}, backoff ${Math.round(nextDelay / 1000)}s): ${(e.message || "").slice(0, 120)}`);
+        // 不更新 lastScannedBlock，下次从同一位置重试
+      } finally {
+        state.isRunning = false;
+        schedulePoll();
+      }
+    }, delay);
+  };
+  schedulePoll();
 
   activePollers.set(name, state);
   console.log(`[EventPoller:${name}] Started: contract=${contractAddress.slice(0, 10)}, interval=${pollIntervalMs}ms, batchSize=${batchSize}`);
@@ -233,12 +255,27 @@ async function pollEvents(
   for (let start = fromBlock; start <= toBlock; start += batchSize) {
     const end = start + batchSize - 1n > toBlock ? toBlock : start + batchSize - 1n;
 
-    const logs = await client.getLogs({
-      address: contractAddress,
-      event: eventAbi,
-      fromBlock: start,
-      toBlock: end,
-    });
+    // Per-batch retry: 3 attempts with exponential delay (2s, 4s)
+    let logs: Log[] = [];
+    let lastErr: any;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        logs = await client.getLogs({
+          address: contractAddress,
+          event: eventAbi,
+          fromBlock: start,
+          toBlock: end,
+        });
+        lastErr = null;
+        break;
+      } catch (e: any) {
+        lastErr = e;
+        if (attempt < 2) {
+          await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+        }
+      }
+    }
+    if (lastErr) throw lastErr;
 
     if (logs.length === 0) continue;
 
