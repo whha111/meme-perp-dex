@@ -175,7 +175,14 @@ export function useDexQuote(
     };
   }, [amountsOut, path, isBuy]);
 
-  return { quote, isLoading, error, refetch };
+  // Safe refetch wrapper: react-query v5 refetch() bypasses enabled:false,
+  // which causes ABI encoding error when args are undefined. Guard against that.
+  const safeRefetch = useCallback(() => {
+    if (path && amountIn > 0n) return refetch();
+    return Promise.resolve({ data: undefined as any, error: null, isError: false as const, isSuccess: false as const, status: 'idle' as const });
+  }, [path, amountIn, refetch]);
+
+  return { quote, isLoading, error, refetch: safeRefetch };
 }
 
 /**

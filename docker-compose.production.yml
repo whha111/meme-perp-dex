@@ -184,9 +184,9 @@ services:
       - CHAIN_ID=${CHAIN_ID:-97}
       # 撮合引擎用独立 RPC 节点 + 多 fallback
       - RPC_URL=${RPC_URL_MATCHING_ENGINE:-${RPC_URL}}
-      - RPC_URL_FALLBACK_1=${RPC_URL_MATCHING_ENGINE_FALLBACK_1:-https://bsc-testnet.drpc.org}
+      - RPC_URL_FALLBACK_1=${RPC_URL_MATCHING_ENGINE_FALLBACK_1:-https://bsc-testnet.blockpi.network/v1/rpc/public}
       - RPC_URL_FALLBACK_2=${RPC_URL_MATCHING_ENGINE_FALLBACK_2:-https://bsc-testnet-rpc.publicnode.com}
-      - RPC_URL_FALLBACK_3=${RPC_URL_MATCHING_ENGINE_FALLBACK_3:-https://data-seed-prebsc-1-s1.bnbchain.org:8545}
+      - RPC_URL_FALLBACK_3=${RPC_URL_MATCHING_ENGINE_FALLBACK_3:-https://endpoints.omniatech.io/v1/bsc/testnet/public}
       - MATCHER_PRIVATE_KEY=${KEEPER_PRIVATE_KEY}
       - SETTLEMENT_ADDRESS=${SETTLEMENT_ADDRESS:-0x32de01f0E464521583E52d50f125492D10EfDBB3}
       - TOKEN_FACTORY_ADDRESS=${TOKEN_FACTORY_ADDRESS}

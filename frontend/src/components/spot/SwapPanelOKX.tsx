@@ -191,7 +191,8 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
           refetchAllowance();
           if (isGraduated) {
             refetchDexAllowance();
-            refetchDexQuote();
+            // Only refetch quote if amount is non-empty (react-query v5 refetch() ignores enabled flag)
+            if (amount) refetchDexQuote();
           }
         }, 1000);
       }
@@ -662,7 +663,8 @@ export function SwapPanelOKX({ symbol, displaySymbol, securityStatus, tokenAddre
                   refetchEthBalance();
                   refetchTokenBalance();
                   if (isGraduated) {
-                    refetchDexQuote();
+                    // Don't refetchDexQuote here — amount was just cleared to "",
+                    // refetch() would bypass enabled:false and trigger ABI encoding error
                     refetchDexAllowance();
                   }
                 }, 2000);
