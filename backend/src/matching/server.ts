@@ -6235,6 +6235,41 @@ async function detectGraduatedTokens(): Promise<void> {
         }
       }
 
+      // FIX #5: Fallback for tokens where getPoolState reverted.
+      // Some graduated tokens have their bonding-curve pool state wiped post-graduation,
+      // so getPoolState() reverts and the token is silently skipped above. Probe Pancake
+      // directly — if a pair with non-zero reserves exists, treat the token as graduated.
+      if (UNISWAP_V2_FACTORY_ADDRESS) {
+        const erroredIdx = poolResults
+          .map((r, i) => (r.status !== "success" ? i : -1))
+          .filter(i => i >= 0 && !graduatedTokens.has(SUPPORTED_TOKENS[i].toLowerCase()));
+        if (erroredIdx.length > 0) {
+          const fbCalls = erroredIdx.map(i => ({
+            address: UNISWAP_V2_FACTORY_ADDRESS!,
+            abi: UNISWAP_V2_FACTORY_ABI,
+            functionName: "getPair" as const,
+            args: [SUPPORTED_TOKENS[i], WETH_ADDRESS] as const,
+          }));
+          try {
+            const fbResults = await publicClient.multicall({ contracts: fbCalls });
+            const ZERO = "0x0000000000000000000000000000000000000000";
+            for (let k = 0; k < fbResults.length; k++) {
+              const fbRes = fbResults[k];
+              const token = SUPPORTED_TOKENS[erroredIdx[k]];
+              if (fbRes.status === "success") {
+                const pair = fbRes.result as Address;
+                if (pair && pair.toLowerCase() !== ZERO) {
+                  console.log(`[Graduation] Fallback: ${token.slice(0, 10)} has Pancake pair ${pair.slice(0, 10)} (getPoolState reverted) — treating as graduated`);
+                  await registerGraduatedToken(token, pair);
+                }
+              }
+            }
+          } catch (e: any) {
+            console.warn(`[Graduation] Fallback multicall failed:`, e?.message?.slice(0, 120));
+          }
+        }
+      }
+
       console.log(`[Graduation] Found ${graduatedTokens.size} graduated tokens`);
 
       // Success or no graduated tokens — either way, done
@@ -8732,6 +8767,23 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
       } catch (lpErr) {
         console.error(`[LP Fill] Error:`, lpErr);
       }
+    }
+
+    // ============================================================
+    // FIX #4: FOK post-match safety net — refund unfilled margin
+    // ------------------------------------------------------------
+    // Engine's post-match handler only cancels IOC partials (engine.ts:844).
+    // FOK that passed pre-check but ended up partially filled (e.g., LP refused
+    // due to price band drift between pre-check and actual fill) leaves its
+    // unfilled portion stuck in orderMarginInfos — deducted from availableBalance
+    // but never returned. refundOrderAmount correctly handles partial refund via
+    // unfilledRatio so the already-filled portion's margin stays locked in the
+    // position while only the unfilled slice is returned.
+    // ============================================================
+    if (tif === TimeInForce.FOK && order.filledSize > 0n && order.filledSize < order.size) {
+      console.warn(`[FOK] Order ${order.id}: partial fill ${order.filledSize}/${order.size} — refunding unfilled margin`);
+      refundOrderAmount(trader as Address, order.id);
+      order.status = OrderStatus.FILLED; // closed; matches IOC-partial semantics
     }
 
     // ============================================================
