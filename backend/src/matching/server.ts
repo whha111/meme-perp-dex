@@ -8212,6 +8212,11 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
     // FIX: For FOK orders, pre-compute LP headroom so the engine's FOK pre-check
     // knows about PerpVault fallback liquidity (otherwise FOK may be wrongly rejected
     // when the order book is thin but LP could fill the remainder).
+    //
+    // Consistency with LP price-band check below: only count LP headroom if the
+    // current spot price is within the order's limit (same rule Fix #2 applies
+    // to the actual LP fill). Without this, FOK could pass pre-check on paper
+    // LP, then LP refuses to fill, leaving a half-filled FOK in limbo.
     let fokExtraLiquidity = 0n;
     if (tif === TimeInForce.FOK
       && !reduceOnly
@@ -8221,13 +8226,18 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
       && isTradingEnabled(token.toLowerCase() as Address)
     ) {
       try {
-        const insuranceFundBalance = BigInt(insuranceFund?.balance ?? 0n);
-        const coverageRatio = getCoverageRatio(token.toLowerCase() as Address);
-        fokExtraLiquidity = await getAvailableOIHeadroom(
-          token.toLowerCase() as Address,
-          insuranceFundBalance,
-          coverageRatio
-        );
+        const spotPrice = engine.getOrderBook(token as Address).getCurrentPrice();
+        const priceOk = priceBigInt === 0n
+          || (isLong ? spotPrice <= priceBigInt : spotPrice >= priceBigInt);
+        if (spotPrice > 0n && priceOk) {
+          const insuranceFundBalance = BigInt(insuranceFund?.balance ?? 0n);
+          const coverageRatio = getCoverageRatio(token.toLowerCase() as Address);
+          fokExtraLiquidity = await getAvailableOIHeadroom(
+            token.toLowerCase() as Address,
+            insuranceFundBalance,
+            coverageRatio
+          );
+        }
       } catch (e) {
         // Non-fatal: fall back to order-book-only check
         fokExtraLiquidity = 0n;
