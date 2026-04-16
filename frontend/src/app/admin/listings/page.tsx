@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { formatEther, type Address } from "viem";
+import { formatEther } from "viem";
 import { Navbar } from "@/components/layout/Navbar";
 import { useToast } from "@/components/shared/Toast";
 import { useAccount } from "wagmi";
@@ -12,17 +12,14 @@ import {
   ListingStatus,
   TIER_LABELS,
   STATUS_LABELS,
-  STATUS_COLORS,
 } from "@/hooks/perpetual/useListingApplication";
 
 type Tab = "pending" | "live" | "all";
 
 /**
- * Admin listing review panel.
- *
- * Layout:
- *   Top bar      : tab switcher + refresh
- *   Main area    : master-detail (listing table + right-side drawer with actions)
+ * /admin/listings — Moderation panel.
+ * Style: Terminal Industrial Crisp (pure black #000, 2px lime left-border
+ * on active/selected, JetBrains Mono for data, Inter for headings).
  */
 export default function AdminListingsPage() {
   const { isConnected } = useAccount();
@@ -71,35 +68,33 @@ export default function AdminListingsPage() {
     }
   };
 
-  const Header = (
-    <div className="mb-6">
-      <h1 className="text-3xl font-bold text-okx-text-primary mb-2">Listing Moderation</h1>
-      <p className="text-okx-text-secondary text-sm">
-        Review external token listing applications. Admin role required.
-      </p>
-      {mockMode && (
-        <div className="mt-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded text-yellow-300 text-xs">
-          ⚡ Mock mode — all applications are simulated from browser storage.
-        </div>
-      )}
-      {!mockMode && isConnected && isAdmin === false && (
-        <div className="mt-3 p-3 bg-red-500/10 border border-red-500/30 rounded text-red-300 text-sm">
-          You are not the admin for this registry. Actions will revert.
-        </div>
-      )}
-      {!isContractConfigured && !mockMode && (
-        <div className="mt-3 p-3 bg-red-500/10 border border-red-500/30 rounded text-red-300 text-sm">
-          Registry contract not configured.
-        </div>
-      )}
-    </div>
-  );
-
   return (
-    <div className="min-h-screen bg-okx-bg-primary">
+    <div className="min-h-screen bg-black text-white">
       <Navbar />
-      <div className="px-6 sm:px-12 pt-10 pb-24 max-w-[1600px] mx-auto">
-        {Header}
+
+      <div className="px-12 pt-10 pb-24 max-w-[1600px] mx-auto">
+        {/* Header */}
+        <div className="mb-6">
+          <h1 className="font-inter text-[32px] leading-tight font-semibold text-white mb-2">Listing Moderation</h1>
+          <p className="font-mono text-[13px] text-[#999999]">
+            Review external token listing applications. Admin role required.
+          </p>
+          {mockMode && (
+            <div className="mt-3 p-3 bg-[#F59E0B]/10 border border-[#F59E0B]/30 font-mono text-xs text-[#F59E0B]">
+              ⚡ MOCK MODE — all applications simulated from browser storage.
+            </div>
+          )}
+          {!mockMode && isConnected && isAdmin === false && (
+            <div className="mt-3 p-3 bg-[#FF4444]/10 border border-[#FF4444]/30 font-mono text-xs text-[#FF4444]">
+              You are not the admin for this registry. Actions will revert.
+            </div>
+          )}
+          {!isContractConfigured && !mockMode && (
+            <div className="mt-3 p-3 bg-[#FF4444]/10 border border-[#FF4444]/30 font-mono text-xs text-[#FF4444]">
+              Registry contract not configured.
+            </div>
+          )}
+        </div>
 
         {/* Tabs + refresh */}
         <div className="flex items-center justify-between mb-4">
@@ -110,87 +105,89 @@ export default function AdminListingsPage() {
                 { id: "live", label: `Live (${approved.length})` },
                 { id: "all", label: `All (${allListings.length})` },
               ] as const
-            ).map((t) => (
-              <button
-                key={t.id}
-                onClick={() => {
-                  setTab(t.id);
-                  setSelectedId(null);
-                }}
-                className={`px-4 py-2 rounded-md text-sm font-medium border transition-colors ${
-                  tab === t.id
-                    ? "bg-okx-bg-hover border-meme-lime text-meme-lime"
-                    : "bg-okx-bg-card border-okx-border-primary text-okx-text-secondary hover:text-okx-text-primary"
-                }`}
-              >
-                {t.label}
-              </button>
-            ))}
+            ).map((t) => {
+              const active = tab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => { setTab(t.id); setSelectedId(null); }}
+                  className={`px-4 py-2 font-mono text-[13px] font-medium border transition-colors ${
+                    active
+                      ? "bg-[#1A1A1A] border border-l-2 border-l-[#BFFF00] border-[#1A1A1A] text-[#BFFF00]"
+                      : "bg-[#111111] border border-[#1A1A1A] text-[#999999] hover:text-white"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              );
+            })}
           </div>
 
           <button
             onClick={() => refresh()}
-            className="px-3 py-2 text-xs text-okx-text-tertiary border border-okx-border-primary rounded hover:text-meme-lime hover:border-meme-lime transition-colors"
+            className="px-3 py-2 font-mono text-[11px] text-[#6e6e6e] border border-[#1A1A1A] hover:text-[#BFFF00] hover:border-[#BFFF00] transition-colors"
           >
-            Refresh
+            ↻ Refresh
           </button>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          {/* ── LEFT: Listing table ── */}
-          <div className="lg:col-span-2 bg-okx-bg-card border border-okx-border-primary rounded-lg overflow-hidden">
+          {/* ── LEFT: Table ── */}
+          <div className="lg:col-span-2 bg-[#111111] border border-[#1A1A1A] overflow-hidden">
             {visible.length === 0 ? (
-              <div className="p-8 text-center text-okx-text-tertiary text-sm">
+              <div className="p-8 text-center font-mono text-[13px] text-[#404040]">
                 No listings in this view.
               </div>
             ) : (
-              <table className="w-full text-sm">
-                <thead className="bg-okx-bg-secondary text-okx-text-tertiary text-xs uppercase">
-                  <tr>
-                    <th className="px-4 py-2 text-left font-medium">#</th>
-                    <th className="px-4 py-2 text-left font-medium">Token</th>
-                    <th className="px-4 py-2 text-left font-medium">Tier</th>
-                    <th className="px-4 py-2 text-left font-medium">LP</th>
-                    <th className="px-4 py-2 text-left font-medium">Applied</th>
-                    <th className="px-4 py-2 text-left font-medium">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.map((l) => (
-                    <tr
+              <>
+                {/* Table header */}
+                <div className="grid grid-cols-[60px_1fr_70px_120px_140px_120px] items-center h-10 px-4 gap-4 bg-[#1A1A1A] border-b border-[#1A1A1A]">
+                  <span className="font-mono text-[10px] font-medium text-[#6e6e6e] tracking-wider">#</span>
+                  <span className="font-mono text-[10px] font-medium text-[#6e6e6e] tracking-wider">TOKEN</span>
+                  <span className="font-mono text-[10px] font-medium text-[#6e6e6e] tracking-wider">TIER</span>
+                  <span className="font-mono text-[10px] font-medium text-[#6e6e6e] tracking-wider">LP</span>
+                  <span className="font-mono text-[10px] font-medium text-[#6e6e6e] tracking-wider">APPLIED</span>
+                  <span className="font-mono text-[10px] font-medium text-[#6e6e6e] tracking-wider">STATUS</span>
+                </div>
+
+                {/* Rows */}
+                {visible.map((l) => {
+                  const isSelected = selectedId === l.appId;
+                  return (
+                    <div
                       key={l.appId}
                       onClick={() => setSelectedId(l.appId)}
-                      className={`border-t border-okx-border-primary cursor-pointer hover:bg-okx-bg-hover transition-colors ${
-                        selectedId === l.appId ? "bg-okx-bg-hover" : ""
+                      className={`grid grid-cols-[60px_1fr_70px_120px_140px_120px] items-center h-[52px] px-4 gap-4 border-b border-[#1A1A1A] cursor-pointer transition-colors ${
+                        isSelected
+                          ? "bg-[#1A1A1A] border-l-2 border-l-[#BFFF00]"
+                          : "hover:bg-[#1A1A1A]"
                       }`}
                     >
-                      <td className="px-4 py-3 text-okx-text-tertiary font-mono">#{l.appId}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-okx-text-primary">
-                        {l.token.slice(0, 8)}…{l.token.slice(-4)}
-                      </td>
-                      <td className="px-4 py-3 text-okx-text-primary">{TIER_LABELS[l.tier]}</td>
-                      <td className="px-4 py-3 text-okx-text-primary">
+                      <span className="font-mono text-[12px] text-[#6e6e6e]">
+                        #{String(l.appId).padStart(3, "0")}
+                      </span>
+                      <span className="font-mono text-[12px] text-white">
+                        {l.token.slice(0, 10)}…{l.token.slice(-4)}
+                      </span>
+                      <span className="font-mono text-[12px] text-white">{TIER_LABELS[l.tier]}</span>
+                      <span className="font-mono text-[12px] text-white">
                         {Number(formatEther(l.lpAmountBNB)).toFixed(2)} BNB
-                      </td>
-                      <td className="px-4 py-3 text-okx-text-tertiary text-xs">
+                      </span>
+                      <span className="font-mono text-[11px] text-[#6e6e6e]">
                         {formatTime(l.appliedAt)}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`text-xs font-medium ${STATUS_COLORS[l.status]}`}>
-                          {STATUS_LABELS[l.status]}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      </span>
+                      <StatusBadge status={l.status} />
+                    </div>
+                  );
+                })}
+              </>
             )}
           </div>
 
           {/* ── RIGHT: Detail drawer ── */}
-          <div className="bg-okx-bg-card border border-okx-border-primary rounded-lg p-6">
+          <div className="bg-[#111111] border border-[#1A1A1A] p-6">
             {!selected ? (
-              <div className="text-center text-okx-text-tertiary text-sm py-12">
+              <div className="text-center font-mono text-[13px] text-[#404040] py-12">
                 Select a listing to view details.
               </div>
             ) : (
@@ -199,32 +196,13 @@ export default function AdminListingsPage() {
                 reason={reason}
                 onReasonChange={setReason}
                 disabled={isActing || isConfirming || isAdmin === false}
-                onApprove={() =>
-                  handleAction(() => approve(selected.appId), `Approve #${selected.appId}`)
-                }
-                onReject={() =>
-                  handleAction(
-                    () => reject(selected.appId, reason || "rejected"),
-                    `Reject #${selected.appId}`
-                  )
-                }
-                onDelist={() =>
-                  handleAction(
-                    () => delist(selected.appId, reason || "delisted"),
-                    `Delist #${selected.appId}`
-                  )
-                }
-                onSlash={() =>
-                  handleAction(
-                    () => slash(selected.appId, reason || "slashed"),
-                    `Slash #${selected.appId}`
-                  )
-                }
+                onApprove={() => handleAction(() => approve(selected.appId), `Approve #${selected.appId}`)}
+                onReject={() => handleAction(() => reject(selected.appId, reason || "rejected"), `Reject #${selected.appId}`)}
+                onDelist={() => handleAction(() => delist(selected.appId, reason || "delisted"), `Delist #${selected.appId}`)}
+                onSlash={() => handleAction(() => slash(selected.appId, reason || "slashed"), `Slash #${selected.appId}`)}
               />
             )}
-            {error && (
-              <p className="mt-3 text-xs text-red-400 break-words">{error}</p>
-            )}
+            {error && <p className="mt-3 font-mono text-xs text-[#FF4444] break-words">{error}</p>}
           </div>
         </div>
       </div>
@@ -232,9 +210,31 @@ export default function AdminListingsPage() {
   );
 }
 
-// ─── Detail drawer ────────────────────────────────────────
+// ─── Sub-components ───────────────────────────────
 
-interface DetailPaneProps {
+function StatusBadge({ status }: { status: ListingStatus }) {
+  const s = {
+    [ListingStatus.PENDING]:  { color: "#F59E0B", label: "PENDING" },
+    [ListingStatus.APPROVED]: { color: "#BFFF00", label: "LIVE" },
+    [ListingStatus.REJECTED]: { color: "#FF4444", label: "REJECTED" },
+    [ListingStatus.DELISTED]: { color: "#6e6e6e", label: "DELISTED" },
+    [ListingStatus.SLASHED]:  { color: "#FF4444", label: "SLASHED" },
+    [ListingStatus.NONE]:     { color: "#404040", label: "—" },
+  }[status];
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="w-1.5 h-1.5 rounded-[2px]" style={{ background: s.color }} />
+      <span className="font-mono text-[10px] font-medium tracking-wider" style={{ color: s.color }}>
+        {s.label}
+      </span>
+    </div>
+  );
+}
+
+function DetailPane({
+  listing: l, reason, onReasonChange, disabled,
+  onApprove, onReject, onDelist, onSlash,
+}: {
   listing: Listing;
   reason: string;
   onReasonChange: (v: string) => void;
@@ -243,142 +243,97 @@ interface DetailPaneProps {
   onReject: () => void;
   onDelist: () => void;
   onSlash: () => void;
-}
-
-function DetailPane({
-  listing: l,
-  reason,
-  onReasonChange,
-  disabled,
-  onApprove,
-  onReject,
-  onDelist,
-  onSlash,
-}: DetailPaneProps) {
+}) {
   const canApprove = l.status === ListingStatus.PENDING;
-  const canReject = l.status === ListingStatus.PENDING;
-  const canDelist = l.status === ListingStatus.APPROVED;
-  const canSlash = [
-    ListingStatus.PENDING,
-    ListingStatus.APPROVED,
-    ListingStatus.DELISTED,
-  ].includes(l.status);
+  const canReject  = l.status === ListingStatus.PENDING;
+  const canDelist  = l.status === ListingStatus.APPROVED;
+  const canSlash   = [ListingStatus.PENDING, ListingStatus.APPROVED, ListingStatus.DELISTED].includes(l.status);
 
   return (
-    <>
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold text-okx-text-primary">Application #{l.appId}</h3>
-        <span className={`text-sm font-medium ${STATUS_COLORS[l.status]}`}>
-          {STATUS_LABELS[l.status]}
-        </span>
+    <div className="space-y-4">
+      {/* Title + status */}
+      <div className="flex items-center justify-between">
+        <h3 className="font-inter text-[17px] font-semibold text-white">
+          Application #{String(l.appId).padStart(3, "0")}
+        </h3>
+        <StatusBadge status={l.status} />
       </div>
 
-      <div className="space-y-2 text-sm mb-5">
-        <Field label="Token" value={l.token} mono copyable />
-        <Field label="Pair" value={l.pair} mono copyable />
-        <Field label="Project Team" value={l.projectTeam} mono copyable />
-        <Field label="Tier" value={TIER_LABELS[l.tier]} />
-        <Field
-          label="LP Amount"
-          value={`${Number(formatEther(l.lpAmountBNB)).toFixed(4)} BNB`}
-        />
-        <Field
-          label="Fees Paid"
-          value={`${Number(formatEther(l.feesPaid)).toFixed(4)} BNB`}
-        />
+      {/* Fields */}
+      <div className="space-y-2.5 pt-2">
+        <Field label="Token" value={`${l.token.slice(0, 10)}…${l.token.slice(-4)}`} full={l.token} />
+        <Field label="Pair" value={`${l.pair.slice(0, 10)}…${l.pair.slice(-4)}`} full={l.pair} />
+        <Field label="Project Team" value={`${l.projectTeam.slice(0, 10)}…${l.projectTeam.slice(-4)}`} full={l.projectTeam} />
+        <Field label="Tier" value={TIER_LABELS[l.tier]} lime />
+        <Field label="LP Amount" value={`${Number(formatEther(l.lpAmountBNB)).toFixed(4)} BNB`} />
+        <Field label="Fees Paid" value={`${Number(formatEther(l.feesPaid)).toFixed(4)} BNB`} />
         <Field label="Applied" value={formatTime(l.appliedAt)} />
         {l.approvedAt > 0 && <Field label="Approved" value={formatTime(l.approvedAt)} />}
         <Field label="Unlock" value={formatTime(l.lpUnlockAt)} />
       </div>
 
-      {/* Reason input (shared for reject/delist/slash) */}
+      {/* Reason input */}
       {(canReject || canDelist || canSlash) && (
-        <label className="block mb-4">
-          <span className="text-xs text-okx-text-secondary mb-1 block">
-            Reason (for reject / delist / slash)
+        <div className="space-y-1.5 pt-2">
+          <span className="font-mono text-[10px] font-medium text-[#6e6e6e] tracking-wider">
+            REASON (FOR REJECT / DELIST / SLASH)
           </span>
           <input
             type="text"
             value={reason}
             onChange={(e) => onReasonChange(e.target.value)}
             placeholder="e.g. suspicious token contract"
-            className="w-full px-3 py-2 bg-okx-bg-secondary border border-okx-border-primary rounded-md text-okx-text-primary text-sm focus:outline-none focus:border-meme-lime"
+            className="w-full h-9 px-3 bg-[#1A1A1A] border border-[#1A1A1A] font-mono text-[12px] text-white placeholder-[#404040] focus:outline-none focus:border-[#BFFF00] transition-colors"
           />
-        </label>
+        </div>
       )}
 
       {/* Action buttons */}
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-2 gap-2 pt-2">
         <button
           onClick={onApprove}
           disabled={disabled || !canApprove}
-          className="py-2 bg-meme-lime text-black text-sm font-semibold rounded hover:opacity-90 disabled:opacity-30 disabled:cursor-not-allowed transition-opacity"
+          className="h-9 bg-[#BFFF00] hover:bg-[#B0EE00] text-black font-mono text-[12px] font-semibold tracking-wider disabled:opacity-20 disabled:cursor-not-allowed transition-opacity"
         >
-          Approve
+          APPROVE
         </button>
         <button
           onClick={onReject}
           disabled={disabled || !canReject}
-          className="py-2 bg-okx-bg-secondary border border-okx-border-primary text-okx-text-secondary text-sm font-medium rounded hover:border-red-400 hover:text-red-400 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          className="h-9 bg-[#1A1A1A] border border-[#1A1A1A] text-[#999999] hover:border-[#FF4444] hover:text-[#FF4444] font-mono text-[12px] font-medium tracking-wider disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
         >
-          Reject
+          REJECT
         </button>
         <button
           onClick={onDelist}
           disabled={disabled || !canDelist}
-          className="py-2 bg-okx-bg-secondary border border-okx-border-primary text-okx-text-secondary text-sm font-medium rounded hover:border-yellow-400 hover:text-yellow-400 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          className="h-9 bg-[#1A1A1A] border border-[#1A1A1A] text-[#6e6e6e] hover:border-[#F59E0B] hover:text-[#F59E0B] font-mono text-[12px] font-medium tracking-wider disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
         >
-          Delist
+          DELIST
         </button>
         <button
           onClick={onSlash}
           disabled={disabled || !canSlash}
-          className="py-2 bg-red-500/10 border border-red-500/40 text-red-400 text-sm font-semibold rounded hover:bg-red-500/20 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          className="h-9 bg-[#FF4444]/10 border border-[#FF4444] text-[#FF4444] hover:bg-[#FF4444]/20 font-mono text-[12px] font-semibold tracking-wider disabled:opacity-20 disabled:cursor-not-allowed transition-colors"
         >
-          Slash LP
+          SLASH LP
         </button>
       </div>
-
-      {disabled && (
-        <p className="mt-3 text-xs text-okx-text-tertiary">
-          {/* generic message; concrete reasons surfaced via Toast */}
-          Action unavailable.
-        </p>
-      )}
-    </>
+    </div>
   );
 }
 
-function Field({
-  label,
-  value,
-  mono,
-  copyable,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-  copyable?: boolean;
-}) {
+function Field({ label, value, full, lime }: { label: string; value: string; full?: string; lime?: boolean }) {
   return (
-    <div className="flex justify-between items-start gap-2">
-      <span className="text-okx-text-tertiary shrink-0">{label}</span>
-      <span
-        className={`text-right break-all text-okx-text-primary ${mono ? "font-mono text-xs" : ""} ${
-          copyable ? "cursor-pointer" : ""
-        }`}
-        title={copyable ? `Click to copy: ${value}` : undefined}
-        onClick={
-          copyable
-            ? () => {
-                if (typeof navigator !== "undefined" && navigator.clipboard) {
-                  void navigator.clipboard.writeText(value);
-                }
-              }
-            : undefined
-        }
-      >
-        {mono && value.length > 14 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value}
+    <div
+      className="flex justify-between items-center gap-2"
+      title={full}
+      onClick={full ? () => navigator.clipboard?.writeText(full) : undefined}
+      style={{ cursor: full ? "pointer" : "default" }}
+    >
+      <span className="font-mono text-[12px] text-[#6e6e6e]">{label}</span>
+      <span className={`font-mono text-[12px] ${lime ? "text-[#BFFF00] font-semibold" : "text-white"}`}>
+        {value}
       </span>
     </div>
   );
@@ -386,5 +341,8 @@ function Field({
 
 function formatTime(unixSec: number): string {
   if (!unixSec) return "—";
-  return new Date(unixSec * 1000).toLocaleString();
+  const d = new Date(unixSec * 1000);
+  return d.toLocaleString(undefined, {
+    month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit",
+  });
 }

@@ -11,18 +11,15 @@ import {
   ListingStatus,
   TIER_LABELS,
   STATUS_LABELS,
-  STATUS_COLORS,
 } from "@/hooks/perpetual/useListingApplication";
 
 /**
- * "List Your Token" — external token listing application page.
- *
- * Layout (mirrors /create):
- *   Left column: input form (token, pair, tier select) + cost summary + submit button
- *   Right column: requirements + FAQ + user's existing applications
+ * /list-your-token — Applicant page.
+ * Style: Terminal Industrial Crisp (pure black #000, lime #BFFF00 accent,
+ * Inter for headings, JetBrains Mono for data/labels).
  */
 export default function ListYourTokenPage() {
-  const { isConnected, address } = useAccount();
+  const { isConnected } = useAccount();
   const { showToast } = useToast();
 
   const {
@@ -52,26 +49,16 @@ export default function ListYourTokenPage() {
   const minLPForTier = tierMinLP[tier] ?? 0n;
   const totalCost = listingFeeBNB + minLPForTier;
 
-  // Display-friendly LP → USD estimate (assumes 1 BNB ≈ $600; real app would fetch price)
-  const BNB_USD_PRICE_ESTIMATE = 600;
-  const lpUsdEstimate = Number(formatEther(minLPForTier)) * BNB_USD_PRICE_ESTIMATE;
-  const feeUsdEstimate = Number(formatEther(listingFeeBNB)) * BNB_USD_PRICE_ESTIMATE;
+  // Display-friendly BNB → USD (assumes 1 BNB ≈ $600; TODO: fetch from oracle)
+  const BNB_USD = 600;
+  const lpUSD = Number(formatEther(minLPForTier)) * BNB_USD;
+  const feeUSD = Number(formatEther(listingFeeBNB)) * BNB_USD;
 
   const handleSubmit = async () => {
-    if (!isConnected) {
-      showToast("Please connect your wallet first", "warning");
-      return;
-    }
-    if (!formValid) {
-      showToast("Please enter valid token and pair addresses", "warning");
-      return;
-    }
+    if (!isConnected) { showToast("Please connect your wallet first", "warning"); return; }
+    if (!formValid) { showToast("Please enter valid token and pair addresses", "warning"); return; }
     try {
-      await submitApplication({
-        token: tokenAddr as Address,
-        pair: pairAddr as Address,
-        tier,
-      });
+      await submitApplication({ token: tokenAddr as Address, pair: pairAddr as Address, tier });
       showToast("Application submitted — pending admin review", "success");
       setTokenAddr("");
       setPairAddr("");
@@ -81,98 +68,84 @@ export default function ListYourTokenPage() {
     }
   };
 
-  // After tx confirmed, refresh list
   useEffect(() => {
-    if (!isConfirming && txHash) {
-      void refreshMyListings();
-    }
+    if (!isConfirming && txHash) void refreshMyListings();
   }, [isConfirming, txHash, refreshMyListings]);
 
   return (
-    <div className="min-h-screen bg-okx-bg-primary">
+    <div className="min-h-screen bg-black text-white">
       <Navbar />
 
-      <div className="px-6 sm:px-12 pt-10 pb-24 max-w-[1400px] mx-auto">
+      <div className="px-12 pt-10 pb-24 max-w-[1440px] mx-auto">
         {/* Page header */}
         <div className="mb-8">
-          <h1 className="text-3xl sm:text-4xl font-bold text-okx-text-primary mb-2">
-            List Your Token
-          </h1>
-          <p className="text-okx-text-secondary">
+          <h1 className="font-inter text-[32px] leading-tight font-semibold text-white mb-2">List Your Token</h1>
+          <p className="font-mono text-[13px] text-[#999999]">
             Apply to open perpetual contract trading for any ERC-20 meme token on our platform.
           </p>
           {mockMode && (
-            <div className="mt-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-md text-yellow-300 text-sm">
-              ⚡ <strong>Mock mode active</strong> — submissions are simulated locally and do not
-              hit the chain. Flip <code>NEXT_PUBLIC_LISTING_MOCK_MODE=false</code> to go live.
+            <div className="mt-4 p-3 bg-[#F59E0B]/10 border border-[#F59E0B]/30 font-mono text-xs text-[#F59E0B]">
+              ⚡ MOCK MODE — submissions simulated locally. Flip NEXT_PUBLIC_LISTING_MOCK_MODE=false to go live.
             </div>
           )}
           {!isContractConfigured && !mockMode && (
-            <div className="mt-4 p-3 bg-red-500/10 border border-red-500/30 rounded-md text-red-300 text-sm">
-              Registry contract address not configured. Set
-              <code className="mx-1">NEXT_PUBLIC_EXTERNAL_TOKEN_REGISTRY_ADDRESS</code> in
-              environment.
+            <div className="mt-4 p-3 bg-[#FF4444]/10 border border-[#FF4444]/30 font-mono text-xs text-[#FF4444]">
+              Registry contract not configured. Set NEXT_PUBLIC_EXTERNAL_TOKEN_REGISTRY_ADDRESS.
             </div>
           )}
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* ── LEFT: Application form ── */}
+          {/* ── LEFT: form + cost ── */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Token + Pair form card */}
-            <section className="bg-okx-bg-card border border-okx-border-primary rounded-lg p-6 space-y-6">
+
+            {/* Form card */}
+            <section className="bg-[#111111] border border-[#1A1A1A] p-6 space-y-5">
               <div>
-                <h2 className="text-lg font-semibold text-okx-text-primary mb-1">Application</h2>
-                <p className="text-sm text-okx-text-secondary">
+                <h2 className="font-inter text-[16px] font-semibold text-white mb-1">Application</h2>
+                <p className="font-mono text-xs text-[#999999]">
                   Your token must already have a liquid PancakeSwap V2 pair against WBNB.
                 </p>
               </div>
 
-              <label className="block">
-                <span className="text-sm text-okx-text-secondary mb-1 block">Token Address</span>
+              {/* Token address */}
+              <label className="block space-y-1.5">
+                <span className="font-mono text-[10px] font-medium text-[#6e6e6e] tracking-wider">TOKEN ADDRESS</span>
                 <input
                   type="text"
                   value={tokenAddr}
                   onChange={(e) => setTokenAddr(e.target.value.trim())}
                   placeholder="0x…"
-                  className={`w-full px-3 py-2 bg-okx-bg-secondary border rounded-md text-okx-text-primary placeholder-okx-text-tertiary font-mono text-sm focus:outline-none transition-colors ${
-                    tokenAddr && !tokenAddrValid
-                      ? "border-red-400"
-                      : "border-okx-border-primary focus:border-meme-lime"
+                  className={`w-full h-10 px-3.5 bg-[#1A1A1A] border font-mono text-[13px] text-white placeholder-[#404040] focus:outline-none transition-colors ${
+                    tokenAddr && !tokenAddrValid ? "border-[#FF4444]" : "border-[#1A1A1A] focus:border-[#BFFF00]"
                   }`}
                 />
                 {tokenAddr && !tokenAddrValid && (
-                  <span className="text-xs text-red-400 mt-1 block">Invalid address</span>
+                  <span className="font-mono text-[11px] text-[#FF4444]">Invalid address</span>
                 )}
               </label>
 
-              <label className="block">
-                <span className="text-sm text-okx-text-secondary mb-1 block">
-                  PancakeSwap V2 Pair Address (token ↔ WBNB)
-                </span>
+              {/* Pair address */}
+              <label className="block space-y-1.5">
+                <span className="font-mono text-[10px] font-medium text-[#6e6e6e] tracking-wider">PANCAKESWAP V2 PAIR</span>
                 <input
                   type="text"
                   value={pairAddr}
                   onChange={(e) => setPairAddr(e.target.value.trim())}
                   placeholder="0x…"
-                  className={`w-full px-3 py-2 bg-okx-bg-secondary border rounded-md text-okx-text-primary placeholder-okx-text-tertiary font-mono text-sm focus:outline-none transition-colors ${
-                    pairAddr && !pairAddrValid
-                      ? "border-red-400"
-                      : "border-okx-border-primary focus:border-meme-lime"
+                  className={`w-full h-10 px-3.5 bg-[#1A1A1A] border font-mono text-[13px] text-white placeholder-[#404040] focus:outline-none transition-colors ${
+                    pairAddr && !pairAddrValid ? "border-[#FF4444]" : "border-[#1A1A1A] focus:border-[#BFFF00]"
                   }`}
                 />
-                {pairAddr && !pairAddrValid && (
-                  <span className="text-xs text-red-400 mt-1 block">Invalid address</span>
-                )}
-                <span className="text-xs text-okx-text-tertiary mt-1 block">
+                <span className="font-mono text-[11px] text-[#404040] block">
                   Find your pair at pancakeswap.finance — copy the pair contract address.
                 </span>
               </label>
 
               {/* Tier selector */}
-              <div>
-                <span className="text-sm text-okx-text-secondary mb-2 block">
-                  Max Leverage Tier
+              <div className="space-y-2">
+                <span className="font-mono text-[10px] font-medium text-[#6e6e6e] tracking-wider block">
+                  MAX LEVERAGE TIER
                 </span>
                 <div className="grid grid-cols-5 gap-2">
                   {(
@@ -183,54 +156,60 @@ export default function ListYourTokenPage() {
                       LeverageTier.TIER_7X,
                       LeverageTier.TIER_10X,
                     ] as const
-                  ).map((t) => (
-                    <button
-                      key={t}
-                      type="button"
-                      onClick={() => setTier(t)}
-                      className={`px-3 py-3 rounded-md border text-sm font-medium transition-all ${
-                        tier === t
-                          ? "bg-okx-bg-hover border-meme-lime text-meme-lime"
-                          : "bg-okx-bg-secondary border-okx-border-primary text-okx-text-secondary hover:border-okx-text-tertiary"
-                      }`}
-                    >
-                      <div className="text-lg font-bold">{TIER_LABELS[t]}</div>
-                      <div className="text-xs opacity-70">
-                        LP&nbsp;≈&nbsp;${(Number(formatEther(tierMinLP[t] ?? 0n)) * BNB_USD_PRICE_ESTIMATE / 1000).toFixed(0)}k
-                      </div>
-                    </button>
-                  ))}
+                  ).map((t) => {
+                    const active = tier === t;
+                    return (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => setTier(t)}
+                        className={`flex flex-col items-center justify-center h-16 border transition-all ${
+                          active
+                            ? "bg-[#1A1A1A] border-2 border-[#BFFF00]"
+                            : "bg-[#1A1A1A] border border-[#1A1A1A] hover:border-[#404040]"
+                        }`}
+                      >
+                        <span className={`font-inter text-lg font-semibold ${active ? "text-[#BFFF00]" : "text-[#999999]"}`}>
+                          {TIER_LABELS[t]}
+                        </span>
+                        <span className={`font-mono text-[10px] ${active ? "text-[#BFFF00]" : "text-[#404040]"}`}>
+                          LP ${(Number(formatEther(tierMinLP[t] ?? 0n)) * BNB_USD / 1000).toFixed(0)}k
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
-                <p className="text-xs text-okx-text-tertiary mt-2">
-                  Higher leverage requires more locked LP. LP is your first-loss bond and locks for
-                  60 days.
+                <p className="font-mono text-[11px] text-[#404040] leading-relaxed">
+                  Higher leverage requires more locked LP. LP is your first-loss bond and locks for 60 days.
                 </p>
               </div>
             </section>
 
-            {/* Cost summary card */}
-            <section className="bg-okx-bg-card border border-okx-border-primary rounded-lg p-6">
-              <h3 className="text-lg font-semibold text-okx-text-primary mb-4">Cost Summary</h3>
-              <div className="space-y-3 text-sm">
+            {/* Cost summary */}
+            <section className="bg-[#111111] border border-[#1A1A1A] p-6">
+              <h3 className="font-inter text-[16px] font-semibold text-white mb-4">Cost Summary</h3>
+              <div className="space-y-4 text-sm">
                 <Row
-                  label="Listing Fee (one-time, non-refundable)"
+                  label="Listing Fee"
+                  sub="one-time, non-refundable"
                   valueBNB={listingFeeBNB}
-                  valueUSD={feeUsdEstimate}
+                  valueUSD={feeUSD}
                 />
                 <Row
-                  label={`LP Lock (${TIER_LABELS[tier]} tier, 60-day lock)`}
+                  label={`LP Lock (${TIER_LABELS[tier]} tier)`}
+                  sub="60-day lock · first-loss bond"
                   valueBNB={minLPForTier}
-                  valueUSD={lpUsdEstimate}
+                  valueUSD={lpUSD}
                 />
-                <div className="h-px bg-okx-border-primary my-2" />
+                <div className="h-px bg-[#1A1A1A]" />
                 <div className="flex justify-between items-center pt-1">
-                  <span className="font-medium text-okx-text-primary">Total Due Now</span>
+                  <span className="font-inter text-[14px] font-semibold text-white">Total Due Now</span>
                   <div className="text-right">
-                    <div className="font-semibold text-okx-text-primary">
+                    <div className="font-inter text-[20px] font-semibold text-[#BFFF00] leading-none">
                       {Number(formatEther(totalCost)).toFixed(4)} BNB
                     </div>
-                    <div className="text-xs text-okx-text-tertiary">
-                      ≈ ${(feeUsdEstimate + lpUsdEstimate).toLocaleString()}
+                    <div className="font-mono text-[11px] text-[#6e6e6e] mt-1">
+                      ≈ ${(feeUSD + lpUSD).toLocaleString()}
                     </div>
                   </div>
                 </div>
@@ -239,141 +218,91 @@ export default function ListYourTokenPage() {
               <button
                 onClick={handleSubmit}
                 disabled={!formValid || isSubmitting || isConfirming || !isConnected}
-                className="w-full mt-6 py-3 bg-meme-lime text-black font-semibold rounded-md hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
+                className="w-full mt-6 h-12 bg-[#BFFF00] hover:bg-[#B0EE00] text-black font-mono text-[13px] font-semibold tracking-wider disabled:opacity-30 disabled:cursor-not-allowed transition-opacity"
               >
-                {!isConnected
-                  ? "Connect Wallet"
-                  : isSubmitting
-                  ? "Submitting…"
-                  : isConfirming
-                  ? "Confirming…"
-                  : "Submit Application"}
+                {!isConnected ? "CONNECT WALLET"
+                  : isSubmitting ? "SUBMITTING…"
+                  : isConfirming ? "CONFIRMING…"
+                  : "SUBMIT APPLICATION"}
               </button>
 
-              {error && (
-                <p className="mt-3 text-sm text-red-400 break-words">{error}</p>
-              )}
+              {error && <p className="mt-3 font-mono text-xs text-[#FF4444] break-words">{error}</p>}
             </section>
           </div>
 
-          {/* ── RIGHT: Requirements + my applications ── */}
+          {/* ── RIGHT: requirements + how-it-works + my applications ── */}
           <div className="space-y-6">
+
             {/* Requirements */}
-            <section className="bg-okx-bg-card border border-okx-border-primary rounded-lg p-6">
-              <h3 className="text-base font-semibold text-okx-text-primary mb-3">
-                Before You Apply
-              </h3>
-              <ul className="space-y-3 text-sm text-okx-text-secondary">
-                <li className="flex gap-2">
-                  <span className="text-meme-lime mt-0.5">✓</span>
-                  <span>Token already deployed and tradable on PancakeSwap V2</span>
-                </li>
-                <li className="flex gap-2">
-                  <span className="text-meme-lime mt-0.5">✓</span>
-                  <span>Pair liquidity <strong>≥ $50,000</strong> (auto-delist below this)</span>
-                </li>
-                <li className="flex gap-2">
-                  <span className="text-meme-lime mt-0.5">✓</span>
-                  <span>Token contract ownership renounced or under timelock</span>
-                </li>
-                <li className="flex gap-2">
-                  <span className="text-meme-lime mt-0.5">✓</span>
-                  <span>Not fee-on-transfer / rebase (fails validation)</span>
-                </li>
-                <li className="flex gap-2">
-                  <span className="text-meme-lime mt-0.5">✓</span>
-                  <span>LP funds available in your wallet (see Cost Summary)</span>
-                </li>
+            <section className="bg-[#111111] border border-[#1A1A1A] p-6">
+              <h3 className="font-inter text-[15px] font-semibold text-white mb-3">Before You Apply</h3>
+              <ul className="space-y-3 font-mono text-[12px] text-[#999999] leading-relaxed">
+                {[
+                  "Token already tradable on PancakeSwap V2",
+                  "Pair liquidity ≥ $50,000 (auto-delist below)",
+                  "Token ownership renounced or under timelock",
+                  "Not fee-on-transfer / rebase (fails validation)",
+                  "LP funds available (see Cost Summary)",
+                ].map((t, i) => (
+                  <li key={i} className="flex gap-3 items-start">
+                    <span className="shrink-0 mt-1.5 w-1.5 h-1.5 bg-[#BFFF00] rounded-[2px]" />
+                    <span>{t}</span>
+                  </li>
+                ))}
               </ul>
             </section>
 
             {/* How it works */}
-            <section className="bg-okx-bg-card border border-okx-border-primary rounded-lg p-6">
-              <h3 className="text-base font-semibold text-okx-text-primary mb-3">How it works</h3>
-              <ol className="space-y-3 text-sm text-okx-text-secondary list-decimal list-inside">
-                <li>
-                  Submit application with fee + LP (escrowed in the Registry contract).
-                </li>
-                <li>
-                  Our team reviews within <strong>24 hours</strong>. Rejected: LP returned; fee is
-                  retained.
-                </li>
-                <li>
-                  On approval, perpetual trading opens for your token. Users trade against our
-                  PerpVault.
-                </li>
-                <li>
-                  60 days later you can <strong>withdraw your LP</strong>. Violations
-                  (rugs, malicious contracts) may result in LP slashing.
-                </li>
+            <section className="bg-[#111111] border border-[#1A1A1A] p-6">
+              <h3 className="font-inter text-[15px] font-semibold text-white mb-3">How It Works</h3>
+              <ol className="space-y-3 font-mono text-[12px] text-[#999999] leading-relaxed">
+                {[
+                  "Submit application with fee + LP (escrowed in Registry)",
+                  "Team reviews within 24h. Rejected: LP returned; fee retained.",
+                  "On approval, perpetual trading opens. Users trade against PerpVault.",
+                  "60 days later you can withdraw LP. Violations → LP slashed.",
+                ].map((t, i) => (
+                  <li key={i} className="flex gap-3 items-start">
+                    <span className="shrink-0 font-mono font-bold text-[#BFFF00] text-[11px] w-6">
+                      {String(i + 1).padStart(2, "0")}
+                    </span>
+                    <span>{t}</span>
+                  </li>
+                ))}
               </ol>
             </section>
 
-            {/* User's applications */}
+            {/* My applications */}
             {isConnected && (
-              <section className="bg-okx-bg-card border border-okx-border-primary rounded-lg p-6">
+              <section className="bg-[#111111] border border-[#1A1A1A] p-6">
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-base font-semibold text-okx-text-primary">
-                    Your Applications
-                  </h3>
+                  <h3 className="font-inter text-[15px] font-semibold text-white">Your Applications</h3>
                   <button
                     onClick={() => refreshMyListings()}
-                    className="text-xs text-okx-text-tertiary hover:text-meme-lime"
+                    className="font-mono text-[11px] text-[#6e6e6e] hover:text-[#BFFF00] transition-colors"
                   >
-                    Refresh
+                    ↻ Refresh
                   </button>
                 </div>
                 {myListings.length === 0 ? (
-                  <p className="text-sm text-okx-text-tertiary">No applications yet.</p>
+                  <p className="font-mono text-[12px] text-[#404040]">No applications yet.</p>
                 ) : (
                   <div className="space-y-3">
                     {myListings.map((l) => (
-                      <div
+                      <ApplicationCard
                         key={l.appId}
-                        className="bg-okx-bg-secondary border border-okx-border-primary rounded p-3 text-sm"
-                      >
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="font-mono text-xs text-okx-text-tertiary">
-                            #{l.appId}
-                          </span>
-                          <span className={`text-xs font-medium ${STATUS_COLORS[l.status]}`}>
-                            {STATUS_LABELS[l.status]}
-                          </span>
-                        </div>
-                        <div className="text-okx-text-primary font-mono text-xs break-all mb-1">
-                          {l.token.slice(0, 10)}…{l.token.slice(-6)}
-                        </div>
-                        <div className="text-xs text-okx-text-tertiary flex justify-between">
-                          <span>
-                            LP {Number(formatEther(l.lpAmountBNB)).toFixed(2)} BNB · {TIER_LABELS[l.tier]}
-                          </span>
-                          <span>
-                            {l.status === ListingStatus.APPROVED || l.status === ListingStatus.DELISTED
-                              ? `Unlocks ${formatUnlockDate(l.lpUnlockAt)}`
-                              : ""}
-                          </span>
-                        </div>
-                        {canWithdraw(l) && (
-                          <button
-                            onClick={async () => {
-                              try {
-                                await withdrawProjectLP(l.appId);
-                                showToast("LP withdrawal submitted", "success");
-                                await refreshMyListings();
-                              } catch (e: any) {
-                                showToast(
-                                  `Withdraw failed: ${e?.shortMessage ?? e?.message ?? "unknown"}`,
-                                  "error"
-                                );
-                              }
-                            }}
-                            disabled={isWithdrawing}
-                            className="w-full mt-2 py-1.5 bg-okx-bg-hover border border-meme-lime text-meme-lime text-xs rounded hover:bg-meme-lime hover:text-black transition-colors disabled:opacity-50"
-                          >
-                            {isWithdrawing ? "Withdrawing…" : "Withdraw LP"}
-                          </button>
-                        )}
-                      </div>
+                        listing={l}
+                        isWithdrawing={isWithdrawing}
+                        onWithdraw={async () => {
+                          try {
+                            await withdrawProjectLP(l.appId);
+                            showToast("LP withdrawal submitted", "success");
+                            await refreshMyListings();
+                          } catch (e: any) {
+                            showToast(`Withdraw failed: ${e?.shortMessage ?? e?.message ?? "unknown"}`, "error");
+                          }
+                        }}
+                      />
                     ))}
                   </div>
                 )}
@@ -386,25 +315,22 @@ export default function ListYourTokenPage() {
   );
 }
 
-// ─── Helpers ───────────────────────────────────────────────────
+// ─── Subcomponents ─────────────────────────────────────
 
-function Row({
-  label,
-  valueBNB,
-  valueUSD,
-}: {
-  label: string;
-  valueBNB: bigint;
-  valueUSD: number;
+function Row({ label, sub, valueBNB, valueUSD }: {
+  label: string; sub: string; valueBNB: bigint; valueUSD: number;
 }) {
   return (
     <div className="flex justify-between items-start gap-4">
-      <span className="text-okx-text-secondary">{label}</span>
-      <div className="text-right shrink-0">
-        <div className="text-okx-text-primary">
+      <div className="space-y-0.5">
+        <div className="font-mono text-[13px] text-[#999999]">{label}</div>
+        <div className="font-mono text-[11px] text-[#404040]">{sub}</div>
+      </div>
+      <div className="text-right space-y-0.5">
+        <div className="font-inter text-[14px] font-semibold text-white leading-none">
           {Number(formatEther(valueBNB)).toFixed(4)} BNB
         </div>
-        <div className="text-xs text-okx-text-tertiary">
+        <div className="font-mono text-[11px] text-[#404040]">
           ≈ ${valueUSD.toLocaleString()}
         </div>
       </div>
@@ -412,16 +338,61 @@ function Row({
   );
 }
 
-function canWithdraw(l: { status: ListingStatus; lpAmountBNB: bigint; lpUnlockAt: number }) {
-  if (l.lpAmountBNB === 0n) return false;
-  if (l.status === ListingStatus.REJECTED) return true;
-  if (l.status === ListingStatus.APPROVED || l.status === ListingStatus.DELISTED) {
-    return Math.floor(Date.now() / 1000) >= l.lpUnlockAt;
-  }
-  return false;
-}
+function ApplicationCard({
+  listing: l, isWithdrawing, onWithdraw,
+}: {
+  listing: ReturnType<typeof useListingApplication>["myListings"][0];
+  isWithdrawing: boolean;
+  onWithdraw: () => void;
+}) {
+  const statusStyle = {
+    [ListingStatus.PENDING]:  { color: "#F59E0B", label: "PENDING" },
+    [ListingStatus.APPROVED]: { color: "#BFFF00", label: "LIVE" },
+    [ListingStatus.REJECTED]: { color: "#FF4444", label: "REJECTED" },
+    [ListingStatus.DELISTED]: { color: "#6e6e6e", label: "DELISTED" },
+    [ListingStatus.SLASHED]:  { color: "#FF4444", label: "SLASHED" },
+    [ListingStatus.NONE]:     { color: "#404040", label: "—" },
+  }[l.status];
 
-function formatUnlockDate(unixSec: number): string {
-  if (!unixSec) return "—";
-  return new Date(unixSec * 1000).toLocaleDateString();
+  const canW = l.lpAmountBNB > 0n && (
+    l.status === ListingStatus.REJECTED
+    || ((l.status === ListingStatus.APPROVED || l.status === ListingStatus.DELISTED)
+        && Math.floor(Date.now() / 1000) >= l.lpUnlockAt)
+  );
+
+  return (
+    <div className="bg-[#1A1A1A] border border-[#1A1A1A] p-3 space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-[11px] text-[#6e6e6e]">#{String(l.appId).padStart(3, "0")}</span>
+        <div className="flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-[2px]" style={{ background: statusStyle.color }} />
+          <span className="font-mono text-[10px] font-medium tracking-wider" style={{ color: statusStyle.color }}>
+            {statusStyle.label}
+          </span>
+        </div>
+      </div>
+      <div className="font-mono text-[12px] text-white">
+        {l.token.slice(0, 10)}…{l.token.slice(-4)}
+      </div>
+      <div className="flex justify-between font-mono text-[11px] text-[#6e6e6e]">
+        <span>LP {Number(formatEther(l.lpAmountBNB)).toFixed(2)} BNB · {TIER_LABELS[l.tier]}</span>
+        <span>
+          {l.status === ListingStatus.APPROVED || l.status === ListingStatus.DELISTED
+            ? `Unlocks ${new Date(l.lpUnlockAt * 1000).toLocaleDateString()}`
+            : l.status === ListingStatus.PENDING
+              ? "Awaiting review"
+              : ""}
+        </span>
+      </div>
+      {canW && (
+        <button
+          onClick={onWithdraw}
+          disabled={isWithdrawing}
+          className="w-full mt-1 h-8 border border-[#BFFF00] text-[#BFFF00] hover:bg-[#BFFF00] hover:text-black font-mono text-[11px] font-semibold tracking-wider disabled:opacity-50 transition-colors"
+        >
+          {isWithdrawing ? "WITHDRAWING…" : "WITHDRAW LP"}
+        </button>
+      )}
+    </div>
+  );
 }

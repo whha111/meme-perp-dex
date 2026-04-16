@@ -58,7 +58,8 @@ const config: Config = {
       },
       fontFamily: {
         sans: ["-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "Helvetica Neue", "Arial", "sans-serif"],
-        mono: ["JetBrains Mono", "Fira Code", "SF Mono", "Consolas", "monospace"],
+        mono: ["var(--font-mono)", "JetBrains Mono", "Fira Code", "SF Mono", "Consolas", "monospace"],
+        inter: ["var(--font-inter)", "Inter", "-apple-system", "sans-serif"],
       },
       borderRadius: {
         card: "12px",
