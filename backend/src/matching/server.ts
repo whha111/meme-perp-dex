@@ -40,6 +40,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { getSigningKey, getActiveSessionForDerived, registerTradingSession } from "./modules/wallet";
 import { getTokenHolders } from "./modules/tokenHolders";
 import { getTokenState, isTradingEnabled, getTokenHeatTier, getCoverageRatio, pauseToken, unpauseToken, initializeTokenLifecycle, TokenState, startLifecycleChecker, updateOnChainData, getTokenParameters } from "./modules/lifecycle";
+import { initExternalListingBridge, getMaxLeverageForExternalToken } from "./modules/externalListing";
 // ============================================================
 // Mode 2 Modules (Off-chain Execution + On-chain Attestation)
 // ============================================================
@@ -7993,9 +7994,17 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
     // ============================================================
     // AUDIT-FIX H-07: Validate leverage against phase-specific MAX_LEVERAGE
     // 内盘阶段 2.5x, 毕业后 5x — 由 lifecycle getTokenParameters() 决定
+    // External-listed tokens (Day 3 feature): override with per-token tier from
+    // ExternalTokenRegistry (2/3/5/7/10x chosen by project team at listing time).
     // ============================================================
     const phaseParams = getTokenParameters(token.toLowerCase() as Address);
     let maxLevForToken = phaseParams.maxLeverage;
+
+    const externalMaxLev = getMaxLeverageForExternalToken(token as Address);
+    if (externalMaxLev > 0) {
+      // externalMaxLev is whole-number (2/3/5/7/10) → convert to 1e4 precision
+      maxLevForToken = BigInt(externalMaxLev) * 10000n;
+    }
 
     // ★ ADL WARNING 级别: 覆盖比率 150-200% 时限杠杆至 2x
     const adlState = adlRatioState.get(token.toLowerCase() as Address);
@@ -16243,6 +16252,12 @@ async function startServer(): Promise<void> {
   // ========================================
   startEventWatching().catch((e) => {
     console.error("[Events] Failed to start event watching:", e);
+  });
+
+  // External token listing bridge — ExternalTokenRegistry events + scan.
+  // No-ops if EXTERNAL_TOKEN_REGISTRY_ADDRESS env var is not set.
+  initExternalListingBridge().catch((e) => {
+    console.error("[ExternalListing] Bridge init failed:", e);
   });
 
   // P2-3: 为已毕业代币启动 Swap 事件监听 (K线生成)

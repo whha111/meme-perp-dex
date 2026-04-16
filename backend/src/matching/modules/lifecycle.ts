@@ -24,12 +24,15 @@ import { logger } from "../utils/logger";
 // ============================================================
 
 export enum TokenState {
-  INACTIVE = "INACTIVE",           // 未激活 — 不允许合约交易
-  JUST_ACTIVATED = "JUST_ACTIVATED", // 刚激活 — 覆盖系数 20%
-  ACTIVE = "ACTIVE",               // 活跃 — 覆盖系数 35%
-  HOT = "HOT",                     // 热门 — 覆盖系数 50%
-  PAUSED = "PAUSED",               // 暂停开仓 (激活条件不再满足 / ADL 触发)
-  GRADUATED = "GRADUATED",         // 已毕业 — 上 DEX
+  INACTIVE = "INACTIVE",                 // 未激活 — 不允许合约交易
+  JUST_ACTIVATED = "JUST_ACTIVATED",     // 刚激活 — 覆盖系数 20%
+  ACTIVE = "ACTIVE",                     // 活跃 — 覆盖系数 35%
+  HOT = "HOT",                           // 热门 — 覆盖系数 50%
+  PAUSED = "PAUSED",                     // 暂停开仓 (激活条件不再满足 / ADL 触发)
+  GRADUATED = "GRADUATED",               // 已毕业 — 上 DEX
+  EXTERNAL_LISTED = "EXTERNAL_LISTED",   // 外部上币 — 通过 ExternalTokenRegistry 付费上线，
+                                         // 不参与自动 evaluateState 降级；per-token maxLev 由
+                                         // Registry 决定；价格从 PancakeSwap V2 pair 读
 }
 
 // ============================================================
@@ -249,6 +252,8 @@ export function getTokenParameters(token: Address): PhaseParameters {
   const state = getTokenState(token);
 
   if (state === TokenState.GRADUATED) return GRADUATED_PHASE_PARAMS;
+  // External-listed tokens trade against the shared PerpVault just like graduated ones
+  if (state === TokenState.EXTERNAL_LISTED) return GRADUATED_PHASE_PARAMS;
   if (state === TokenState.INACTIVE || state === TokenState.PAUSED) {
     return { ...INTERNAL_PHASE_PARAMS, tradingEnabled: false };
   }
@@ -304,7 +309,8 @@ export function isTradingEnabled(token: Address): boolean {
   return state === TokenState.JUST_ACTIVATED
     || state === TokenState.ACTIVE
     || state === TokenState.HOT
-    || state === TokenState.GRADUATED;
+    || state === TokenState.GRADUATED
+    || state === TokenState.EXTERNAL_LISTED;
 }
 
 // ============================================================
@@ -396,6 +402,40 @@ export function markTokenGraduated(token: Address): void {
 }
 
 /**
+ * 标记代币为 EXTERNAL_LISTED — 通过 ExternalTokenRegistry 审核后调用
+ * @param token    目标代币地址
+ * @param initialPrice  初始 mark price (来自 Pancake pair reserves); 可为 0，引擎会在后续
+ *                      syncSpotPrices 周期内从 pair 实时拉
+ */
+export function markTokenExternalListed(token: Address, initialPrice: bigint = 0n): void {
+  let info = tokenLifecycles.get(token.toLowerCase() as Address);
+  if (!info) {
+    // 首次见到这个 token — 建立 lifecycle 条目
+    info = initializeTokenLifecycle(token, initialPrice);
+  }
+  const old = info.state;
+  info.state = TokenState.EXTERNAL_LISTED;
+  info.heatTier = HeatTier.ACTIVE; // 默认给中等覆盖系数 (35%) ，比新上币更保守
+  info.stateChangedAt = Date.now();
+  if (initialPrice > 0n) info.currentPrice = initialPrice;
+  logger.info("Lifecycle", `${token.slice(0, 10)} external-listed: ${old} → EXTERNAL_LISTED`);
+}
+
+/**
+ * 将 EXTERNAL_LISTED 代币退到 INACTIVE (由 Registry 的 Delisted/Slashed 事件触发)
+ */
+export function unmarkTokenExternalListed(token: Address, reason: string): void {
+  const info = tokenLifecycles.get(token.toLowerCase() as Address);
+  if (!info) return;
+  if (info.state !== TokenState.EXTERNAL_LISTED && info.state !== TokenState.PAUSED) return;
+  const old = info.state;
+  // 如果还有持仓 → PAUSED（只禁开新仓，允许平仓）；否则 INACTIVE
+  info.state = info.positionCount > 0 ? TokenState.PAUSED : TokenState.INACTIVE;
+  info.stateChangedAt = Date.now();
+  logger.info("Lifecycle", `${token.slice(0, 10)} external-delisted: ${old} → ${info.state} (${reason})`);
+}
+
+/**
  * 暂停开仓 (ADL 或激活条件降级时调用)
  */
 export function pauseToken(token: Address, reason: string): void {
@@ -428,6 +468,10 @@ export function unpauseToken(token: Address): void {
 
 function evaluateState(info: TokenLifecycleInfo): void {
   if (info.state === TokenState.GRADUATED) return;
+  // External-listed tokens are managed by the ExternalTokenRegistry — state
+  // only transitions via registry events (approved/delisted/slashed), never
+  // via the volume/holder heuristics used for platform-created tokens.
+  if (info.state === TokenState.EXTERNAL_LISTED) return;
 
   const activation = checkActivationCriteria(info);
   const h = HEAT_THRESHOLDS;
