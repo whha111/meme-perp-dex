@@ -651,6 +651,10 @@ export class MatchingEngine {
       takeProfitPrice?: bigint;
       stopLossPrice?: bigint;
       source?: OrderSource;
+      // FIX: Extra liquidity available from LP pool (PerpVault) for FOK pre-check.
+      // Caller (server.ts) computes LP headroom async and passes it here so the
+      // engine's FOK pre-check doesn't reject orders that LP fallback could fill.
+      extraLiquidity?: bigint;
     }
   ): { order: Order; matches: Match[]; rejected?: boolean; rejectReason?: string } {
     const now = Date.now();
@@ -811,10 +815,14 @@ export class MatchingEngine {
     }
 
     // FOK pre-check: verify sufficient liquidity BEFORE matching to avoid corrupting counterparty orders
+    // FIX: include LP headroom (extraLiquidity) so orders that would be filled by
+    // PerpVault fallback are not falsely rejected when the order book is thin.
     if (order.timeInForce === TimeInForce.FOK) {
-      const availableSize = this.getAvailableLiquidity(order);
+      const orderBookLiquidity = this.getAvailableLiquidity(order);
+      const extraLp = options?.extraLiquidity ?? 0n;
+      const availableSize = orderBookLiquidity + extraLp;
       if (availableSize < order.size) {
-        console.log(`[FOK] Order ${order.id}: Available liquidity ${availableSize} < required ${order.size}, rejecting`);
+        console.log(`[FOK] Order ${order.id}: Available liquidity ${availableSize} (book=${orderBookLiquidity}, lp=${extraLp}) < required ${order.size}, rejecting`);
         order.status = OrderStatus.CANCELLED;
         return {
           order,

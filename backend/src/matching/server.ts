@@ -8209,6 +8209,31 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
       return errorResponse(depositAndDeductResult.error || "保证金处理失败");
     }
 
+    // FIX: For FOK orders, pre-compute LP headroom so the engine's FOK pre-check
+    // knows about PerpVault fallback liquidity (otherwise FOK may be wrongly rejected
+    // when the order book is thin but LP could fill the remainder).
+    let fokExtraLiquidity = 0n;
+    if (tif === TimeInForce.FOK
+      && !reduceOnly
+      && !postOnly
+      && isPerpVaultEnabled()
+      && PERP_VAULT_ADDRESS_LOCAL
+      && isTradingEnabled(token.toLowerCase() as Address)
+    ) {
+      try {
+        const insuranceFundBalance = BigInt(insuranceFund?.balance ?? 0n);
+        const coverageRatio = getCoverageRatio(token.toLowerCase() as Address);
+        fokExtraLiquidity = await getAvailableOIHeadroom(
+          token.toLowerCase() as Address,
+          insuranceFundBalance,
+          coverageRatio
+        );
+      } catch (e) {
+        // Non-fatal: fall back to order-book-only check
+        fokExtraLiquidity = 0n;
+      }
+    }
+
     // Submit to matching engine with P3 options
     const { order, matches, rejected, rejectReason } = engine.submitOrder(
       trader as Address,
@@ -8225,6 +8250,7 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
         reduceOnly,
         postOnly,
         timeInForce: tif,
+        extraLiquidity: fokExtraLiquidity,
       }
     );
 
@@ -8546,7 +8572,12 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
     ) {
       try {
         const spotPrice = engine.getOrderBook(token as Address).getCurrentPrice();
-        if (spotPrice > 0n) {
+        // FIX: LP fill must respect the order's limit price. A limit buy cannot
+        // be filled by LP above the limit; a limit sell cannot be filled below.
+        // Market orders (price === 0n) have no such constraint.
+        const lpPriceOk = order.price === 0n
+          || (order.isLong ? spotPrice <= order.price : spotPrice >= order.price);
+        if (spotPrice > 0n && lpPriceOk) {
           // 获取 OI 剩余额度
           const insuranceFundBalance = BigInt(insuranceFund?.balance ?? 0n);
           const coverageRatio = getCoverageRatio(token.toLowerCase() as Address);
@@ -8643,7 +8674,9 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
             const traderLPTrades = userTrades.get(normalizedLPTrader) || [];
             traderLPTrades.push(lpTradeRecord);
             userTrades.set(normalizedLPTrader, traderLPTrades);
-            TradeRepo.create({
+            // FIX: Use createTradeWithMirror so LP fills are written to PG perp_trade_mirror
+            // (previously only Redis was written — PG mirror was missing for LP-filled trades)
+            createTradeWithMirror({
               orderId: lpTradeRecord.orderId,
               pairId: lpTradeRecord.pairId,
               token: token.toLowerCase() as Address,
@@ -8656,7 +8689,7 @@ async function handleOrderSubmit(req: Request): Promise<Response> {
               realizedPnL: "0",
               timestamp: lpTradeRecord.timestamp,
               type: "open",
-            }).catch(e => console.error(`[DB] Failed to save LP fill trade record:`, e));
+            }, "lp-open");
 
             // 处理 trader 返佣
             processTradeCommission(order.trader as Address, lpTrade.id, lpTradeFee, lpFillSize);
