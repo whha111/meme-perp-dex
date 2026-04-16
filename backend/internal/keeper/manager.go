@@ -63,6 +63,13 @@ func (m *Manager) Initialize() {
 	orderKeeper := NewOrderKeeper(m.db, m.cache, &m.cfg.Blockchain, m.logger.Named("order-keeper"))
 	m.keepers = append(m.keepers, orderKeeper)
 
+	// Listing monitor keeper — watches ExternalTokenRegistry live listings
+	// and raises Redis alerts when Pancake pair liquidity drops below the
+	// safety threshold. No on-chain action — admin decides to delist via UI.
+	// Self-disables if EXTERNAL_TOKEN_REGISTRY_ADDRESS env var is unset.
+	listingKeeper := NewListingMonitorKeeper(&m.cfg.Blockchain, m.cache, m.logger.Named("listing-monitor"))
+	m.keepers = append(m.keepers, listingKeeper)
+
 	m.logger.Info("Initialized keepers", zap.Int("count", len(m.keepers)))
 }
 

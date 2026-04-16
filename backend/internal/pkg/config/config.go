@@ -74,6 +74,11 @@ type BlockchainConfig struct {
 	StartBlock       uint64 `mapstructure:"start_block"`
 	ConfirmBlocks    uint64 `mapstructure:"confirm_blocks"`
 	PollInterval     time.Duration `mapstructure:"poll_interval"`
+
+	// External-token-listing feature (Day 3+)
+	ExternalTokenRegistryAddr string `mapstructure:"external_token_registry_address"`
+	PancakeFactoryAddr        string `mapstructure:"pancake_factory_address"`
+	WBNBAddr                  string `mapstructure:"wbnb_address"`
 }
 
 type MatchingEngineConfig struct {

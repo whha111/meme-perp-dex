@@ -118,6 +118,48 @@ func (c *Cache) PublishMessage(ctx context.Context, channel string, message inte
 	return c.client.Publish(ctx, channel, message).Err()
 }
 
+// Set is a generic string setter with TTL — used by feature-specific keepers
+// (e.g. listing liquidity alerts). Callers own the key namespacing.
+func (c *Cache) Set(ctx context.Context, key string, value string, expiration time.Duration) error {
+	if !c.IsAvailable() {
+		return ErrCacheNotAvailable
+	}
+	return c.client.Set(ctx, key, value, expiration).Err()
+}
+
+// Delete removes a key. Returns nil even if the key didn't exist.
+func (c *Cache) Delete(ctx context.Context, key string) error {
+	if !c.IsAvailable() {
+		return ErrCacheNotAvailable
+	}
+	return c.client.Del(ctx, key).Err()
+}
+
+// ScanKeys iterates keys matching the pattern. Uses SCAN not KEYS (non-blocking).
+func (c *Cache) ScanKeys(ctx context.Context, pattern string) ([]string, error) {
+	if !c.IsAvailable() {
+		return nil, ErrCacheNotAvailable
+	}
+	var keys []string
+	iter := c.client.Scan(ctx, 0, pattern, 0).Iterator()
+	for iter.Next(ctx) {
+		keys = append(keys, iter.Val())
+	}
+	return keys, iter.Err()
+}
+
+// Get retrieves a value — returns "" if key missing.
+func (c *Cache) Get(ctx context.Context, key string) (string, error) {
+	if !c.IsAvailable() {
+		return "", ErrCacheNotAvailable
+	}
+	v, err := c.client.Get(ctx, key).Result()
+	if err == redis.Nil {
+		return "", nil
+	}
+	return v, err
+}
+
 func (c *Cache) Subscribe(ctx context.Context, channels ...string) *redis.PubSub {
 	if !c.IsAvailable() {
 		return nil
