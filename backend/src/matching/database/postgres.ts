@@ -367,6 +367,10 @@ async function ensureMirrorTable(): Promise<void> {
   await sql`CREATE INDEX IF NOT EXISTS idx_ptm_trader ON perp_trade_mirror(trader)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_ptm_token ON perp_trade_mirror(token)`;
   await sql`CREATE INDEX IF NOT EXISTS idx_ptm_timestamp ON perp_trade_mirror(timestamp)`;
+  // Migration: add created_at if table was created by an older schema
+  try {
+    await sql`ALTER TABLE perp_trade_mirror ADD COLUMN IF NOT EXISTS created_at BIGINT`;
+  } catch (e) { /* column may already exist */ }
   logger.info("Postgres", "Mirror table ready: perp_trade_mirror");
 
   // ── P0-2: Mode2 adjustment tables ──
@@ -1084,7 +1088,8 @@ async function ensureP1Tables(): Promise<void> {
       fee VARCHAR(78) NOT NULL DEFAULT '0',
       realized_pnl VARCHAR(78) NOT NULL DEFAULT '0',
       timestamp BIGINT NOT NULL,
-      type VARCHAR(32) NOT NULL DEFAULT 'normal'
+      type VARCHAR(32) NOT NULL DEFAULT 'normal',
+      created_at BIGINT
     )
   `;
   await sql`CREATE INDEX IF NOT EXISTS idx_ptm_trader ON perp_trade_mirror(trader)`;
