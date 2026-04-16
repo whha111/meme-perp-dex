@@ -459,14 +459,14 @@ async function ensureMirrorTable(): Promise<void> {
       updated_at BIGINT NOT NULL
     )
   `;
-  // Migration: add columns if table was created by an older migration missing them
+  // Migration: add columns + unique index if table was created by an older migration
   try {
     await sql`ALTER TABLE sync_states ADD COLUMN IF NOT EXISTS key VARCHAR(128)`;
     await sql`ALTER TABLE sync_states ADD COLUMN IF NOT EXISTS value VARCHAR(256)`;
     await sql`ALTER TABLE sync_states ADD COLUMN IF NOT EXISTS updated_at BIGINT`;
-    await sql`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'sync_states_pkey') THEN ALTER TABLE sync_states ADD PRIMARY KEY (key); END IF; END $$`;
+    await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_states_key ON sync_states(key)`;
   } catch (e) {
-    // Columns/constraints may already exist — safe to ignore
+    // Columns/index may already exist — safe to ignore
   }
   logger.info("Postgres", "Mirror table ready: sync_states");
 }
