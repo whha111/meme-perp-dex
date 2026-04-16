@@ -6158,6 +6158,9 @@ function startAllSwapWatchers(): void {
 /**
  * 检测已毕业的代币并注册其 Pair 地址
  * 在启动时调用，处理服务器重启期间发生的毕业事件
+ *
+ * 使用 multicall 批量读取，避免逐个 RPC 调用触发限流 (1 次 RPC 代替 10+ 次)
+ * 带重试机制 (最多 3 次, 间隔 5s)，防止启动时 RPC fallback 未就绪
  */
 async function detectGraduatedTokens(): Promise<void> {
   if (SUPPORTED_TOKENS.length === 0) return;
@@ -6167,52 +6170,92 @@ async function detectGraduatedTokens(): Promise<void> {
     transport: rpcTransport,
   });
 
-  console.log(`[Graduation] Checking ${SUPPORTED_TOKENS.length} tokens for graduation status...`);
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    console.log(`[Graduation] Checking ${SUPPORTED_TOKENS.length} tokens (attempt ${attempt}/3, multicall)...`);
 
-  for (const token of SUPPORTED_TOKENS) {
     try {
-      // 读取 PoolState 检查 isGraduated
-      const poolState = await publicClient.readContract({
+      // Step 1: Batch all getPoolState calls in a single multicall
+      const poolStateCalls = SUPPORTED_TOKENS.map(token => ({
         address: TOKEN_FACTORY_ADDRESS,
         abi: TOKEN_FACTORY_ABI,
-        functionName: "getPoolState",
-        args: [token],
-      }) as {
-        realETHReserve: bigint;
-        realTokenReserve: bigint;
-        soldTokens: bigint;
-        isGraduated: boolean;
-        isActive: boolean;
-        creator: string;
-        createdAt: bigint;
-        metadataURI: string;
-        graduationFailed: boolean;
-        graduationAttempts: number;
-        perpEnabled: boolean;
-      };
+        functionName: "getPoolState" as const,
+        args: [token] as const,
+      }));
 
-      if (poolState.isGraduated) {
-        // 通过 Uniswap V2 Factory 查找 Pair 地址
-        const pairAddress = await publicClient.readContract({
-          address: UNISWAP_V2_FACTORY_ADDRESS,
-          abi: UNISWAP_V2_FACTORY_ABI,
-          functionName: "getPair",
-          args: [token, WETH_ADDRESS],
-        }) as Address;
+      const poolResults = await publicClient.multicall({ contracts: poolStateCalls });
 
-        const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-        if (pairAddress && pairAddress.toLowerCase() !== ZERO_ADDRESS) {
-          await registerGraduatedToken(token, pairAddress);
+      // Step 2: Collect graduated tokens, prepare getPair batch
+      const graduatedIndices: number[] = [];
+      const pairCalls: Array<{
+        address: Address;
+        abi: typeof UNISWAP_V2_FACTORY_ABI;
+        functionName: "getPair";
+        args: readonly [Address, Address];
+      }> = [];
+
+      for (let i = 0; i < poolResults.length; i++) {
+        const result = poolResults[i];
+        if (result.status === "success") {
+          const poolState = result.result as any;
+          if (poolState.isGraduated || poolState.perpEnabled) {
+            graduatedIndices.push(i);
+            if (UNISWAP_V2_FACTORY_ADDRESS) {
+              pairCalls.push({
+                address: UNISWAP_V2_FACTORY_ADDRESS,
+                abi: UNISWAP_V2_FACTORY_ABI,
+                functionName: "getPair" as const,
+                args: [SUPPORTED_TOKENS[i], WETH_ADDRESS] as const,
+              });
+            }
+          }
         } else {
-          console.warn(`[Graduation] ⚠️ Token ${token.slice(0, 10)} is graduated but no Pair found!`);
+          console.warn(`[Graduation] Error in multicall for ${SUPPORTED_TOKENS[i].slice(0, 10)}: ${(result as any).error?.message?.slice(0, 80) || "unknown"}`);
         }
       }
+
+      // Step 3: Batch getPair calls (also multicall)
+      if (pairCalls.length > 0 && UNISWAP_V2_FACTORY_ADDRESS) {
+        const pairResults = await publicClient.multicall({ contracts: pairCalls });
+        const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+        for (let i = 0; i < pairResults.length; i++) {
+          const pairResult = pairResults[i];
+          const token = SUPPORTED_TOKENS[graduatedIndices[i]];
+
+          if (pairResult.status === "success") {
+            const pairAddress = pairResult.result as Address;
+            if (pairAddress && pairAddress.toLowerCase() !== ZERO_ADDRESS) {
+              await registerGraduatedToken(token, pairAddress);
+            } else {
+              console.warn(`[Graduation] ⚠️ Token ${token.slice(0, 10)} is graduated but no Pair found!`);
+            }
+          } else {
+            console.warn(`[Graduation] Error getting pair for ${token.slice(0, 10)}: ${(pairResult as any).error?.message?.slice(0, 80)}`);
+          }
+        }
+      }
+
+      console.log(`[Graduation] Found ${graduatedTokens.size} graduated tokens`);
+
+      // Success or no graduated tokens — either way, done
+      if (graduatedTokens.size > 0 || attempt === 3) break;
+
+      // No graduated tokens found but no errors — tokens genuinely not graduated
+      const allSucceeded = poolResults.every(r => r.status === "success");
+      if (allSucceeded) {
+        console.log(`[Graduation] All pool state reads succeeded, 0 graduated — not retrying`);
+        break;
+      }
     } catch (e: any) {
-      console.warn(`[Graduation] Error checking ${token.slice(0, 10)}:`, e?.message?.slice(0, 80));
+      console.warn(`[Graduation] Multicall failed (attempt ${attempt}/3):`, e?.message?.slice(0, 120));
+    }
+
+    // Wait before retry to let RPC fallback activate
+    if (attempt < 3) {
+      console.log(`[Graduation] Retrying in 5s...`);
+      await new Promise(r => setTimeout(r, 5000));
     }
   }
-
-  console.log(`[Graduation] Found ${graduatedTokens.size} graduated tokens`);
 }
 
 /**
